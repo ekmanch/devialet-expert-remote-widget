@@ -23,42 +23,73 @@ architecture decisions; this file is just sequencing and status.
     found on a bounded search); imperative `onPropertiesChanged`
     workaround unaffected.
 
-## Up next
-
-- [ ] **Phase 3 — full functional controls, default styling.** *(In
-      progress - implemented and self-verified where possible; real-click
-      confirmation in the actual tray still needed, see below.)*
-      Volume slider + step buttons, mute toggle, power toggle, source
-      picker — all bound to real D-Bus properties. No copper/graphite
-      theming, no amp picker, no settings view yet.
+- [x] **Phase 3 — full functional controls, default styling.** Volume
+      slider + step buttons, mute toggle, power toggle, source picker —
+      all bound to real D-Bus properties, all confirmed round-tripping
+      against the real amp (both via my own `busctl`/`devialet-ctl`
+      checks and your real-tray clicks). No copper/graphite theming, no
+      amp picker, no settings view yet.
   - Debounce ported directly from MainActivity.kt (verified against that
-    source this phase, not reconstructed from memory): button steps use a
-    sliding 400ms window (each step resets the timer); the slider only
-    sends + stamps its timestamp once, on release; a separate
-    `volumeInteracting` flag blocks all incoming volume pushes for the
-    whole duration of an active drag or button-hold, independent of the
-    timestamps. Mute/Power/Source get a single-shot 400ms window too (not
-    in the Kotlin app, but explicitly requested this phase for
-    consistency - flagged as a deliberate addition, not silent parity
-    drift).
+    source, not reconstructed from memory): button steps use a sliding
+    400ms window (each step resets the timer); the slider only sends +
+    stamps its timestamp once, on release; a separate `volumeInteracting`
+    flag blocks all incoming volume pushes for the whole duration of an
+    active drag or button-hold, independent of the timestamps. Mute/
+    Power/Source get a single-shot 400ms window too (not in the Kotlin
+    app, but explicitly requested for consistency - a deliberate
+    addition, not silent parity drift).
   - Volume range: -15dB ceiling is code-enforced (`MAX_VOLUME_DB` in the
     protocol crate); -60dB floor is a UI convention only (matches the
     Kotlin app's own slider bounds) - **not** enforced anywhere in Rust.
   - Confirmed by reading devialet-ctl's source: the forced -40dB
     post-source-switch volume is already handled inside `devialet-ctl
     source`, not something QML needs to send separately.
-  - Self-verified via direct `devialet-ctl`/`busctl` calls against the
-    real amp (source switch + forced -40dB, -15dB ceiling clamping a -5dB
-    request): confirmed working, independent of the QML UI.
-  - Found and fixed via `plasmawindowed` testing: a ComboBox hosted inside
-    `PlasmoidItem`'s fullRepresentation didn't show its selected text
-    (same model/data confirmed correct and rendering fine in a plain QML
-    window) - root cause not fully chased down, worked around via an
-    explicit `displayText` override, which resolved it.
-  - **Still needs real-tray, real-click confirmation** (can't automate
-    clicks/drags in this environment): slider drag feel + release-only
-    send, step-button tap and hold-to-repeat, mute/power toggle round
-    trip, source ComboBox selection round trip.
+  - Volume label bug: the display was bound to `root.volumeDb` (only
+    updated on release) instead of the slider's own live `value`, so it
+    stayed static during a drag. Fixed by binding the label to
+    `volumeSlider.value` directly, which tracks the drag continuously
+    regardless of when the actual send happens.
+  - Source ComboBox saga, root-caused with wire-level evidence rather
+    than left as an unsubstantiated workaround:
+    1. Popup wouldn't open at all inside `PlasmoidItem`'s
+       fullRepresentation (real tray only, not `plasmawindowed`). Fixed
+       by switching to `org.kde.plasma.components.ComboBox`, grounded in
+       real evidence: no installed plasmoid on this machine uses
+       QtQuick.Controls' ComboBox inside its actual popup content (only
+       in separate config dialogs), and PlasmaComponents3's own
+       ComboBox.qml source contains an explicit comment + linked QTBUG
+       acknowledging QQC2 Popup behaves incorrectly outside a genuine
+       top-level Window.
+    2. Regression after that fix: dropdown greyed out, popup still
+       wouldn't open. Root-caused via `busctl monitor` independent of
+       QML: the daemon emits `Sources` correctly on every single
+       `PropertiesChanged` cycle (confirmed both from the wire, 60/600
+       signals over 6s, and from the daemon's own source -
+       `apply_and_emit()` has no equality check), but the signal's own
+       delta payload becomes unusable client-side after the first
+       delivery (confirmed via `JSON.stringify` showing a real array
+       once, then a genuinely empty result every time after - not just
+       inconsistently wrapped, unlike every scalar property). Matches a
+       documented general QtDBus behavior (complex types inside a
+       PropertiesChanged payload are left undemarshalled) - cited, not
+       just asserted this time.
+    3. Fix: on receiving a `PropertiesChanged` signal mentioning
+       `Sources`, explicitly issue a fresh `org.freedesktop.DBus.
+       Properties.Get` call via `Plasma::DBusConnection.asyncCall` and
+       use that reply instead of trusting the signal's own payload -
+       still fully push-driven, no polling. Two real API gotchas hit and
+       fixed along the way (both confirmed by logging actual runtime
+       shapes, not assumed): `DBusMessage`'s constructor needs the key
+       `interface`, not the `iface` alias used everywhere else in this
+       codebase; `asyncCall`'s resolve callback receives the whole
+       `DBusPendingReply` object, needing `.value` on it.
+    4. Verified at the wire level sustained over 15s in the real tray:
+       98 explicit Get calls, all replies carrying the complete 30-entry
+       array, zero malformed ones.
+  - Final full four-control re-verification (post source-dropdown fix),
+    confirmed independently via `busctl`/`devialet-ctl`: power on/off,
+    mute on/off, volume set, and source switch (with forced -40dB) all
+    round-trip correctly against the real amp.
 - [ ] **Phase 3.5 — multi-amp daemon support.** Daemon-only work: decide
       and implement how the daemon discovers/tracks more than one amp on
       the network and exposes that on D-Bus (new property? multiple
