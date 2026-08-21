@@ -144,7 +144,7 @@ for what's confirmed out of scope.
 - Cargo workspace layout (`Cargo.toml` at repo root, `resolver = "2"`):
   - `crates/protocol` (`devialet-protocol`) — zero-I/O packet
     encode/decode library. No dependencies.
-  - `crates/daemon` (`devialet-remote-daemon`) — status listener binary.
+  - `crates/devialet-remote-daemon` (`devialet-remote-daemon`) — status listener binary.
     Depends on `protocol`, `zbus`, `socket2`, `async-io`.
   - `crates/devialet-ctl` (`devialet-ctl`) — single-shot command CLI
     binary. Depends on `protocol` only.
@@ -185,6 +185,53 @@ for what's confirmed out of scope.
   alternative (see "In-process alternative (cxx-qt) considered and
   rejected" above).
 - Repo: `devialet-expert-remote-widget`.
+
+## Repository Layout
+
+devialet-expert-remote-widget/
+├── Cargo.toml                      # workspace root
+├── CLAUDE.md
+├── README.md
+├── crates/
+│   ├── protocol/                   # dependency-free library crate: packet
+│   │                                #   encode/decode, CRC16, dbConvert,
+│   │                                #   source remap table. No sockets, no async.
+│   ├── devialet-remote-daemon/     # long-running UDP status listener; pushes
+│   │                                #   live state to QML via D-Bus (zbus),
+│   │                                #   properties + PropertiesChanged, no polling
+│   └── devialet-ctl/               # single-shot command CLI (volume/mute/power/
+│                                    #   source), invoked from QML via
+│                                    #   Plasma5Support.DataSource's executable engine
+├── plasmoid/                       # KPackage root. Passed directly to
+│   │                                #   `kpackagetool6 -t Plasma/Applet -i plasmoid/`
+│   │                                #   — do not nest further (no plasmoid/package/).
+│   │                                #   This shape is dictated by KPackage, not
+│   │                                #   arbitrary; don't "clean it up."
+│   ├── metadata.json
+│   └── contents/
+│       ├── ui/                     # main.qml, FullRepresentation.qml, etc.
+│       └── config/                 # config.qml + main.xml — Plasmoid.configuration
+│                                    #   (blur, reduce-motion, scroll-step,
+│                                    #   launch-at-login display). Added when a
+│                                    #   phase actually needs a settings view.
+├── systemd/
+│   └── devialet-remote-daemon.service   # user unit (Restart=on-failure) for
+│                                    #   `systemctl --user enable`, per the settled
+│                                    #   decision to use systemd over XDG autostart
+└── docs/
+    ├── protocol.md
+    ├── known-gotchas.md
+    ├── app-overview.md
+    └── devialet_source_mapping.md
+
+Notes:
+- The `crates/` vs `plasmoid/` split mirrors the Rust-does-logic /
+  QML-does-UI boundary — if you're touching protocol or D-Bus logic, you're
+  in `crates/`; if you're touching layout, theming, or the flyout, you're in
+  `plasmoid/`.
+- `plasmoid/` and `systemd/` are shaped by their respective tools
+  (`kpackagetool6`, `systemctl --user`), not by project convention — resist
+  restructuring them without checking what each tool expects first.
 
 ## Related repos
 
