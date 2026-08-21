@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/daemon",
+    "crates/devialet-ctl",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/ekmanch/devialet-expert-remote-widget"
+
+[profile.release]
+# Small, simple binaries; no reason to trade compile time for size/speed
+# tuning at this project's scale.
+opt-level = 2

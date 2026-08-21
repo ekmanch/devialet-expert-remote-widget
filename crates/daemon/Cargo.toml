@@ -1,0 +1,20 @@
+[package]
+name = "devialet-remote-daemon"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Status listener daemon: owns the UDP 45454 socket, exposes latest amp state over D-Bus."
+
+[dependencies]
+devialet-protocol = { path = "../protocol" }
+# zbus's default features already include "blocking-api" (the sync
+# blocking::* API used here) and "async-io" (its lightweight executor
+# backend) - no extra feature flags needed. See CLAUDE.md's Environment
+# section for why a tiny async_io::block_on call is still needed even
+# though this daemon's own loop is plain synchronous Rust, not tokio.
+zbus = "5"
+# Only used for SO_REUSEADDR before bind - std::net::UdpSocket doesn't
+# expose this directly.
+socket2 = "0.6"
+async-io = "2"

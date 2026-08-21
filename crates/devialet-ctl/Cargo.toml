@@ -1,0 +1,10 @@
+[package]
+name = "devialet-ctl"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Single-shot command sender for the Devialet Expert Pro widget. Builds one command, sends it, exits."
+
+[dependencies]
+devialet-protocol = { path = "../protocol" }

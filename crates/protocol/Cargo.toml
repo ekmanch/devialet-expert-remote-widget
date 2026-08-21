@@ -1,0 +1,9 @@
+[package]
+name = "devialet-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Devialet Expert / Expert Pro UDP protocol: packet encode/decode, no I/O."
+
+[dependencies]
