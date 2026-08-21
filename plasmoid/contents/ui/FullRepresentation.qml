@@ -15,10 +15,17 @@
 // the whole time - this is not a daemon-side bug), but a QML binding
 // reading `properties.<Key>` directly stops re-evaluating after the first
 // update, even though the underlying QQmlPropertyMap keeps being updated.
-// This looks like an upstream reactivity limitation in
-// org.kde.plasma.workspace.dbus's DBusPropertyMap, not something fixable
-// from a binding expression alone (tried both direct inline property
-// access and a wrapper function - same result either way).
+//
+// Root cause attribution: this is MY OWN INFERENCE from the observed
+// behavior above, not a documented/confirmed fact - I could not find a
+// KDE bug report, source comment, or changelog entry describing this
+// specific symptom (checked bugs.kde.org, invent.kde.org/plasma/
+// plasma-workspace, and general web search, 2026-08-21; found nothing).
+// Treat "upstream reactivity limitation in DBusPropertyMap" as a
+// plausible working theory, not an established fact, and don't spend
+// further effort chasing the exact root cause - the workaround below
+// fixes it regardless of cause and should stay the standard pattern for
+// any future property bindings against this D-Bus module.
 //
 // Workaround, used below: consume `onPropertiesChanged` imperatively into
 // plain local QML properties (real Q_PROPERTYs with NOTIFY, not dynamic
@@ -44,13 +51,19 @@ ColumnLayout {
 
     readonly property real volumeStepDb: 1.0
 
-    // ASSUMPTION, flagged per your request rather than silently
-    // hardcoded as final: there is no install/packaging step for
-    // devialet-ctl yet (Phase 3 here only installs the plasmoid itself).
-    // This absolute path only works on this dev machine and must be
-    // revisited (e.g. installed to something on PATH, or resolved via a
-    // config value) before this is usable anywhere else.
-    readonly property string devialetCtlPath: "/mnt/media/github/devialet-expert-remote-widget/target/debug/devialet-ctl"
+    // Resolved via $PATH at invocation time, not a hardcoded location -
+    // see CLAUDE.md's Environment section ("devialet-ctl on PATH") for
+    // why this is reliable: the executable engine runs every command
+    // through `/bin/sh -c "<command>"` (confirmed empirically - a
+    // deliberately-missing command's stderr literally reads
+    // "/bin/sh: line 1: ...: command not found", proving shell
+    // invocation, not a raw exec with no PATH resolution), so ordinary
+    // shell PATH lookup applies, using plasmashell's own inherited PATH
+    // (confirmed via /proc/<plasmashell-pid>/environ). Requires
+    // devialet-ctl to actually be reachable on that PATH - currently via
+    // a `~/.local/bin/devialet-ctl` symlink to the dev build, documented
+    // in CLAUDE.md so Phase 3's additional buttons don't rediscover this.
+    readonly property string devialetCtlCommand: "devialet-ctl"
 
     // Local mirror of the D-Bus properties we care about, kept in sync
     // imperatively from Dbus.Properties' signals - see header comment.
@@ -106,7 +119,7 @@ ColumnLayout {
     function stepVolumeDown() {
         const currentDb = root.volumeDb !== undefined ? root.volumeDb : 0;
         const newDb = currentDb - root.volumeStepDb;
-        const cmd = root.devialetCtlPath + " --ip " + root.ampIp + " volume " + newDb;
+        const cmd = root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + newDb;
         console.log("running:", cmd);
         exec.connectSource(cmd);
     }

@@ -176,6 +176,34 @@ for what's confirmed out of scope.
   `AmpIp`, `Online`, `Power`, `Muted`, `VolumeRaw`, `VolumeDb`,
   `ActiveSourceIndex`, `ActiveSourceName`, `Sources` (array of
   `(name, index, enabled, selected)` tuples, always 30 entries).
+- **`devialet-ctl` on PATH** (needed by every QML button that shells out to
+  it, not just the volume one — mute/power/source in Phase 3 all need this
+  too, so it's documented once here rather than per-button):
+  - QML invokes it via `Plasma5Support.DataSource`'s executable engine as
+    a bare command name (`"devialet-ctl --ip " + ip + " ..."`), **not** an
+    absolute path. This is reliable, confirmed empirically rather than
+    assumed: the executable engine runs every command through
+    `/bin/sh -c "<command>"` (proven by a deliberately-missing command's
+    stderr literally reading `/bin/sh: line 1: ...: command not found` —
+    that's shell output, not a raw-exec error), so ordinary shell PATH
+    resolution applies, using plasmashell's own inherited `PATH`
+    (`/home/christian/.local/bin:/usr/local/bin:/usr/bin:/bin:...` at
+    scaffold time — confirmed via `/proc/<plasmashell-pid>/environ`, not
+    assumed). Failure mode confirmed graceful too: with the binary
+    unreachable on PATH, the engine returns exit code 127 and a normal
+    shell stderr message, no crash.
+  - For this to work, `devialet-ctl` must actually be reachable on that
+    PATH. Dev-machine setup (this is **not** yet a real install/packaging
+    story — that's a later phase): a symlink at
+    `~/.local/bin/devialet-ctl` pointing to the workspace's
+    `target/debug/devialet-ctl` build output. `~/.local/bin` is first on
+    plasmashell's PATH by default on this system (standard XDG
+    convention), so no PATH modification was needed, just the symlink:
+    `ln -sf <repo>/target/debug/devialet-ctl ~/.local/bin/devialet-ctl`.
+    Re-point or refresh this symlink after every `cargo build` that
+    changes `devialet-ctl` (a release build, or real packaging later,
+    would install directly to a proper PATH location instead and replace
+    this symlink workflow entirely).
 - Package manager / tooling: `pacman` (system Rust, Qt6, zbus/socket2/
   async-io via Cargo from crates.io). Qt6 dev tooling (`qmake6`,
   `qt6-base`, `qt6-declarative`) and a C++ compiler are present on this
