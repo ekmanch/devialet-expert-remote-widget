@@ -110,7 +110,7 @@ why: SAM/Night Mode/Bass/Treble never got reverse-engineered byte values).
 | Mute on | `0x01` | `0x07` | `0x00 0x00` | `DevialetController.setMute(true)` | [Control] |
 | Mute off | `0x00` | `0x07` | `0x00 0x00` | `DevialetController.setMute(false)` | [Control] |
 | Set volume | `0x00` | `0x04` | `hi/lo` of the `dbConvert()`-encoded, sign-flagged 16-bit word | `DevialetController.setVolumeDb()` | [Control] |
-| Select source (Phono, status index 1) | `0x00` | `0x05` | `0x3F 0x80` (hardcoded, doesn't follow the general formula) | `DevialetController.selectSource()` — bytes found via Wireshark per `gnulabis/devimote` issue #2, per code comment | [Control] |
+| Select source (status index 1, originally labeled "Phono" — see correction below) | `0x00` | `0x05` | `0x3F 0x80` (hardcoded, doesn't follow the general formula) | `DevialetController.selectSource()` — bytes found via Wireshark per `gnulabis/devimote` issue #2, per code comment | [Control] |
 | Select source (all other known inputs) | `0x00` | `0x05` | see "Source selection" below | `DevialetController.selectSource()` | [Control] |
 
 ### Source selection encoding — [Control]
@@ -122,7 +122,7 @@ Two layers of indirection, both load-bearing:
    in the select-source command. A lookup table remaps known status indices to
    command values:
 
-   | Status broadcast index | Source | Command value |
+   | Status broadcast index | Source (as originally labeled — **see correction below**) | Command value |
    |---|---|---|
    | 0 | Optical 1 | -1 |
    | 1 | Phono | *(hardcoded bytes, see above — not in this map)* |
@@ -136,6 +136,24 @@ Two layers of indirection, both load-bearing:
    the **raw status index** as the command value directly, flagged in code
    as "may need adjusting per-amp/firmware."
    Source: `DevialetController.SOURCE_COMMAND_VALUE`, `selectSource()`.
+
+   > **Correction (2026-08-21, real-device testing against a second amp —
+   > see `docs/devialet_source_mapping.md` for the full writeup):** the
+   > **"Source" column above is confirmed stale/non-universal and must not
+   > be trusted as a name for a given index.** The *numeric* index→command-value
+   > mapping (the right-hand column, and the index-1 hardcoded-byte special
+   > case) is confirmed correct and portable — sending index 1's hardcoded
+   > bytes to a different Expert Pro 140 correctly selected status index 1
+   > on that amp, exactly as this table predicts. But that amp's own
+   > broadcast names index 1 "UPnP", not "Phono" — and every other name in
+   > this column was likewise shifted by one relative to what that amp
+   > actually transmits, with "Phono" not appearing anywhere in its 30
+   > source slots at all. **Names in this table are what one reference amp
+   > happened to have configured at each slot when this table was written,
+   > not a protocol constant.** The only authoritative source of a name for
+   > a given index is that amp's own live status broadcast (the source-name
+   > field at `53 + i·17`, see the status packet table below) — never this
+   > table, and never a hardcoded per-index name anywhere in code.
 
    **Real-device finding** (Samsung Galaxy S25, 2026-08-20 — commit: TBD,
    to be added once committed): sending status index 9 (unmapped, so
