@@ -131,7 +131,6 @@ for what's confirmed out of scope.
 - Prefer flagging ambiguity over guessing, especially for protocol/state
   behavior — ask rather than assume if `docs/` doesn't cover it.
 - Keep commits scoped to one phase/concern at a time.
-- keep commits scoped to one phase/concern at a time
 
 ## Environment
 
