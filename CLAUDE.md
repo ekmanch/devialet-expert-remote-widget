@@ -131,6 +131,10 @@ for what's confirmed out of scope.
 - Prefer flagging ambiguity over guessing, especially for protocol/state
   behavior — ask rather than assume if `docs/` doesn't cover it.
 - Keep commits scoped to one phase/concern at a time.
+- Current phase status and the full roadmap are tracked in `TODO.md`, not
+  here. Check it before assuming what's done vs. pending — but the phase
+  stated explicitly in the prompt for a given session takes precedence if
+  the two ever seem to disagree (e.g. TODO.md hasn't been updated yet).
 
 ## Environment
 
