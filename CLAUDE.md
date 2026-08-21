@@ -66,10 +66,13 @@ all three.
   (`systemctl --user is-active`), which XDG autostart doesn't provide.
 - **Debounce**: lives in QML, not the daemon. On a locally-initiated
   change, QML applies an optimistic update and records a per-field
-  timestamp; for ~1.2s after, QML ignores whatever the D-Bus property
+  timestamp; for 400ms after, QML ignores whatever the D-Bus property
   push delivers for that field and keeps showing its own optimistic
-  value. Mirrors known-gotchas.md's debounce-race lesson, relocated to
-  where the layers actually sit in this architecture.
+  value. Matches the Android Kotlin app's validated 400ms debounce window
+  (mirrors known-gotchas.md's debounce-race lesson) — no evidence this
+  transport needs a longer window, so start here rather than a larger,
+  unjustified value. Revisit only if real testing shows 400ms isn't
+  enough for the UDP → daemon → D-Bus → QML path specifically.
 - **Persistence**:
   - Widget settings (blur, reduce motion, scroll step, "launch at
     login" toggle *display*) — `Plasmoid.configuration`

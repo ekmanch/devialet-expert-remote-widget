@@ -25,12 +25,40 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 3 — full functional controls, default styling.**
+- [ ] **Phase 3 — full functional controls, default styling.** *(In
+      progress - implemented and self-verified where possible; real-click
+      confirmation in the actual tray still needed, see below.)*
       Volume slider + step buttons, mute toggle, power toggle, source
-      picker — all bound to real D-Bus properties, all verified against
-      the real amp. Debounce pattern applied for locally-initiated
-      changes. No copper/graphite theming, no amp picker, no settings
-      view yet. *(Prompt drafted, not yet run.)*
+      picker — all bound to real D-Bus properties. No copper/graphite
+      theming, no amp picker, no settings view yet.
+  - Debounce ported directly from MainActivity.kt (verified against that
+    source this phase, not reconstructed from memory): button steps use a
+    sliding 400ms window (each step resets the timer); the slider only
+    sends + stamps its timestamp once, on release; a separate
+    `volumeInteracting` flag blocks all incoming volume pushes for the
+    whole duration of an active drag or button-hold, independent of the
+    timestamps. Mute/Power/Source get a single-shot 400ms window too (not
+    in the Kotlin app, but explicitly requested this phase for
+    consistency - flagged as a deliberate addition, not silent parity
+    drift).
+  - Volume range: -15dB ceiling is code-enforced (`MAX_VOLUME_DB` in the
+    protocol crate); -60dB floor is a UI convention only (matches the
+    Kotlin app's own slider bounds) - **not** enforced anywhere in Rust.
+  - Confirmed by reading devialet-ctl's source: the forced -40dB
+    post-source-switch volume is already handled inside `devialet-ctl
+    source`, not something QML needs to send separately.
+  - Self-verified via direct `devialet-ctl`/`busctl` calls against the
+    real amp (source switch + forced -40dB, -15dB ceiling clamping a -5dB
+    request): confirmed working, independent of the QML UI.
+  - Found and fixed via `plasmawindowed` testing: a ComboBox hosted inside
+    `PlasmoidItem`'s fullRepresentation didn't show its selected text
+    (same model/data confirmed correct and rendering fine in a plain QML
+    window) - root cause not fully chased down, worked around via an
+    explicit `displayText` override, which resolved it.
+  - **Still needs real-tray, real-click confirmation** (can't automate
+    clicks/drags in this environment): slider drag feel + release-only
+    send, step-button tap and hold-to-repeat, mute/power toggle round
+    trip, source ComboBox selection round trip.
 - [ ] **Phase 3.5 — multi-amp daemon support.** Daemon-only work: decide
       and implement how the daemon discovers/tracks more than one amp on
       the network and exposes that on D-Bus (new property? multiple
