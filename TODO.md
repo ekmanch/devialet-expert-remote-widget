@@ -22,7 +22,6 @@ architecture decisions; this file is just sequencing and status.
     limitation" to explicitly-labeled inference (no matching report
     found on a bounded search); imperative `onPropertiesChanged`
     workaround unaffected.
-
 - [x] **Phase 3 — full functional controls, default styling.** Volume
       slider + step buttons, mute toggle, power toggle, source picker —
       all bound to real D-Bus properties, all confirmed round-tripping
@@ -90,6 +89,9 @@ architecture decisions; this file is just sequencing and status.
     confirmed independently via `busctl`/`devialet-ctl`: power on/off,
     mute on/off, volume set, and source switch (with forced -40dB) all
     round-trip correctly against the real amp.
+
+## Up next
+
 - [ ] **Phase 3.5 — multi-amp daemon support.** Daemon-only work: decide
       and implement how the daemon discovers/tracks more than one amp on
       the network and exposes that on D-Bus (new property? multiple
@@ -100,32 +102,49 @@ architecture decisions; this file is just sequencing and status.
     real hardware, synthetic/mocked broadcast traffic, or partially
     deferred until a second amp is available. Decide before drafting the
     Phase 3.5 prompt, don't let Claude Code improvise this.
+- [ ] **Phase 3.6 — systemd unit: create, enable, and verify.** Currently
+      only manually started during dev/testing sessions — confirmed via
+      a real reboot (2026-08-23) that nothing autostarts the daemon, so
+      the widget silently shows "Not connected" on every login until it's
+      started by hand. Create the `devialet-remote-daemon.service` unit
+      already reserved in the repo layout, enable it
+      (`systemctl --user enable`), and verify: reboot and confirm
+      autostart works; kill the process and confirm systemd restarts it
+      (Restart=on-failure); confirm `systemctl --user is-active` reports
+      correctly for the QML settings toggle to eventually read.
 - [ ] **Phase 4 — amp picker, settings view, full mockup styling.**
       Amp picker QML (built against whatever surface Phase 3.5 produces),
       Plasmoid.configuration settings view (blur, reduce motion, scroll
       step, launch-at-login display), copper/graphite theme, Space
       Grotesk/JetBrains Mono fonts, blur/animation, matching
       `devialet_tray_flyout_mockup.html`.
+- [ ] **Phase 4.1 - scroll-over-tray-icon volume control.** When the
+      mouse is hovering over the system tray icon for the widget, it
+      should be possible to scroll using the mouse wheel to change the
+      volume up/down depending on if the user is scrolling up or down.
+- [ ] **Phase 4.2 - install script + devialet-ctl packaging story.**
+      Bash install script (.sh) so a user can clone the repo, run it, and
+      have the widget fully installed and usable — this necessarily
+      includes deciding how devialet-ctl gets placed somewhere on PATH
+      (currently a manual `~/.local/bin` symlink per README, fine for
+      dev but not a real install path), alongside installing the
+      plasmoid itself and the Phase 3.6 systemd unit. Treat this as one
+      combined install story rather than a separate CLI-only packaging
+      step, since the script would need to solve both anyway.
 
 ## Not yet scoped / parked
 
-- [ ] **systemd unit — create, enable, and verify.** CLAUDE.md documents
-      the decision (`systemd --user`, `Restart=on-failure`) and the repo
-      layout reserves `systemd/devialet-remote-daemon.service`, but as far
-      as documented so far the daemon has only been run manually during
-      testing — the actual unit file, `systemctl --user enable`, and
-      crash-recovery behavior haven't been confirmed working yet. Needs
-      its own verification pass (kill the daemon, confirm systemd restarts
-      it; reboot, confirm autostart).
-- [ ] **devialet-ctl install/packaging story.** Currently a manual
-      `~/.local/bin` symlink per README — fine for dev, not a real install
-      path. Revisit once the widget is closer to shareable (install
-      script, Makefile target, or AUR package).
-- [ ] **Scroll-over-tray-icon volume control.** Separate MPV Lua script to
-      redirect scroll events over active MPV windows to the amp instead of
-      MPV's own volume. Independent of the plasmoid itself — not blocked
-      on any of the phases above, can happen in parallel whenever.
-- [ ] Two deferred Android-repo TODOs (tracked there, not here, but noted
-      for awareness since protocol truth is shared): AGP declarative DSL
-      migration, targetSdk 34→37 bump with `ACCESS_LOCAL_NETWORK`
-      permission.
+
+
+## Tasks to complete outside repo
+
+- [ ] **Scroll-over-mpv-window volume control.** Separate MPV
+      Lua script to redirect scroll events over active MPV windows to the 
+      amp instead of MPV's own volume. Independent of the plasmoid itself 
+      — not blocked on any of the phases above, can happen in parallel 
+      whenever.
+- [ ] **Add package to the AUR for easier install**
+      Self-explanatory. The AUR (Arch User Repository) has packages
+      uploaded by users of Arch / Arch-based distros (e.g. CachyOS).
+      The devialet-expert-remote-widget would be nice to have uploaded
+      there for easier install and sharing to other users.
