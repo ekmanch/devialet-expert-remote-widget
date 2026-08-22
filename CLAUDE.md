@@ -187,8 +187,9 @@ for what's confirmed out of scope.
   none is — see below).
   - **Phase 3.5 multi-amp surface**, added alongside the above (no QML
     consumes it yet — that's Phase 4): `KnownAmps` (array of
-    `(ip, device_name, online)` tuples, one per amp ever heard broadcasting,
-    not just the primary one; never pruned — a gone-quiet amp just flips to
+    `(ip, device_name, online, model_name)` tuples — `model_name` added in
+    Phase 3.7, see below — one per amp ever heard broadcasting, not just
+    the primary one; never pruned — a gone-quiet amp just flips to
     `online = false` rather than disappearing, `online` using the same 8s
     `STALE_AFTER` rule as the `Online` property). `SelectedAmpIp` (string,
     `""` = no amp *explicitly* selected — mirrors the Kotlin app's
@@ -211,6 +212,22 @@ for what's confirmed out of scope.
     its module doc). This surface is informational only until Phase 4's
     QML reads `AmpIp`/`SelectedAmpIp`/`KnownAmps` and passes the chosen IP
     to `devialet-ctl --ip` itself.
+  - **Phase 3.7 mDNS model name resolution**: each known amp's real
+    make/model (e.g. "Devialet Expert 140 Pro") is resolved in the
+    background over mDNS (`_spotify-connect._tcp`, via the `mdns-sd`
+    crate — pure Rust, no async runtime dependency, matching this
+    daemon's synchronous loop) and matched against known amps by IP
+    (that service type isn't Devialet-specific, so an unmatched IP is
+    discarded, never trusted). `KnownAmps`' `device_name` field always
+    stays the raw UDP name; a separate `model_name` field (`""` until
+    resolved) carries the resolved value. The primary `DeviceName`
+    property does `model_name ?: raw_udp_name` — ported exactly from
+    `MainActivity.updateDeviceCard()`'s `modelName ?: udpName`/
+    `AmpModelNameResolver.parseModelName` (a general letter/digit-boundary
+    regex transform, **not** a per-model lookup table — ported to
+    `devialet_protocol::parse_model_name` as a hand-rolled char scan, no
+    new dependency on the zero-deps protocol crate). Once resolved, never
+    re-attempted or cleared.
 - **`devialet-ctl` on PATH** (needed by every QML button that shells out to
   it, not just the volume one — mute/power/source in Phase 3 all need this
   too, so it's documented once here rather than per-button):

@@ -12,14 +12,46 @@
 //! staleness logic lives in interface.rs; this file is just the I/O shim
 //! around it (receive loop + D-Bus registration), consistent with the
 //! protocol crate's own "logic has no I/O, I/O has no logic" split.
+//!
+//! Phase 3.7: resolves each known amp's real model name over mDNS
+//! (`AmpModelNameResolver.kt`'s Devialet-side equivalent), best-effort in
+//! the background - see `start_mdns_browse`/`drain_mdns_events` below.
+//! Resolution policy (stated explicitly, not left implicit): one
+//! continuous `browse()` session is started once at daemon startup for the
+//! whole process lifetime, not restarted or re-queried per amp or on any
+//! schedule - confirmed by reading `mdns-sd` 0.21.0's own source (not just
+//! inferred from its description), `mdns-sd` already re-queries/refreshes
+//! its cache internally: `dns_cache.rs`'s `refresh_due_ptr`/
+//! `refresh_due_srv_txt`/`refresh_due_hosts` (citing RFC 6762 section 7.1
+//! for the refresh timing) are called every iteration of the daemon's own
+//! event loop via `refresh_active_services()`
+//! (`service_daemon.rs:1622`), which sends real re-queries
+//! (`send_query`/`send_query_vec`) whenever a cached record's TTL
+//! approaches expiry. Android's `NsdManager` needed
+//! `AmpModelNameResolver`'s own manual restart-burst workaround for
+//! sluggish re-querying (that mechanism is Android-API-specific, not a
+//! general mDNS requirement, so it isn't ported here). Every
+//! `ServiceResolved` event the session ever produces is drained
+//! non-blockingly and matched against known amps by IP; once an amp
+//! resolves, it's never re-attempted or cleared (matches the Kotlin app -
+//! see `AmpState::resolve_model_name`'s doc in interface.rs).
 
 mod interface;
 
 use devialet_protocol as proto;
 use interface::AmpState;
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
+
+/// `_spotify-connect._tcp` - not Devialet-specific (see interface.rs's
+/// `resolve_model_name` doc for why that's safe: matches are confirmed
+/// against known amps before being trusted). Format confirmed against
+/// `ServiceDaemon::browse`'s own validation
+/// (`check_domain_suffix`/its doc: "must end with a valid mDNS domain:
+/// '._tcp.local.' or '._udp.local.'").
+const MDNS_SERVICE_TYPE: &str = "_spotify-connect._tcp.local.";
 
 /// How often the receive loop wakes up even with no incoming packet, purely
 /// so it can re-evaluate staleness (see module doc / CLAUDE.md's
@@ -53,6 +85,83 @@ fn debug_enabled() -> bool {
 
 fn hex_dump(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+/// Starts the mDNS browse session used for Phase 3.7 model-name
+/// resolution. Best-effort/cosmetic only, mirroring `AmpModelNameResolver`'s
+/// own framing ("this is a cosmetic enhancement, not something the app
+/// depends on"): if setup fails for any reason (no usable network
+/// interface, permission issue, etc.), this logs a warning and returns
+/// `None` - the daemon then runs exactly as it did before this phase
+/// existed (raw UDP device names only). Never a fatal startup error.
+fn start_mdns_browse() -> Option<mdns_sd::Receiver<ServiceEvent>> {
+    let daemon = match ServiceDaemon::new() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("mDNS: failed to start service daemon, model name resolution disabled: {e}");
+            return None;
+        }
+    };
+    match daemon.browse(MDNS_SERVICE_TYPE) {
+        Ok(receiver) => {
+            eprintln!("mDNS: browsing {MDNS_SERVICE_TYPE} for amp model name resolution");
+            Some(receiver)
+        }
+        Err(e) => {
+            eprintln!("mDNS: failed to browse {MDNS_SERVICE_TYPE}, model name resolution disabled: {e}");
+            None
+        }
+    }
+}
+
+/// Drains every mDNS event currently queued, non-blockingly (`try_recv`
+/// returns immediately whether the queue is empty or not) - called once per
+/// main-loop iteration, not just once per `POLL_TICK` tick, so a burst of
+/// real UDP packets arriving back-to-back (the amp can broadcast up to
+/// ~5Hz) can't starve this of a chance to run; either way it never adds any
+/// blocking delay to UDP processing, since it's a separate non-blocking
+/// check each time, not something UDP receipt waits on.
+fn drain_mdns_events(
+    receiver: &mdns_sd::Receiver<ServiceEvent>,
+    iface_ref: &zbus::blocking::object_server::InterfaceRef<AmpState>,
+    debug: bool,
+) -> zbus::Result<()> {
+    loop {
+        let event = match receiver.try_recv() {
+            Ok(event) => event,
+            Err(_) => return Ok(()), // Empty (or the daemon thread exited) - nothing more to do right now.
+        };
+        let ServiceEvent::ServiceResolved(resolved) = event else {
+            continue;
+        };
+
+        // Prefer IPv4 explicitly - same reasoning as
+        // AmpModelNameResolver.onServiceResolved: `AmpState::amps` is keyed
+        // by IPv4 dotted-quad strings (src.ip() off the IPv4-only socket
+        // bound in bind_status_socket), so an IPv6-only match would never
+        // find its known-amp entry and get silently dropped by
+        // resolve_model_name's membership check - not wrong, just
+        // pointless to even attempt.
+        let Some(ip) = resolved.addresses.iter().find(|addr| addr.is_ipv4()).map(|addr| addr.to_ip_addr().to_string()) else {
+            continue;
+        };
+        let Some(model_name) = proto::parse_model_name(&resolved.host) else {
+            continue;
+        };
+
+        let mut iface = iface_ref.get_mut();
+        let before = iface.clone();
+        let applied = iface.resolve_model_name(&ip, model_name.clone());
+        if debug {
+            eprintln!(
+                "[debug] mDNS: resolved host={:?} -> ip={ip} model_name={model_name:?} (matched a known amp: {applied})",
+                resolved.host
+            );
+        }
+        if applied {
+            emit_if_changed(iface_ref, &iface, &before)?;
+        }
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -96,10 +205,18 @@ fn main() -> std::io::Result<()> {
     let socket = bind_status_socket()?;
     eprintln!("listening for status broadcasts on 0.0.0.0:{}", proto::STATUS_PORT);
 
+    let mdns_receiver = start_mdns_browse();
+
     let mut packets_seen: u64 = 0;
 
     let mut buf = [0u8; 2048];
     loop {
+        // Runs every iteration (not gated on the WouldBlock/tick branch
+        // below) - see drain_mdns_events's own doc for why.
+        if let Some(receiver) = &mdns_receiver {
+            drain_mdns_events(receiver, &iface_ref, debug).map_err(std::io::Error::other)?;
+        }
+
         match socket.recv_from(&mut buf) {
             Ok((len, src)) => {
                 packets_seen += 1;

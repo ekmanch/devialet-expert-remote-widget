@@ -13,6 +13,7 @@ mod command;
 mod crc16;
 mod dbconvert;
 pub mod fixtures;
+mod model_name;
 mod status;
 
 pub use command::{
@@ -21,6 +22,7 @@ pub use command::{
 };
 pub use crc16::crc16_ccitt_false;
 pub use dbconvert::db_convert;
+pub use model_name::parse_model_name;
 pub use status::{parse_status, Source, Status, TooShort, SOURCE_SLOTS, STATUS_MIN_LEN};
 
 /// Amp -> app status broadcast port. Ported from

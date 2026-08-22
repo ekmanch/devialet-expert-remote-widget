@@ -18,3 +18,15 @@ zbus = "5"
 # expose this directly.
 socket2 = "0.6"
 async-io = "2"
+# mDNS resolution of the amp's real model name (Phase 3.7), browsing
+# _spotify-connect._tcp - see interface.rs's resolve_model_name doc for
+# why that service type despite not being Devialet-specific. Chosen over
+# alternatives (e.g. FFI bindings to avahi) because it's pure Rust - no
+# C/C++ dependency, matching this workspace's existing constraint - and
+# "no async runtime dependency" is its own stated design goal (runs its
+# own internal mio-based thread; exposes a plain blocking flume::Receiver
+# via try_recv()/recv(), fitting this daemon's synchronous loop with zero
+# tokio/async-std pull-in). Actively maintained: 79 published versions,
+# latest as of writing 10 days old, ~1.8M recent downloads on crates.io -
+# not an abandoned or thin wrapper.
+mdns-sd = "0.21"

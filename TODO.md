@@ -200,24 +200,104 @@ architecture decisions; this file is just sequencing and status.
     widget, and changes made in the KDE widget reflected on both the amp
     and the Android app.
 
+- [x] **Phase 3.7 — mDNS amp model name resolution.** Daemon-only, no QML
+      changes (mirrors Phase 3.5's shape - D-Bus surface addition, no UI
+      yet).
+  - Investigated rather than assumed: read `AmpModelNameResolver.kt`
+    directly. Service type is `_spotify-connect._tcp` - not
+    Devialet-specific, so resolved names are only trusted for an IP
+    already known from a real UDP broadcast (ported guard, matches
+    `discoveredAmps[ip]?.let { ... }` in `MainActivity.kt`). The
+    hostname→display-name mapping is **not** a lookup table - it's a
+    general regex transform (`parseModelName`, the resolver's companion
+    object): strip everything from the first `-` onward, insert a space
+    at every letter→digit boundary and every digit→uppercase-letter
+    boundary (digit→lowercase is deliberately *not* a boundary), prefix
+    `"Devialet "`. Ported to `devialet-protocol::parse_model_name` as a
+    hand-rolled char scan (no `regex` dependency - keeps the protocol
+    crate at zero external deps) with 9 unit tests covering the general
+    algorithm (multiple boundaries, no digits, leading digits, the
+    digit→lowercase non-boundary case, empty/no-hyphen edge cases), not
+    just the one real "Expert140Pro" example.
+  - Resolution is async/best-effort, confirmed by reading the Kotlin
+    resolver (NSD's own listener-callback API, never blocks the caller) -
+    mirrored daemon-side via `mdns-sd` (chosen over alternatives for being
+    pure Rust, no C/C++ dependency, and "no async runtime dependency" by
+    its own design, fitting this daemon's synchronous loop with zero
+    tokio/async-std pull-in; actively maintained - 79 published versions,
+    latest 10 days old, ~1.8M recent downloads). A single continuous
+    `browse()` session starts once at daemon startup for the whole
+    process lifetime; every `ServiceResolved` event is drained
+    non-blockingly once per main-loop iteration (not gated to the 1s
+    staleness tick, so a burst of real UDP packets can't starve it) and
+    matched against known amps by IP.
+  - Resolution policy stated explicitly: one continuous browse, not
+    per-amp or scheduled-retry. Initially stated this as "`mdns-sd`
+    already re-queries/refreshes its cache internally per RFC 6762"
+    without having actually verified it by reading the crate's source -
+    caught on review and checked properly (2026-08-22): confirmed via
+    `dns_cache.rs`'s `refresh_due_ptr`/`refresh_due_srv_txt`/
+    `refresh_due_hosts` (citing RFC 6762 §7.1 for refresh timing), called
+    every iteration of the daemon's own event loop via
+    `refresh_active_services()` (`service_daemon.rs:1622`), which sends
+    real re-queries (`send_query`/`send_query_vec`) as cached records'
+    TTLs approach expiry - not dead code, not just a doc claim. So
+    Android's own manual restart-burst workaround
+    (`RETRY_DELAYS_MS`/`STEADY_INTERVAL_MS` in `AmpModelNameResolver`)
+    wasn't ported: that mechanism exists specifically to compensate for
+    Android's `NsdManager` being slow to re-query, not a general mDNS
+    requirement. Once an amp resolves, it's
+    never re-attempted or cleared - matches the Kotlin app.
+  - `KnownAmps` gained a 4th tuple field (`model_name`, `""` until
+    resolved; wire signature `a(ssb)` → `a(ssbs)`) - safe to change since
+    nothing consumes `KnownAmps` yet (Phase 4 builds against whatever this
+    phase produces). Its `device_name` field deliberately still shows the
+    raw UDP name even once resolved (a future picker needs both - main
+    label vs. subtitle, the way the Kotlin app's device card does).
+  - The primary `DeviceName` property (and nothing else - `AmpIp` etc.
+    unchanged) now does `modelName ?: udpName` exactly like
+    `MainActivity.updateDeviceCard()`, same porting approach as
+    `SelectedAmpIp`/`selectedIp` in Phase 3.5: same property name/shape
+    Phase 3's QML already binds to, just a different data source behind
+    it.
+  - **Automated tests**: 9 new in the protocol crate
+    (`model_name::tests`, the general mapping algorithm) + 4 new in the
+    daemon (`interface::tests`: resolving a known amp updates `KnownAmps`
+    and becomes the primary `DeviceName`; resolving an IP never heard
+    over UDP is rejected; unresolved falls back to the raw UDP name;
+    a resolved name survives a later UDP broadcast from the same amp
+    without being wiped). Full workspace: 50/50 tests, clippy clean.
+  - **Live verification against the real amp**: captured the actual mDNS
+    advertisement first rather than assuming it matched the Kotlin doc's
+    example (`avahi-browse -r _spotify-connect._tcp`) - confirmed
+    `hostname = Expert140Pro-K48A00904ZE1V.local`, `address =
+    192.168.0.22`, matching the real amp. Ran the daemon (both a manual
+    debug-logged instance and, afterward, the real systemd-managed
+    instance from Phase 3.6, rebuilt with this phase's code) and
+    confirmed via `busctl`: `KnownAmps` showed
+    `("192.168.0.22", "My Devialet-ETH", true, "Devialet Expert 140
+    Pro")` and the primary `DeviceName` property read `"Devialet Expert
+    140 Pro"` - both the raw UDP name and the resolved model name visible
+    simultaneously in the right places. Confirmed via the debug log that
+    normal UDP status processing (90+ packets, steady cadence) was
+    unaffected/undelayed by mDNS resolution running alongside it, and
+    that the resolved name persisted correctly across every subsequent
+    UDP broadcast from the same amp (carry-forward, not wiped every ~1s).
+  - **Assumed/not caught live**: the "resolution hasn't completed yet"
+    fallback window - on this LAN, mDNS resolution completed too fast
+    (under ~0.6s) to observably race against a fresh daemon start, so the
+    pre-resolution raw-UDP-name state is proven by the deterministic unit
+    test (`unresolved_model_name_falls_back_to_raw_udp_device_name`) and
+    code inspection (`TrackedAmp.model_name` defaults to `None` until
+    `resolve_model_name` is explicitly called), not by a live capture of
+    that specific window. Behavior when mDNS is entirely unavailable
+    (`ServiceDaemon::new()`/`browse()` failing outright - e.g. no usable
+    network interface) is designed to degrade gracefully (logs a warning,
+    daemon continues UDP-only) but wasn't exercised live, since mDNS
+    worked normally in this environment throughout.
+
 ## Up next
 
-- [ ] **Phase 3.7 — mDNS amp model name resolution.** Currently the
-      widget only ever shows the raw UDP `device_name` (e.g.
-      "Expert140Pro"/"My Devialet-ETH"-style names) — there's no attempt
-      at mDNS resolution at all yet, so there's no fallback happening
-      today, just the one behavior that exists. Add the same
-      `modelName ?: udpName` logic the Android app already has (via its
-      `AmpModelNameResolver`), daemon-side: resolve each known amp's
-      model name over mDNS (e.g. "Expert140Pro" → "Devialet Expert 140
-      Pro"), expose it as an additional field on `KnownAmps`, and have
-      the primary DeviceName property for the selected amp prefer the
-      resolved model name, falling back to the raw UDP name when
-      resolution hasn't completed or fails. Daemon-only, no QML changes
-      — mirrors Phase 3.5's shape (D-Bus surface addition, no UI yet).
-      Investigate the Android resolver's actual mDNS service type and
-      name-mapping logic before implementing, don't guess or
-      reconstruct it from one example name..
 - [ ] **Phase 4 — amp picker, settings view, full mockup styling.**
       Amp picker QML (built against whatever surface Phase 3.5 produces),
       Plasmoid.configuration settings view (blur, reduce motion, scroll

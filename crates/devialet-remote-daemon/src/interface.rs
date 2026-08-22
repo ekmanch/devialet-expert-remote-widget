@@ -17,6 +17,15 @@ pub const INTERFACE_NAME: &str = "com.ekmanch.DevialetRemote.Amp1";
 struct TrackedAmp {
     status: proto::Status,
     last_seen: Instant,
+    /// Resolved via mDNS (Phase 3.7) - `None` until/unless resolution
+    /// succeeds for this IP. Mirrors `DiscoveredAmp.modelName` (nullable,
+    /// resolved separately, carried forward across UDP-driven updates - see
+    /// `ingest_status`, ported from `DiscoveredAmp.kt`'s doc comment
+    /// warning that recreating the record on every broadcast "gets wiped
+    /// every ~1s" if the previous value isn't explicitly carried forward).
+    /// Once set, never cleared - matches the Kotlin app, which also never
+    /// resets a resolved `modelName` back to `null`.
+    model_name: Option<String>,
 }
 
 /// D-Bus-exposed state, covering both the Phase 1-3 "primary amp" surface
@@ -56,7 +65,7 @@ pub struct AmpState {
     active_source_index: u8,
     active_source_name: String,
     sources: Vec<(String, u8, bool, bool)>,
-    known_amps: Vec<(String, String, bool)>,
+    known_amps: Vec<(String, String, bool, String)>,
 }
 
 #[interface(name = "com.ekmanch.DevialetRemote.Amp1")]
@@ -123,19 +132,28 @@ impl AmpState {
     }
 
     /// Every amp ever heard broadcasting on the LAN, not just the selected
-    /// one - `(ip, device_name, online)` tuples, `online` computed with the
-    /// same 8s staleness rule as the `Online` property above. Never pruned;
-    /// a since-gone amp just shows `online = false` forever rather than
-    /// disappearing (mirrors `discoveredAmps` never being pruned in the
-    /// Kotlin app - only the picker *view* there filters stale entries, this
-    /// property intentionally doesn't so a future picker can decide its own
+    /// one - `(ip, device_name, online, model_name)` tuples. `device_name`
+    /// is always the raw UDP-broadcast name (unlike the primary
+    /// `DeviceName` property, this one deliberately does *not* prefer
+    /// `model_name` - a future picker needs both, e.g. to show "Devialet
+    /// Expert 140 Pro" as the main label and the raw UDP name as a
+    /// subtitle, the way the Kotlin app's device card does). `online`
+    /// computed with the same 8s staleness rule as the `Online` property
+    /// above. `model_name` is `""` until mDNS resolution succeeds for that
+    /// IP (Phase 3.7 - see `resolve_model_name`); never cleared once
+    /// resolved, matching the Kotlin app. Never pruned; a since-gone amp
+    /// just shows `online = false` forever rather than disappearing
+    /// (mirrors `discoveredAmps` never being pruned in the Kotlin app -
+    /// only the picker *view* there filters stale entries, this property
+    /// intentionally doesn't so a future picker can decide its own
     /// filtering/sorting). Sorted numerically by IP (octet-wise, e.g.
     /// `192.168.0.9` before `192.168.0.10`), not lexicographically as a
     /// string - for a stable order across emissions: the list only
     /// reorders when the known-IP set itself changes (a new amp is first
-    /// heard), never as a side effect of an entry's `online` flag flipping.
+    /// heard), never as a side effect of an entry's `online` or
+    /// `model_name` fields changing.
     #[zbus(property, name = "KnownAmps")]
-    pub fn known_amps(&self) -> Vec<(String, String, bool)> {
+    pub fn known_amps(&self) -> Vec<(String, String, bool, String)> {
         self.known_amps.clone()
     }
 
@@ -179,8 +197,33 @@ impl AmpState {
     /// `ip` and re-derives every exposed field. Called once per real UDP
     /// packet from the daemon's receive loop.
     pub fn ingest_status(&mut self, ip: String, status: proto::Status) {
-        self.amps.insert(ip, TrackedAmp { status, last_seen: Instant::now() });
+        // Carry forward any already-resolved model name - ported from
+        // DiscoveredAmp.kt's doc comment (see TrackedAmp's own doc): a
+        // naive overwrite here would wipe a Phase 3.7 mDNS resolution on
+        // every single ~1s UDP broadcast from that amp.
+        let model_name = self.amps.get(&ip).and_then(|amp| amp.model_name.clone());
+        self.amps.insert(ip, TrackedAmp { status, last_seen: Instant::now(), model_name });
         self.recompute();
+    }
+
+    /// Applies an mDNS-resolved model name to a *known* amp (one already
+    /// present in `amps` from a real UDP broadcast) and re-derives every
+    /// exposed field. Returns `false` (no-op, nothing recomputed) if `ip`
+    /// isn't a known amp - mirrors the Kotlin app's own guard
+    /// (`discoveredAmps[ip]?.let { ... }` in `MainActivity`'s
+    /// `AmpModelNameResolver` callback), needed because the mDNS service
+    /// type being browsed (`_spotify-connect._tcp`, see main.rs's mDNS
+    /// setup doc for why) isn't Devialet-specific, so an arbitrary Spotify
+    /// Connect receiver's resolved name must never be trusted for an IP
+    /// that was never actually heard broadcasting the Devialet UDP
+    /// protocol.
+    pub fn resolve_model_name(&mut self, ip: &str, model_name: String) -> bool {
+        let Some(amp) = self.amps.get_mut(ip) else {
+            return false;
+        };
+        amp.model_name = Some(model_name);
+        self.recompute();
+        true
     }
 
     /// Re-derives every exposed field with no new packet - only staleness
@@ -206,10 +249,17 @@ impl AmpState {
     }
 
     fn recompute(&mut self) {
-        let mut known_amps: Vec<(String, String, bool)> = self
+        let mut known_amps: Vec<(String, String, bool, String)> = self
             .amps
             .iter()
-            .map(|(ip, amp)| (ip.clone(), amp.status.device_name.clone(), amp.last_seen.elapsed() < proto::STALE_AFTER))
+            .map(|(ip, amp)| {
+                (
+                    ip.clone(),
+                    amp.status.device_name.clone(),
+                    amp.last_seen.elapsed() < proto::STALE_AFTER,
+                    amp.model_name.clone().unwrap_or_default(),
+                )
+            })
             .collect();
         // Numeric (octet-wise), not lexicographic - a plain string sort
         // would put "192.168.0.10" before "192.168.0.9". IPs in `amps` are
@@ -217,7 +267,7 @@ impl AmpState {
         // via `ingest_status`, fed by `src.ip().to_string()` off the
         // IPv4-only socket bound in `bind_status_socket`), so parse failure
         // here would mean that invariant broke, not a normal runtime case.
-        known_amps.sort_by_key(|(ip, _, _)| {
+        known_amps.sort_by_key(|(ip, _, _, _)| {
             ip.parse::<Ipv4Addr>()
                 .expect("amp IPs are always valid IPv4 dotted-quads - see bind_status_socket")
         });
@@ -228,7 +278,17 @@ impl AmpState {
 
         match effective_ip.and_then(|ip| self.amps.get(&ip)) {
             Some(amp) => {
-                self.device_name = amp.status.device_name.clone();
+                // `modelName ?: udpName` - ported from
+                // AmpModelNameResolver.kt's usage in
+                // MainActivity.updateDeviceCard()
+                // (`discoveredAmps[selectedIp]?.modelName ?: selectedName...`).
+                // The raw UDP name is still available unprefixed in
+                // `KnownAmps` above for anything that wants it regardless.
+                self.device_name = amp
+                    .model_name
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| amp.status.device_name.clone());
                 self.online = amp.last_seen.elapsed() < proto::STALE_AFTER;
                 self.power = amp.status.power_on;
                 self.muted = amp.status.muted;
@@ -326,10 +386,10 @@ mod tests {
         state.ingest_status("192.168.1.51".to_string(), parsed_status("Bedroom Amp"));
 
         assert_eq!(state.known_amps.len(), 2, "second amp must not overwrite the first");
-        let mut names: Vec<&str> = state.known_amps.iter().map(|(_, name, _)| name.as_str()).collect();
+        let mut names: Vec<&str> = state.known_amps.iter().map(|(_, name, _, _)| name.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["Bedroom Amp", "Living Room Amp"]);
-        assert!(state.known_amps.iter().all(|(_, _, online)| *online), "freshly-ingested amps are online");
+        assert!(state.known_amps.iter().all(|(_, _, online, _)| *online), "freshly-ingested amps are online");
     }
 
     #[test]
@@ -414,7 +474,7 @@ mod tests {
         state.ingest_status("192.168.1.99".to_string(), parsed_status("Z Amp"));
         state.ingest_status("192.168.1.10".to_string(), parsed_status("A Amp"));
 
-        let ips: Vec<&str> = state.known_amps.iter().map(|(ip, _, _)| ip.as_str()).collect();
+        let ips: Vec<&str> = state.known_amps.iter().map(|(ip, _, _, _)| ip.as_str()).collect();
         assert_eq!(ips, vec!["192.168.1.10", "192.168.1.99"]);
     }
 
@@ -428,10 +488,70 @@ mod tests {
         state.ingest_status("192.168.1.10".to_string(), parsed_status("Ten"));
         state.ingest_status("192.168.1.9".to_string(), parsed_status("Nine"));
 
-        let ips: Vec<&str> = state.known_amps.iter().map(|(ip, _, _)| ip.as_str()).collect();
+        let ips: Vec<&str> = state.known_amps.iter().map(|(ip, _, _, _)| ip.as_str()).collect();
         // Lexicographically "192.168.1.10" < "192.168.1.9" (the '1' after
         // the shared "192.168.1." prefix sorts before '9'), which is the
         // wrong order for what a human expects from "sorted by IP".
         assert_eq!(ips, vec!["192.168.1.9", "192.168.1.10"]);
+    }
+
+    #[test]
+    fn resolving_a_known_amp_updates_known_amps_and_becomes_the_primary_device_name() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("My Devialet-ETH"));
+
+        let applied = state.resolve_model_name("192.168.1.50", "Devialet Expert 140 Pro".to_string());
+
+        assert!(applied);
+        assert_eq!(
+            state.known_amps.iter().find(|(ip, ..)| ip == "192.168.1.50").unwrap().3,
+            "Devialet Expert 140 Pro"
+        );
+        // modelName ?: udpName - the primary DeviceName property prefers
+        // the resolved model name over the raw UDP broadcast name.
+        assert_eq!(state.device_name, "Devialet Expert 140 Pro");
+    }
+
+    #[test]
+    fn resolving_an_ip_never_heard_over_udp_is_rejected() {
+        // _spotify-connect._tcp isn't Devialet-specific - a resolution for
+        // an IP this daemon never saw a real UDP broadcast from must be
+        // discarded, not trusted as if it were a known amp.
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("My Devialet-ETH"));
+
+        let applied = state.resolve_model_name("192.168.1.77", "Some Other Spotify Speaker".to_string());
+
+        assert!(!applied);
+        assert_eq!(state.known_amps.len(), 1, "no new entry should be created for an unknown IP");
+        assert!(state.known_amps.iter().all(|(_, _, _, model)| model.is_empty()));
+    }
+
+    #[test]
+    fn unresolved_model_name_falls_back_to_raw_udp_device_name() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("My Devialet-ETH"));
+
+        // No resolve_model_name call at all - mirrors "resolution hasn't
+        // completed yet, or never succeeds" (e.g. no mDNS on the network).
+        assert_eq!(state.device_name, "My Devialet-ETH");
+        assert_eq!(state.known_amps[0].3, "", "unresolved model name is empty, not absent/blank-but-set");
+    }
+
+    #[test]
+    fn resolved_model_name_survives_a_later_udp_broadcast_from_the_same_amp() {
+        // Ported behavior, not incidental: DiscoveredAmp.kt's doc comment
+        // warns this is exactly the kind of thing that "gets wiped every
+        // ~1s" if the previous value isn't carried forward across re-ingestion.
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("My Devialet-ETH"));
+        state.resolve_model_name("192.168.1.50", "Devialet Expert 140 Pro".to_string());
+
+        // A later UDP broadcast from the same amp (e.g. next ~1s status
+        // packet) must not wipe the already-resolved model name.
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("My Devialet-ETH"));
+
+        assert_eq!(state.device_name, "Devialet Expert 140 Pro");
+        assert_eq!(state.known_amps[0].3, "Devialet Expert 140 Pro");
     }
 }
