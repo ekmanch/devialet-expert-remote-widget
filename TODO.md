@@ -90,18 +90,72 @@ architecture decisions; this file is just sequencing and status.
     mute on/off, volume set, and source switch (with forced -40dB) all
     round-trip correctly against the real amp.
 
+- [x] **Phase 3.5 — multi-amp daemon support.** Daemon-only, no QML changes
+      (Phase 4 builds the picker against this). Design proposed and
+      confirmed before implementing (see CLAUDE.md's D-Bus service bullet
+      for the settled shape) rather than silently picked.
+  - `AmpState` (interface.rs) now tracks every amp ever heard broadcasting
+    (`amps: HashMap<ip, TrackedAmp>`, never pruned) alongside an explicit
+    `selected_ip` (`""` = none — ported from `MainActivity.selectedIp`'s
+    SharedPreferences sentinel, confirmed by reading that source rather
+    than guessing). Exposes it all on the *same* object/interface Phase 3's
+    QML already binds to, not a replacement: `KnownAmps` (array of
+    `(ip, device_name, online)`), `SelectedAmpIp`, `SelectAmp(ip)` method,
+    alongside the existing primary properties (now driven by the selected/
+    auto-selected amp instead of "whichever broadcast most recently").
+  - Investigated (not assumed) how `devialet-ctl` targets an amp: it takes
+    `--ip` explicitly per invocation and has zero daemon/D-Bus interaction
+    — confirmed by reading its source. This phase's selection surface is
+    therefore informational only until Phase 4's QML reads it and passes
+    the IP to `devialet-ctl --ip` itself.
+  - Auto-select-if-alone: with nothing explicitly selected and exactly one
+    known amp, that amp drives the primary properties (avoids a
+    "Not connected" regression before Phase 4's picker exists to call
+    `SelectAmp`); with zero or 2+ known amps and nothing explicit, primary
+    properties show the empty/not-connected state instead of guessing.
+    Selection is in-memory only, not persisted across daemon restarts —
+    deferred to Phase 4.
+  - Protocol crate gained a public `fixtures::StatusFixtureBuilder`
+    (promoted from a test-only private struct, now shared by the
+    protocol crate's own tests too) so downstream crates can build
+    realistic synthetic status packets without hand-rolling wire bytes.
+  - **Automated tests** (8 new, `interface::tests`, all passing): two
+    distinct synthetic amps built via `StatusFixtureBuilder` → real
+    `parse_status` → `AmpState::ingest_status`, confirming they're tracked
+    as separate `KnownAmps` entries (not overwritten), plus coverage of
+    auto-select-if-alone, not-connected fallback with 2+ amps, explicit
+    selection (known and unknown IPs), clearing back to `""`, and stable
+    IP-sorted ordering. Full workspace: 36/36 tests, clippy clean.
+  - **Live verification against real hardware + a synthetic second amp**
+    (2026-08-22): added alias IP `192.168.0.222/24` on `eno1` (real amp at
+    `192.168.0.134`'s subnet, real amp itself broadcasting from
+    `192.168.0.22` as "My Devialet-ETH"). A throwaway test-sender (reused
+    `devialet_protocol::fixtures`/`parse_status` wire format, not
+    hand-rolled) broadcast a synthetic "SYNTH-TEST-AMP" from the alias IP
+    at ~1s intervals. Confirmed via `busctl`: `KnownAmps` correctly showed
+    both amps simultaneously by distinct IP; with nothing selected the
+    primary properties correctly fell back to not-connected (2 known
+    amps); `SelectAmp` round-tripped for both the synthetic and real amp
+    IPs and for the `""` "None" clear, each confirmed via property reads
+    and (for one case) a `busctl monitor` capture showing the actual
+    `PropertiesChanged` signal firing on the wire. After stopping the
+    synthetic broadcaster, confirmed (wire-level `busctl monitor` capture)
+    that it flips to `online = false` in `KnownAmps` within one staleness
+    tick (~1s) without being evicted — matches the deliberate "never
+    prune" design — while the explicitly-selected real amp's own
+    properties were unaffected. IP alias removed after testing and
+    confirmed gone via `ip addr show dev eno1` (only the original
+    `192.168.0.134/24` remains, no `secondary` entry left behind).
+  - **Assumed, not verified:** behavior with three or more simultaneous
+    amps (only two were feasible to test here — one real, one synthetic);
+    the two-known-amps "not connected" fallback is exercised, but a
+    three-way disambiguation UX (if one is ever needed beyond "explicit
+    selection required") is unverified. Cross-daemon-restart behavior
+    beyond "resets to no explicit selection" (i.e. real persistence) is
+    unimplemented by design, not just untested — deferred to Phase 4.
+
 ## Up next
 
-- [ ] **Phase 3.5 — multi-amp daemon support.** Daemon-only work: decide
-      and implement how the daemon discovers/tracks more than one amp on
-      the network and exposes that on D-Bus (new property? multiple
-      objects? something else — not yet decided). No QML changes in this
-      phase. Verified via busctl/logs only.
-  - **Open question, unresolved:** testability is limited to one physical
-    amp right now — need to decide whether this phase is verified against
-    real hardware, synthetic/mocked broadcast traffic, or partially
-    deferred until a second amp is available. Decide before drafting the
-    Phase 3.5 prompt, don't let Claude Code improvise this.
 - [ ] **Phase 3.6 — systemd unit: create, enable, and verify.** Currently
       only manually started during dev/testing sessions — confirmed via
       a real reboot (2026-08-23) that nothing autostarts the daemon, so

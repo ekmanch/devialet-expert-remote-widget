@@ -179,10 +179,38 @@ for what's confirmed out of scope.
     zbus/zvariant types).
 - D-Bus service (daemon): bus name `com.ekmanch.DevialetRemote`, object
   path `/com/ekmanch/DevialetRemote/Amp`, interface
-  `com.ekmanch.DevialetRemote.Amp1`, session bus. Properties: `DeviceName`,
-  `AmpIp`, `Online`, `Power`, `Muted`, `VolumeRaw`, `VolumeDb`,
-  `ActiveSourceIndex`, `ActiveSourceName`, `Sources` (array of
-  `(name, index, enabled, selected)` tuples, always 30 entries).
+  `com.ekmanch.DevialetRemote.Amp1`, session bus. Primary-amp properties
+  (unchanged since Phase 3, existing QML bindings): `DeviceName`, `AmpIp`,
+  `Online`, `Power`, `Muted`, `VolumeRaw`, `VolumeDb`, `ActiveSourceIndex`,
+  `ActiveSourceName`, `Sources` (array of `(name, index, enabled, selected)`
+  tuples, 30 entries when an amp is selected/auto-selected, **empty** when
+  none is — see below).
+  - **Phase 3.5 multi-amp surface**, added alongside the above (no QML
+    consumes it yet — that's Phase 4): `KnownAmps` (array of
+    `(ip, device_name, online)` tuples, one per amp ever heard broadcasting,
+    not just the primary one; never pruned — a gone-quiet amp just flips to
+    `online = false` rather than disappearing, `online` using the same 8s
+    `STALE_AFTER` rule as the `Online` property). `SelectedAmpIp` (string,
+    `""` = no amp *explicitly* selected — mirrors the Kotlin app's
+    `SharedPreferences amp_ip` sentinel in `MainActivity.kt`). `SelectAmp(ip:
+    String)` method selects by IP (`""` explicitly clears selection, the
+    "None" option in the Kotlin app's amp sheet; an IP never heard from yet
+    is also accepted, mirroring its manual-IP-entry fallback).
+  - Interaction between the two: the primary properties above reflect
+    whichever amp `SelectedAmpIp` names. If `SelectedAmpIp` is `""` (nothing
+    explicit) **and** exactly one amp is currently known, that amp is
+    auto-selected for the primary properties (preserves Phase 3's
+    single-amp UX with no picker yet to call `SelectAmp`). With `""` and
+    zero or 2+ known amps, the primary properties show the empty/
+    not-connected state (`DeviceName`/`AmpIp` `""`, `Online` `false`,
+    `Sources` empty, etc.) rather than guessing which one to show.
+    Selection is **not** persisted across daemon restarts (in-memory
+    only) — deferred to Phase 4, where the picker UI actually drives it.
+  - `devialet-ctl` has no knowledge of any of this — it takes `--ip`
+    explicitly per invocation and never talks to the daemon or D-Bus (see
+    its module doc). This surface is informational only until Phase 4's
+    QML reads `AmpIp`/`SelectedAmpIp`/`KnownAmps` and passes the chosen IP
+    to `devialet-ctl --ip` itself.
 - **`devialet-ctl` on PATH** (needed by every QML button that shells out to
   it, not just the volume one — mute/power/source in Phase 3 all need this
   too, so it's documented once here rather than per-button):

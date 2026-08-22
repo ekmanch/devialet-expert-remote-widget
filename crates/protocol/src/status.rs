@@ -111,70 +111,7 @@ fn trimmed_utf8(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Builds a synthetic, minimum-length (566 byte) status packet with
-    /// controllable fields, mirroring the exact offsets from
-    /// docs/protocol.md / DevialetStatusListener.parseStatus(). Test-only.
-    struct FixtureBuilder {
-        data: Vec<u8>,
-    }
-
-    impl FixtureBuilder {
-        fn new() -> Self {
-            Self {
-                data: vec![0u8; STATUS_MIN_LEN],
-            }
-        }
-
-        fn device_name(mut self, name: &str) -> Self {
-            let bytes = name.as_bytes();
-            assert!(bytes.len() <= 31);
-            self.data[19..19 + bytes.len()].copy_from_slice(bytes);
-            self
-        }
-
-        fn source(mut self, i: usize, name: &str, enabled: bool) -> Self {
-            let base = 52 + i * 17;
-            self.data[base] = if enabled { b'1' } else { b'0' };
-            let bytes = name.as_bytes();
-            assert!(bytes.len() <= 16);
-            self.data[base + 1..base + 1 + bytes.len()].copy_from_slice(bytes);
-            self
-        }
-
-        fn power(mut self, on: bool) -> Self {
-            if on {
-                self.data[562] |= 0x80;
-            } else {
-                self.data[562] &= !0x80;
-            }
-            self
-        }
-
-        fn muted(mut self, muted: bool) -> Self {
-            if muted {
-                self.data[563] |= 0x02;
-            } else {
-                self.data[563] &= !0x02;
-            }
-            self
-        }
-
-        fn active_source_index(mut self, index: u8) -> Self {
-            assert!(index <= 15);
-            self.data[563] = (self.data[563] & !0x3C) | ((index << 2) & 0x3C);
-            self
-        }
-
-        fn volume_raw(mut self, v: u8) -> Self {
-            self.data[565] = v;
-            self
-        }
-
-        fn build(self) -> Vec<u8> {
-            self.data
-        }
-    }
+    use crate::fixtures::StatusFixtureBuilder as FixtureBuilder;
 
     #[test]
     fn too_short_packet_is_rejected() {

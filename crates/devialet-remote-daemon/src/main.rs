@@ -4,25 +4,22 @@
 //! with `PropertiesChanged` signals - no polling, no status file. See
 //! CLAUDE.md for the settled architecture this implements.
 //!
-//! Phase 1 scope note: amp *selection* (a persisted "chosen amp" the way
-//! the Kotlin app's `SharedPreferences amp_ip`/`amp_name` worked) isn't
-//! implemented yet - there's no picker UI in this phase. "Primary" here
-//! just means "whichever amp's status packet arrived most recently"; the
-//! full per-amp map is tracked internally (`known_amps`) so a later
-//! amp-picker phase has real data to work from, but only the primary's
-//! state is exposed over D-Bus right now. On a LAN with more than one amp
-//! broadcasting, the exposed properties will visibly flip between them as
-//! their ~1s broadcasts interleave - a known, deliberately deferred
-//! limitation, not a bug.
+//! Phase 3.5: every amp heard broadcasting is tracked (not just the most
+//! recent), exposed via the `KnownAmps` property, alongside an explicit
+//! `SelectedAmpIp`/`SelectAmp()` selection surface - see interface.rs's
+//! `AmpState` doc for the full model (ported from the Kotlin app's
+//! `discoveredAmps`/`selectedIp`). All of `AmpState`'s tracking/selection/
+//! staleness logic lives in interface.rs; this file is just the I/O shim
+//! around it (receive loop + D-Bus registration), consistent with the
+//! protocol crate's own "logic has no I/O, I/O has no logic" split.
 
 mod interface;
 
 use devialet_protocol as proto;
 use interface::AmpState;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How often the receive loop wakes up even with no incoming packet, purely
 /// so it can re-evaluate staleness (see module doc / CLAUDE.md's
@@ -42,11 +39,6 @@ fn bind_status_socket() -> std::io::Result<UdpSocket> {
     socket.set_broadcast(true)?;
     socket.set_read_timeout(Some(POLL_TICK))?;
     Ok(socket.into())
-}
-
-struct KnownAmp {
-    status: proto::Status,
-    last_seen: Instant,
 }
 
 /// Set `DEVIALET_DAEMON_DEBUG=1` to enable verbose per-packet diagnostics:
@@ -104,9 +96,6 @@ fn main() -> std::io::Result<()> {
     let socket = bind_status_socket()?;
     eprintln!("listening for status broadcasts on 0.0.0.0:{}", proto::STATUS_PORT);
 
-    let mut known_amps: HashMap<String, KnownAmp> = HashMap::new();
-    let mut primary_ip: Option<String> = None;
-    let mut last_emitted_online: Option<bool> = None;
     let mut packets_seen: u64 = 0;
 
     let mut buf = [0u8; 2048];
@@ -144,28 +133,22 @@ fn main() -> std::io::Result<()> {
                     continue;
                 };
                 let ip = src.ip().to_string();
-                let now = Instant::now();
-                known_amps.insert(
-                    ip.clone(),
-                    KnownAmp {
-                        status: status.clone(),
-                        last_seen: now,
-                    },
-                );
-                primary_ip = Some(ip.clone());
+                let device_name = status.device_name.clone();
 
-                let new_state = AmpState::from_status(&status, ip, true);
-                apply_and_emit(&iface_ref, &new_state).map_err(std::io::Error::other)?;
-                last_emitted_online = Some(true);
+                ingest_and_maybe_emit(&iface_ref, ip.clone(), status).map_err(std::io::Error::other)?;
 
                 // Item 4: read back through the SAME InterfaceRef the D-Bus
                 // property getters are registered against, immediately
                 // after writing, to prove this isn't a separate/stale copy.
+                // Note device_name/online below reflect the *primary*
+                // (selected/auto-selected) amp, which may differ from this
+                // packet's own amp if it isn't the one currently selected -
+                // see interface.rs's AmpState doc.
                 if debug {
                     let read_back = iface_ref.get();
                     eprintln!(
-                        "[debug] read-back via iface_ref.get() immediately after write: device_name={:?} online={} (should match what was just written: {:?}, true)",
-                        read_back.device_name, read_back.online, new_state.device_name
+                        "[debug] read-back via iface_ref.get() immediately after write: primary device_name={:?} online={} (packet was from {ip:?}, device_name={device_name:?})",
+                        read_back.device_name(), read_back.online()
                     );
                 }
             }
@@ -173,19 +156,10 @@ fn main() -> std::io::Result<()> {
                 if debug {
                     eprintln!("[debug] recv_from: timed out (no packet in {POLL_TICK:?}) - loop is alive, {packets_seen} real packets seen so far");
                 }
-                // No packet within POLL_TICK - re-check staleness for the
-                // primary amp only (Phase 1 scope, see module doc).
-                if let Some(ip) = &primary_ip {
-                    if let Some(entry) = known_amps.get(ip) {
-                        let online = entry.last_seen.elapsed() < proto::STALE_AFTER;
-                        if last_emitted_online != Some(online) {
-                            let mut state = AmpState::from_status(&entry.status, ip.clone(), online);
-                            state.online = online;
-                            apply_and_emit(&iface_ref, &state).map_err(std::io::Error::other)?;
-                            last_emitted_online = Some(online);
-                        }
-                    }
-                }
+                // No packet within POLL_TICK - re-check staleness for every
+                // known amp (not just the primary), since a non-primary amp
+                // going quiet still needs to be reflected in KnownAmps.
+                recompute_staleness_and_maybe_emit(&iface_ref).map_err(std::io::Error::other)?;
             }
             Err(e) => {
                 // Transient receive error - matches
@@ -197,36 +171,43 @@ fn main() -> std::io::Result<()> {
     }
 }
 
-/// Writes the new state into the registered interface and unconditionally
-/// emits every property's `PropertiesChanged` signal. Phase 1 keeps this
-/// simple (no before/after diff to decide which fields actually changed) -
-/// the amp only broadcasts ~1x/sec, so unconditional re-emission at that
-/// rate is cheap; a future pass could diff and emit only changed
-/// properties.
-fn apply_and_emit(
+/// Records a freshly-parsed status broadcast and, only if doing so actually
+/// changed any exposed property (primary fields, `KnownAmps`, or
+/// `SelectedAmpIp`), emits `PropertiesChanged` for all of them. Guarding on
+/// an actual change (rather than Phase 1's unconditional re-emission) is
+/// needed now that a packet from a non-primary amp can otherwise cause a
+/// no-op emit every ~1s it broadcasts.
+fn ingest_and_maybe_emit(
     iface_ref: &zbus::blocking::object_server::InterfaceRef<AmpState>,
-    new_state: &AmpState,
+    ip: String,
+    status: proto::Status,
 ) -> zbus::Result<()> {
-    // `<property>_changed` is an inherent async method zbus generates
-    // directly on AmpState itself (not a separate trait) - called via the
-    // get_mut() guard, mutation and emission both happening while it's
-    // held, matching zbus's own documented pattern for this exact case
-    // (emitting PropertiesChanged from outside a property setter).
     let mut iface = iface_ref.get_mut();
-    *iface = new_state.clone();
+    let before = iface.clone();
+    iface.ingest_status(ip, status);
+    emit_if_changed(iface_ref, &iface, &before)
+}
 
+/// Re-derives staleness for every known amp (no new packet) and emits only
+/// if something actually changed - see `POLL_TICK`'s doc comment for why
+/// this tick exists at all.
+fn recompute_staleness_and_maybe_emit(
+    iface_ref: &zbus::blocking::object_server::InterfaceRef<AmpState>,
+) -> zbus::Result<()> {
+    let mut iface = iface_ref.get_mut();
+    let before = iface.clone();
+    iface.recompute_staleness();
+    emit_if_changed(iface_ref, &iface, &before)
+}
+
+fn emit_if_changed(
+    iface_ref: &zbus::blocking::object_server::InterfaceRef<AmpState>,
+    iface: &AmpState,
+    before: &AmpState,
+) -> zbus::Result<()> {
+    if interface::states_equal(before, iface) {
+        return Ok(());
+    }
     let emitter = iface_ref.signal_emitter();
-    async_io::block_on(async {
-        iface.device_name_changed(emitter).await?;
-        iface.amp_ip_changed(emitter).await?;
-        iface.online_changed(emitter).await?;
-        iface.power_changed(emitter).await?;
-        iface.muted_changed(emitter).await?;
-        iface.volume_raw_changed(emitter).await?;
-        iface.volume_db_changed(emitter).await?;
-        iface.active_source_index_changed(emitter).await?;
-        iface.active_source_name_changed(emitter).await?;
-        iface.sources_changed(emitter).await?;
-        Ok(())
-    })
+    async_io::block_on(interface::emit_all(iface, emitter))
 }

@@ -12,6 +12,7 @@
 mod command;
 mod crc16;
 mod dbconvert;
+pub mod fixtures;
 mod status;
 
 pub use command::{
