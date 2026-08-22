@@ -154,18 +154,70 @@ architecture decisions; this file is just sequencing and status.
     beyond "resets to no explicit selection" (i.e. real persistence) is
     unimplemented by design, not just untested — deferred to Phase 4.
 
+- [x] **Phase 3.6 — systemd unit: create, enable, and verify.**
+  - `systemd/devialet-remote-daemon.service` created. Investigated rather
+    than assumed: `main.rs` takes no CLI args, reads no config file, has
+    no working-directory dependency, and only one optional env var
+    (`DEVIALET_DAEMON_DEBUG`, off by default) — so `ExecStart` needs
+    nothing but the binary path. Confirmed the real release binary lands
+    at `target/release/devialet-remote-daemon` (workspace-root `target/`,
+    binary name matches package name, no `[[bin]]` override) by actually
+    building it, not assumed from the crate directory name.
+  - `WantedBy=plasma-workspace.target`: CLAUDE.md listed this "(or
+    graphical-session.target)" without picking, so checked the real
+    dependency graph on this machine (`systemctl --user show
+    plasma-workspace.target`) — it has `Requires=graphical-session.target
+    plasma-core.target`, i.e. it's strictly downstream, so activating it
+    guarantees the full graphical session (D-Bus session bus included) is
+    already up. Matches CLAUDE.md's first-listed option.
+  - `ExecStart` in the committed unit is a placeholder (`@@EXECSTART@@`)
+    resolved via `sed` at install time (README's new "Daemon autostart"
+    section) — same "no fixed install location yet" category as the
+    existing `devialet-ctl` PATH symlink docs, not a new pattern.
+  - **Verified myself, with evidence (2026-08-22):**
+    1. `systemctl --user enable` succeeded (created the
+       `plasma-workspace.target.wants/` symlink); `is-enabled` reported
+       `enabled`.
+    2. `systemctl --user start` succeeded; `status` showed
+       `active (running)`, PID 19574; confirmed the actual D-Bus surface
+       (not just "a process exists") via `busctl introspect` and live
+       property reads — `DeviceName`/`Online`/`VolumeDb`/`KnownAmps` all
+       reflected the real amp's current state while running under
+       systemd.
+    3. Crash recovery: `kill -9` on PID 19574; systemd's journal logged
+       "Scheduled restart job, restart counter is at 1"; new PID 19606
+       came up automatically; re-confirmed the D-Bus interface was
+       reachable again (not just a new process) via a fresh
+       `busctl get-property` read on the restarted instance, matching
+       real amp state.
+  - **Reboot autostart confirmed by you (2026-08-22):** after a real
+    reboot, `systemctl --user status devialet-remote-daemon.service`
+    showed `active (running)` since login, PID 978 (low PID consistent
+    with an early-boot start, not one you launched by hand), `enabled;
+    preset: enabled`. You also cross-verified the whole pipeline
+    end-to-end for real, beyond what this unit alone covers: changes made
+    in the Kotlin Android app reflected on both the amp and the KDE
+    widget, and changes made in the KDE widget reflected on both the amp
+    and the Android app.
+
 ## Up next
 
-- [ ] **Phase 3.6 — systemd unit: create, enable, and verify.** Currently
-      only manually started during dev/testing sessions — confirmed via
-      a real reboot (2026-08-23) that nothing autostarts the daemon, so
-      the widget silently shows "Not connected" on every login until it's
-      started by hand. Create the `devialet-remote-daemon.service` unit
-      already reserved in the repo layout, enable it
-      (`systemctl --user enable`), and verify: reboot and confirm
-      autostart works; kill the process and confirm systemd restarts it
-      (Restart=on-failure); confirm `systemctl --user is-active` reports
-      correctly for the QML settings toggle to eventually read.
+- [ ] **Phase 3.7 — mDNS amp model name resolution.** Currently the
+      widget only ever shows the raw UDP `device_name` (e.g.
+      "Expert140Pro"/"My Devialet-ETH"-style names) — there's no attempt
+      at mDNS resolution at all yet, so there's no fallback happening
+      today, just the one behavior that exists. Add the same
+      `modelName ?: udpName` logic the Android app already has (via its
+      `AmpModelNameResolver`), daemon-side: resolve each known amp's
+      model name over mDNS (e.g. "Expert140Pro" → "Devialet Expert 140
+      Pro"), expose it as an additional field on `KnownAmps`, and have
+      the primary DeviceName property for the selected amp prefer the
+      resolved model name, falling back to the raw UDP name when
+      resolution hasn't completed or fails. Daemon-only, no QML changes
+      — mirrors Phase 3.5's shape (D-Bus surface addition, no UI yet).
+      Investigate the Android resolver's actual mDNS service type and
+      name-mapping logic before implementing, don't guess or
+      reconstruct it from one example name..
 - [ ] **Phase 4 — amp picker, settings view, full mockup styling.**
       Amp picker QML (built against whatever surface Phase 3.5 produces),
       Plasmoid.configuration settings view (blur, reduce motion, scroll

@@ -1,0 +1,39 @@
+# systemd --user unit for devialet-remote-daemon - the standalone UDP
+# 45454 status-listener that pushes amp state to QML over D-Bus. See
+# CLAUDE.md's "Daemon lifecycle" for why this is a systemd-managed
+# process (crash recovery, query-ability via `systemctl --user
+# is-active`) rather than in-process or XDG autostart.
+#
+# NOT directly installable as checked into the repo: ExecStart below is a
+# placeholder (@@EXECSTART@@), since this project has no fixed install
+# location yet (Phase 4.2, deferred) and the absolute path to *your*
+# clone's target/release/devialet-remote-daemon can't be known here. See
+# README.md's "Daemon autostart" section for the exact install command
+# (a `sed` substitution, same manual-dev-step category as the
+# devialet-ctl PATH symlink already documented there) - don't try to
+# `systemctl --user enable` this file directly from the repo checkout,
+# it won't have a resolved ExecStart.
+#
+# If ExecStart ever points at a binary that doesn't exist yet (e.g. right
+# after cloning, before the first `cargo build --release`), systemd fails
+# the unit and reports so via `systemctl --user status
+# devialet-remote-daemon.service` / `journalctl --user -u
+# devialet-remote-daemon.service` - it does not silently do nothing.
+# Restart=on-failure then keeps retrying (and keeps failing) on a fixed
+# backoff until a real binary shows up at that path.
+
+[Unit]
+Description=Devialet Expert remote status listener (UDP 45454 -> D-Bus)
+
+[Service]
+Type=simple
+ExecStart=@@EXECSTART@@
+Restart=on-failure
+
+[Install]
+# plasma-workspace.target Requires=graphical-session.target (confirmed on
+# the dev machine via `systemctl --user show plasma-workspace.target`),
+# so activating it guarantees the full graphical session - including the
+# D-Bus session bus this daemon registers on - is already up. Matches
+# CLAUDE.md's "Daemon lifecycle" decision.
+WantedBy=plasma-workspace.target
