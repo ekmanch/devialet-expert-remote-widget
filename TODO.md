@@ -296,19 +296,204 @@ architecture decisions; this file is just sequencing and status.
     daemon continues UDP-only) but wasn't exercised live, since mDNS
     worked normally in this environment throughout.
 
+- [x] **Phase 4.0 — Main view mockup styling.** Re-skinned the existing,
+      already-functional Phase 3 main view to match
+      `devialet_tray_flyout_mockup.html`. Pure visual pass — every D-Bus
+      binding, debounce timestamp, and the ComboBox's popup/delegate
+      internals (Phase 3's hard-won fix) are untouched; only restyled via
+      `background`/`contentItem`/`indicator` overrides.
+  - **Fonts**: investigated rather than assumed where they need to live.
+    `design/font/` is a source/reference location outside the KPackage
+    payload (`kpackagetool6` only installs what's under `plasmoid/` —
+    confirmed via CLAUDE.md's Repository Layout), so the 7 `.ttf` files
+    were copied to `plasmoid/contents/fonts/`, loaded via
+    `FontLoader { source: Qt.resolvedUrl("../fonts/...") }` — a real
+    precedent found and followed, not invented: `org.kde.plasma.
+    advanced-weather-widget` ships fonts the same way. Confirmed live
+    (`qml6`, this machine) that all weight-variant files of a family
+    report the *same* `font.family` string with correctly distinct
+    `font.weight` (400/500/600/700 for Space Grotesk, 400/500/600 for
+    JetBrains Mono — exactly the weights the mockup's Google Fonts import
+    requests, and exactly the files present), so standard Qt font-weight
+    matching applies once all variants are loaded. `--font-body` (Inter)
+    has no bundled file (only Space Grotesk/JetBrains Mono were provided)
+    — deliberately not fetched; body text the mockup styles with Inter
+    falls back to Plasma's system UI font instead, flagged in `Theme.qml`
+    as a documented substitution, not a silent gap.
+  - **Blur-behind — investigated, then a design fork flagged for review
+    before implementing (not picked silently)**: confirmed via
+    `PlasmaQuick::Dialog`'s own header that genuine KWin blur-behind on a
+    popup is automatic and tied to the Dialog's `backgroundHints` (its
+    doc comment: `NoBackground` is what "loses kwin side shadows and
+    blur", implying the default keeps them) — not something a plasmoid
+    requests itself, and confirmed no QML-exposed
+    `KWindowEffects::enableBlurBehind` exists in `org.kde.kwindowsystem`'s
+    QML module (read its qmltypes), so a fully custom-drawn background
+    would genuinely lose blur with no way to fake it in pure QML (no
+    live desktop content to grab from within the plasmoid's own scene).
+    Presented the fork; chosen: leave `Plasmoid.backgroundHints` unset
+    (Plasma's normal default, real blur-behind, matches every other stock
+    tray popup) and layer the flyout's own semi-transparent copper/
+    graphite gradient `Rectangle` on top — mirrors the mockup's own CSS
+    technique exactly (`backdrop-filter:blur` **plus** a semi-transparent
+    gradient tint, not blur alone). Caveat carried forward: the outer
+    corner-radius/shadow chrome comes from the current Plasma color
+    scheme's own dialog background asset, not a pixel-identical copy of
+    the mockup's exact values.
+  - **Open/close pop animation**: bound to `Plasmoid.expanded`/
+    `expandedChanged`, not `Component.onCompleted` — whether
+    `fullRepresentation` is recreated fresh per open or instantiated once
+    and reused isn't determinable from QML alone (`fullRepresentation`/
+    `fullRepresentationItem` split confirmed via `plasmoidplugin.
+    qmltypes`, consistent with either lifecycle), and `onCompleted` would
+    silently only fire once in the reused case. On by default, no way to
+    disable yet (that's Phase 4.3's reduce-motion toggle) - matches the
+    task.
+  - Settings trigger ("⋯", top-right) added, wired as an explicit no-op
+    with a `TODO(Phase 4.3)` comment — not left silently unwired.
+  - Root changed from `ColumnLayout` to `Item` (needed for the
+    settings-trigger's absolute positioning and the background overlay
+    layering, which a `ColumnLayout`'s single-column child flow can't do)
+    — `Layout.minimumWidth/Height` from Phase 2/3 dropped as part of
+    this, confirmed dead weight either way (root was never a child of
+    another Layout, so those attached properties never did anything).
+  - New `Theme.qml` centralizes the palette/font-family/spacing constants
+    ported 1:1 from the mockup's `:root` CSS custom properties - plain
+    `QtObject`, not `pragma Singleton` (no qmldir/module registration set
+    up for a true singleton in this KPackage; one shared instance per
+    `FullRepresentation` is all a tray popup ever needs).
+  - Footer text simplified from the mockup's literal live-ticking
+    "Updated Xs ago" to a static "Connected"/"Not responding"/"Not
+    connected" (driven by existing `online`/`ampIp` state only) - a
+    ticking counter would need a new local timestamp + Timer, which
+    felt like it crossed from "restyle" into "new behavior" even though
+    it wouldn't touch any D-Bus/backend surface. Flagging the
+    simplification rather than silently picking either extreme.
+  - Mute/power icons use Kirigami symbolic icons (`audio-volume-muted-
+    symbolic`, `system-shutdown-symbolic` - confirmed present in the
+    installed icon theme before using them) rather than recreating the
+    mockup's exact inline SVG paths - visually analogous, not a pixel
+    copy.
+  - **Verified myself**: `plasmoidviewer` isn't installed on this
+    machine, so used a direct `qml6` load of `FullRepresentation.qml`
+    (via a standalone harness importing the real `plasmoid/contents/ui/`
+    directory) as the closest available check - genuinely caught two real
+    bugs before they'd have hit the real tray (a missing
+    `org.kde.plasma.plasmoid` import, and several `font.pixelSize`
+    fractional values QML's `int` type rejects outright, e.g. `9.5`).
+    After fixing both: zero QML warnings/errors on load, and a
+    `grabToImage` render (screenshot inspected directly) confirms the
+    layout, fonts, colors, and live D-Bus data (this dev machine's real
+    daemon/amp) all render correctly end-to-end - close visual match to
+    the mockup. `qmllint` on this machine is a Qt5 build (version
+    string "1.0") incompatible with the Qt6/KDE6 QML modules used here
+    (silent failure, exit 255, no usable output) - noted rather than
+    treated as a clean bill of health from a tool that can't actually
+    parse this code.
+  - **Needs a real human check in the actual tray (not verified by me)**:
+    whether KWin blur-behind is actually visible/on for this specific
+    popup in practice (depends on the user's live KWin Blur effect state
+    and active color scheme, neither reproducible in an offscreen qml6
+    harness); whether the pop animation actually plays correctly on
+    every real popup open/close (the `Plasmoid.expanded`-driven approach
+    is designed to be lifecycle-agnostic per the reasoning above, but
+    this is exactly the kind of thing that needs eyes on the real tray,
+    not code review); whether the restyled ComboBox's popup still opens
+    correctly with the new `background`/`contentItem`/`indicator`
+    overrides (Phase 3's hard-won `popup`/`delegate` internals were left
+    untouched, but the surrounding overrides weren't exercised through a
+    real click in this environment); general "does it actually look
+    right" fit/finish.
+  - Explicitly did not start any Phase 4.1/4.2/4.3 scope (amp-list
+    interactivity, persistence, or the settings view's actual content) -
+    the settings trigger and amp header are static/no-op by design this
+    phase.
+
+- [x] **Architecture change — panel-pinned instead of system tray.**
+      This widget no longer registers as a system tray item; it installs
+      as a normal panel applet (drag onto the panel via "Add Widgets",
+      like Digital Clock or Compact Pager). Full reasoning logged in
+      CLAUDE.md's "Panel-pinned, not a system tray plasmoid" bullet - not
+      repeated here.
+  - `metadata.json`: removed `X-Plasma-NotificationArea` and
+    `X-Plasma-NotificationAreaCategory` - the two keys that actually
+    controlled tray eligibility. Nothing else in `metadata.json` changed.
+  - QML structure needed no changes: `PlasmoidItem` +
+    `compactRepresentation`/`fullRepresentation` in `main.qml` is the same
+    structure regardless of tray-hosted vs. panel-pinned (confirmed
+    against `com.github.tilorenz.compact_pager`). The Phase 4.0.1
+    box-in-box background fix in `FullRepresentation.qml` also needed no
+    code changes - only its comments, which had baked in the
+    now-obsolete tray-hosting assumption, were corrected.
+  - Verified live, not assumed: widget added to a real panel (via the
+    Plasma scripting API as a stand-in for a manual "Add Widgets" drag),
+    confirmed `"inTray": false` in `dumpCurrentLayoutJS`, clicked for
+    real, and screenshotted - clean copper/graphite panel, no
+    back-arrow, no title bar, no navy frame, edge to edge, matching the
+    mockup, identical with or without other windows open on the desktop.
+  - Reload workflow (`kpackagetool6 --upgrade` + `plasmashell --replace`)
+    confirmed unchanged - the only actual difference is that the widget
+    no longer appears in the system tray's own "configure visible icons"
+    list, only in the normal Plasma widget list.
+  - Cosmetic fixup while in there: the flyout's decorative scroll hint
+    now reads "Scroll over the panel icon to adjust" (was "the tray
+    icon") - text only, Phase 4.4 (renamed from 4.1, see below) still
+    owns actually implementing scroll-to-adjust.
+  - Did not touch: the MPV Lua scroll-redirect concept (separate,
+    parked item below, revisited later with more detail) or start any
+    Phase 4.1/4.2/4.3/4.4 scope.
+
 ## Up next
 
-- [ ] **Phase 4 — amp picker, settings view, full mockup styling.**
-      Amp picker QML (built against whatever surface Phase 3.5 produces),
-      Plasmoid.configuration settings view (blur, reduce motion, scroll
-      step, launch-at-login display), copper/graphite theme, Space
-      Grotesk/JetBrains Mono fonts, blur/animation, matching
-      `devialet_tray_flyout_mockup.html`.
-- [ ] **Phase 4.1 - scroll-over-tray-icon volume control.** When the
-      mouse is hovering over the system tray icon for the widget, it
-      should be possible to scroll using the mouse wheel to change the
-      volume up/down depending on if the user is scrolling up or down.
-- [ ] **Phase 4.2 - install script + devialet-ctl packaging story.**
+- [ ] **Phase 4.1 — Amp picker UI.** Styled from the start using 4.0's
+      language. Built against Phase 3.5's existing `KnownAmps` /
+      `SelectedAmpIp` / `SelectAmp` D-Bus surface — no persistence yet,
+      same as 3.5 left it. Picker has no awareness that persistence
+      exists; it just calls `SelectAmp` on user action like it always
+      would.
+- [ ] **Phase 4.2 — Amp selection persistence (daemon-side).** Deferred
+      from 3.5 specifically so it could be verified against a real picker
+      UI (select amp A, restart daemon, confirm A reconnected; select amp
+      B, restart again, confirm B not A persisted) instead of verified
+      blind via busctl — this is why it runs after 4.1, not before.
+  - **Ownership decision (settled):** the daemon owns persistence, not
+    the widget. Daemon writes to a small config file on
+    `SelectAmp(ip)`, reads it back on startup, and does the live
+    re-discovery reconciliation (don't blindly trust a stale
+    persisted IP) before exposing `SelectedAmpIp`.
+  - Reasoning: lifecycle mismatch (daemon is the long-lived,
+    systemd-supervised process; the widget/plasmoid reloads far more
+    often — panel add/remove, plasmashell restarts — so widget-owned
+    persistence would mean re-pushing on every reload plus tie-break
+    logic against whatever the daemon already auto-selected); the
+    live-reconciliation step needs daemon-side discovery state anyway,
+    so splitting storage into the widget while reconciliation stays
+    in the daemon just fragments one piece of logic across two
+    processes; matches the existing pattern of `SelectedAmpIp`/
+    `KnownAmps` already being daemon-owned properties the widget reads
+    and reflects, not values it maintains and pushes.
+- [ ] **Phase 4.3 — Settings view.** Styled from the start, built last
+      since it hangs off the settings-trigger (gear icon) on an
+      already-stable, already-styled main view.
+  - **Settled split (two kinds of state, not one):** *Blur background*,
+    *Reduce motion*, *Volume step per scroll notch* are pure UI/widget
+    preferences, stored in `plasmoid.configuration` (KConfig).
+    *Launch at login* is not an independently-stored preference — it's
+    a live reflection of `systemctl --user is-enabled` for the Phase
+    3.6 systemd unit. Toggling it enables/disables the unit directly
+    rather than setting a KConfig bool that could drift out of sync
+    with actual systemd state.
+  - Given the two different state models, likely drafted as two
+    sub-prompts (KConfig-backed toggles vs. the systemd-state row)
+    rather than one.
+- [ ] **Phase 4.4 - scroll-over-panel-icon volume control.** When the
+      mouse is hovering over the widget's panel icon, it should be
+      possible to scroll using the mouse wheel to change the volume
+      up/down depending on if the user is scrolling up or down. (Renamed
+      from "scroll-over-tray-icon" - this widget is panel-pinned, not
+      tray-hosted, see the architecture-change entry above. Scope itself
+      is unchanged, not started here.)
+- [ ] **Phase 4.5 - install script + devialet-ctl packaging story.**
       Bash install script (.sh) so a user can clone the repo, run it, and
       have the widget fully installed and usable — this necessarily
       includes deciding how devialet-ctl gets placed somewhere on PATH

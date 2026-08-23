@@ -1,6 +1,13 @@
-// Phase 2: minimal working skeleton, proving the plasmoid loads in the
-// system tray and the D-Bus/executable-engine plumbing works end-to-end.
-// No visual design from the mockup yet - see CLAUDE.md's phased roadmap.
+// Phase 2: minimal working skeleton, proving the plasmoid loads as a
+// panel-pinned applet and the D-Bus/executable-engine plumbing works
+// end-to-end. No visual design from the mockup yet - see CLAUDE.md's
+// phased roadmap.
+//
+// Panel-pinned, not tray-hosted (see CLAUDE.md's "why not a system tray
+// plasmoid" note) - PlasmoidItem + compactRepresentation/fullRepresentation
+// is the same standard structure either way (confirmed against
+// com.github.tilorenz.compact_pager, a real panel-pinnable applet), so
+// nothing here needed to change for that switch.
 
 pragma ComponentBehavior: Bound
 

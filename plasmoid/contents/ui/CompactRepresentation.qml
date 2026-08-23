@@ -1,7 +1,9 @@
-// Minimal tray icon: click to open/close the flyout. No status glyph,
+// Minimal panel icon: click to open/close the flyout. No status glyph,
 // no drag-and-drop - that's what org.kde.kdeconnect's CompactRepresentation
 // (the real, shipped reference this pattern was taken from) adds on top for
-// its own feature set; not needed here yet.
+// its own feature set; not needed here yet. Same structure works whether
+// the applet ends up tray-hosted or panel-pinned - this plasmoid is
+// panel-pinned (see CLAUDE.md).
 
 pragma ComponentBehavior: Bound
 

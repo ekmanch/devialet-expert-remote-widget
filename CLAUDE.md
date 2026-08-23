@@ -2,10 +2,13 @@
 
 ## Project
 
-KDE Plasma system tray widget (Plasmoid) for controlling the Devialet Expert
-Pro 140 amplifier over UDP. Companion project to an existing Android app and
-an in-progress Flutter app for the same amplifier — same protocol, different
-platform. Rust + QML, no C++.
+KDE Plasma panel-pinned widget (Plasmoid) for controlling the Devialet
+Expert Pro 140 amplifier over UDP — an icon a user drags directly onto
+their panel via "Add Widgets" (like Digital Clock or Compact Pager), not a
+system tray item. See "Why panel-pinned, not a system tray plasmoid" below
+for why. Companion project to an existing Android app and an in-progress
+Flutter app for the same amplifier — same protocol, different platform.
+Rust + QML, no C++.
 
 ## Background
 
@@ -42,6 +45,37 @@ all three.
 - **No C++, no CMake.** Rust + QML only. This is a hard project constraint,
   not a soft preference — if a design decision seems to require C++
   (cxx-qt or similar), stop and flag it rather than proceeding.
+- **Panel-pinned, not a system tray plasmoid (settled, do not relitigate).**
+  This widget installs as a normal panel applet — the user drags it onto
+  their panel via "Add Widgets," like Digital Clock or Compact Pager — not
+  something that lives inside the system tray's collapsed icon cluster.
+  `metadata.json` has no `X-Plasma-NotificationArea` /
+  `X-Plasma-NotificationAreaCategory` keys (removed; their presence is
+  what makes an applet tray-eligible in the first place, confirmed live by
+  their removal producing `"inTray": false` in
+  `plasmashell --replace`'s own `dumpCurrentLayoutJS` output for this
+  applet). Reason: the system tray is itself a Plasma widget
+  (`org.kde.plasma.private.systemtray`) that defines its own shared popup
+  Dialog, whose `mainItem` is the tray's own `ExpandedRepresentation.qml`
+  — every applet hosted inside the tray gets embedded inside that shared
+  wrapper, which draws a back-arrow/title header row no individual hosted
+  applet can remove or override from its own QML (confirmed via the
+  tray's own architecture:
+  https://zren.github.io/2018/11/17/exploring-plasmas-systray-widget, not
+  just observed behavior). Living in the tray would mean permanently
+  carrying that header row, with no workaround — incompatible with this
+  widget's own copper/graphite panel being the entire flyout, edge to
+  edge, matching `design/mockups/devialet_tray_flyout_mockup.html`
+  exactly. Verified end-to-end after removing the tray keys: widget added
+  to a real panel via the Plasma scripting API, clicked for real, and
+  screenshotted — clean panel, no back-arrow, no title bar, no navy frame,
+  identical with or without other windows open. The QML structure needed
+  no changes for this — `PlasmoidItem` +
+  `compactRepresentation`/`fullRepresentation` in `main.qml` is the same
+  standard popup-applet structure whether tray-hosted or panel-pinned
+  (confirmed against `com.github.tilorenz.compact_pager`, a real
+  panel-pinnable applet installed on the dev machine); only
+  `metadata.json` controlled tray eligibility.
 - **Commands** (volume/mute/power/source): single-shot Rust CLI binary,
   invoked from QML via `Plasma5Support.DataSource`'s executable engine.
   Each invocation builds one UDP command packet, sends it, exits. No
@@ -138,6 +172,64 @@ for what's confirmed out of scope.
   here. Check it before assuming what's done vs. pending — but the phase
   stated explicitly in the prompt for a given session takes precedence if
   the two ever seem to disagree (e.g. TODO.md hasn't been updated yet).
+
+## Reloading changes into the live widget
+
+The plasmoid installed at
+`~/.local/share/plasma/plasmoids/com.ekmanch.devialetremote/` is a **copy**
+of `plasmoid/`, not a symlink — `kpackagetool6` copies files on install.
+Editing files under the repo's `plasmoid/` does nothing to the running
+widget by itself; the copy has to be refreshed and the shell restarted.
+Discovered the hard way after Phase 4.0: committed QML changes produced no
+visible difference in the live widget until this was done.
+
+Reload workflow after any change under `plasmoid/`:
+
+```
+kpackagetool6 --type Plasma/Applet --upgrade plasmoid/
+plasmashell --replace &
+```
+
+`--upgrade` re-copies the package contents (bumps a version check
+internally so it doesn't no-op); `plasmashell --replace` is needed because
+Plasma caches/compiles QML per-process and won't pick up the new package
+contents in an already-running shell. `--replace` briefly kills and
+restarts the whole shell (panels, tray, desktop) — expected, not a crash.
+
+Re-verified identical after the panel-pinned architecture change (removing
+`X-Plasma-NotificationArea`/`X-Plasma-NotificationAreaCategory` — see
+Architecture above): this workflow doesn't change at all. The only actual
+difference is *how the widget gets added* to a panel in the first place —
+it no longer appears in the system tray's own "configure visible icons"
+list (it isn't tray-eligible any more), only in the normal Plasma widget
+list ("Add Widgets"), the same place Digital Clock or Compact Pager show
+up. Confirmed live: added via the Plasma scripting API
+(`org.kde.PlasmaShell.evaluateScript`, `panels()[i].addWidget(...)`) as a
+stand-in for a real drag-and-drop "Add Widgets" add, which produced
+`"inTray": false` in `dumpCurrentLayoutJS` and a normal panel icon — same
+outcome a manual drag would produce.
+
+This is a real trade-off worth revisiting deliberately, not a default to
+silently switch to:
+
+- **`kpackagetool6 --upgrade` per phase (current)**: extra two-command step
+  after every change, but matches how the plasmoid will actually be
+  installed for real users (a copy, no dev-machine-specific symlink setup)
+  and gives an explicit moment where "is this actually installed" is
+  unambiguous.
+- **Symlink `~/.local/share/plasma/plasmoids/com.ekmanch.devialetremote` →
+  the repo's `plasmoid/` directory instead**: drops the `kpackagetool6`
+  step entirely — just `plasmashell --replace` after edits. Faster
+  inner loop while this widget is under active development. Downside:
+  diverges from the real install path (real users get a copy via
+  `kpackagetool6 --install` or packaging, never a symlink), so it
+  stops being a faithful rehearsal of "did the install step actually
+  work" — a bug in the copy/install step itself could go unnoticed
+  until real packaging. Not adopted without asking first.
+
+Either way, `plasmashell --replace` is required for QML changes to take
+effect — there is no hot-reload for KPackage-based applets short of a full
+shell restart.
 
 ## Environment
 
