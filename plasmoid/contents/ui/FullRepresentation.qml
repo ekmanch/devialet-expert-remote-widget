@@ -489,13 +489,81 @@ Item {
     // visible panel, flush with the real Dialog background's own solid
     // edge - matching how stock representations look flush (they just
     // never draw a second background to begin with).
+    //
+    // Corner radius bug fix (found investigating design/visual_bugs'
+    // corner-artifact report): this was `root.theme.radiusLg` (16) - a
+    // value picked purely for our own visual design, never reconciled
+    // against the *real* Dialog window's own corner shape. That real
+    // shape comes from the active Plasma style's "dialogs/background"
+    // frame SVG (Darkly, on this machine) - confirmed by reading
+    // /usr/share/plasma/desktoptheme/darkly/dialogs/background.svg, whose
+    // topleft/topright/bottomleft/bottomright corner paths AND its
+    // separate mask-topleft/etc. elements (the ones actually driving the
+    // window's blur-behind/mask region) draw a much tighter ~6-unit
+    // quarter-circle - and independently confirmed live via a standalone
+    // QML probe reading `Kirigami.Units.cornerRadius` (the theme-aware API
+    // Breeze/Darkly-family styles use for exactly this convention) on this
+    // system: 5, not 16. Since this Rectangle is the *only* visible
+    // background layer (per the box-in-box fix above, it fully covers the
+    // real Dialog background's straight edges already), its corner was the
+    // one place left where our own geometry could still diverge from the
+    // real window's - a 16px rounded corner cuts further into each corner
+    // than the real ~5px window shape does, leaving a thin sliver of the
+    // real (Darkly-colored) frame corner visible just outside our arc -
+    // exactly the "faint light fringe past the rounded corner" artifact
+    // reported. Fixed by reading the same live, theme-aware value instead
+    // of a hardcoded design constant - stays correct if the user switches
+    // Plasma styles later, not just under Darkly specifically. Only this
+    // one outer-edge Rectangle changes; radiusLg/Md/Sm remain as they were
+    // for internal content (buttons, chips, etc.), which never touch the
+    // real window's own edge and have no such mismatch to fix.
+    // Follow-up on the corner-radius fix above: after matching the radius
+    // VALUE (Kirigami.Units.cornerRadius), a much fainter, contrast-only
+    // seam remained at all four corners against solid dark backgrounds
+    // (invisible against light/blurred-wallpaper backgrounds). Root-caused
+    // by reading Darkly's actual corner path data, not guessed: the
+    // "topleft" corner in dialogs/background.svg is
+    // `M 0,6 H 6 V 0 C 2,0 0,2 0,6 Z` - a cubic Bezier from (6,0) to (0,6)
+    // with control points (2,0)/(0,2), i.e. control-point offset c=4 from
+    // each tangent point on a radius-6 corner (kappa = 4/6 = 0.667). A
+    // mathematically true circular arc needs kappa = 0.5523 - Darkly's
+    // corner is a deliberately custom, NON-circular curve, not a
+    // suboptimal approximation of one. Qt Quick's `Rectangle.radius`, by
+    // contrast, always renders a true circular arc - there is no radius
+    // value that makes a true circle coincide with a differently-shaped
+    // Bezier at every point along the curve, only at its two endpoints.
+    // Worked out the resulting gap: at the curve's 45° midpoint the two
+    // shapes diverge by ~0.36 of the SVG's own corner units, which -
+    // given Kirigami.Units.cornerRadius (5) and this SVG's own corner
+    // radius (6) are close enough to imply a roughly 1:1 unit mapping -
+    // is sub-device-pixel at this screen's 2x scale (confirmed exactly 2,
+    // not fractional, via `kscreen-doctor -o`; ruled out as a contributor
+    // separately from the curve-shape finding). That matches what's
+    // actually visible: not a rim/wedge any more, just a ~1px seam that
+    // only shows up as antialiasing blends our translucent tint (this
+    // Rectangle is alpha 0.82, not opaque - see panelGradientTop/Bottom
+    // above) against high-contrast solid content behind it.
+    //
+    // Not fixable by further radius tuning - the mismatch is in the curve
+    // family, not the radius number. Could be closed exactly with a
+    // QtQuick.Shapes path replicating Darkly's own Bezier control points,
+    // but that would be hardcoded to Darkly specifically and go wrong
+    // silently under any other Plasma style (whose own frame SVG may use
+    // yet another curve) - disproportionate for a sub-pixel artifact
+    // that's already invisible against the large majority of real
+    // desktop backgrounds. `antialiasing: true` made explicit below
+    // (matches Qt Quick's own default for a radius>0 Rectangle, so not a
+    // behavior change) so that default isn't left implicit given this is
+    // exactly the kind of edge-rendering-sensitive shape where it matters
+    // - left here as the deliberate stopping point, not silently dropped.
     Rectangle {
         anchors.fill: parent
         anchors.leftMargin: -root.insetLeft
         anchors.topMargin: -root.insetTop
         anchors.rightMargin: -root.insetRight
         anchors.bottomMargin: -root.insetBottom
-        radius: root.theme.radiusLg
+        radius: Kirigami.Units.cornerRadius
+        antialiasing: true
         border.width: 1
         border.color: root.theme.divider
         gradient: Gradient {

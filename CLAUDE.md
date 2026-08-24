@@ -411,3 +411,39 @@ Notes:
   https://github.com/ekmanch/devialet-expert-remote
 - Flutter port (Android/iOS, in progress, independent port of the same
   protocol): https://github.com/ekmanch/devialet-expert-remote-app
+  
+## Known issues
+
+***  sub-pixel corner seam under Darkly theme (accepted, not a bug to re-investigate) ***
+
+The flyout's corner radius uses `Kirigami.Units.cornerRadius` (matches
+Darkly's real Dialog/window corner size, e.g. 5 on this system) rather
+than a hardcoded value — this fixed the original "box within a box"
+and gross corner-artifact bugs (see Phase 4.0/4.1 history).
+
+A very faint residual seam can still be seen at the corners against a
+solid dark background, if you look for it. Root cause, confirmed by
+reading Darkly's actual SVG path data
+(`/usr/share/plasma/desktoptheme/darkly/dialogs/background.svg`,
+`topleft` group): Darkly's corner is a **custom cubic Bezier curve**
+(`M 0,6 H 6 V 0 C 2,0 0,2 0,6`, kappa ≈ 0.667), not a true circular
+arc (kappa ≈ 0.5523). Qt Quick's `Rectangle.radius` always renders a
+mathematically true circular arc. Matching the *radius value* (done)
+gets the two curves to agree at their shared endpoints, but the curve
+*shapes* diverge slightly in between — at 1:1-ish unit scale on this
+system that divergence lands at sub-device-pixel scale, which shows as
+an antialiasing-level seam only visible against high-contrast (solid
+dark) backgrounds, not against light backgrounds or blurred wallpaper.
+
+Deliberately NOT fixed further: the only way to fully close this is to
+hand-replicate Darkly's exact Bezier curve via `QtQuick.Shapes`
+instead of `Rectangle.radius`. That would hardcode the widget to one
+specific theme's corner math and silently render incorrectly (same
+seam or worse) under any other Plasma theme with a different corner
+curve — a worse failure mode than a near-invisible seam under Darkly
+specifically. If this is ever revisited, do so only alongside testing
+against multiple Plasma themes, not just Darkly.
+
+Do not re-open this as a fresh bug investigation without reading this
+note first — it's been root-caused and the remaining artifact is an
+accepted trade-off, not an unexplained regression.
