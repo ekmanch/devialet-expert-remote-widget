@@ -249,6 +249,16 @@ Item {
     property var sources: []
     property double lastSourceChangeAtMs: 0
 
+    // ---- Phase 4.1: amp picker state ----
+    // KnownAmps entries as {ip, deviceName, online, modelName} objects (raw
+    // tuples unwrapped below, same shape as unwrapSources()). SelectedAmpIp
+    // is a plain string scalar (like Online/DeviceName/AmpIp above) so its
+    // PropertiesChanged delta is trusted directly - no fetch-on-signal
+    // needed for it specifically.
+    property var knownAmps: []
+    property string selectedAmpIp: ""
+    property bool ampListOpen: false
+
     readonly property var enabledSources: root.sources.filter(function (s) { return s.enabled; })
 
     function now() { return Date.now(); }
@@ -353,6 +363,90 @@ Item {
         );
     }
 
+    // KnownAmps (ip, device_name, online, model_name) tuples - same
+    // array-of-struct category as Sources above, so its PropertiesChanged
+    // delta payload gets the same "not trustworthy on repeat updates"
+    // treatment (see fetchSourcesFresh()'s doc comment for the full
+    // wire-level finding this generalizes from): re-fetch via an explicit
+    // Get rather than trusting `changed.KnownAmps`.
+    function unwrapKnownAmps(raw) {
+        if (raw === undefined || raw === null) return [];
+        var result = [];
+        for (var i = 0; i < raw.length; i++) {
+            var t = raw[i];
+            result.push({
+                ip: root.unwrap(t[0], ""),
+                deviceName: root.unwrap(t[1], ""),
+                online: t[2],
+                modelName: root.unwrap(t[3], "")
+            });
+        }
+        return result;
+    }
+
+    property bool knownAmpsFetchInFlight: false
+
+    function fetchKnownAmpsFresh() {
+        if (root.knownAmpsFetchInFlight) return;
+        root.knownAmpsFetchInFlight = true;
+        Dbus.SessionBus.asyncCall(
+            new Dbus.dbusMessage({
+                service: "com.ekmanch.DevialetRemote",
+                path: "/com/ekmanch/DevialetRemote/Amp",
+                interface: "org.freedesktop.DBus.Properties",
+                member: "Get",
+                arguments: ["com.ekmanch.DevialetRemote.Amp1", "KnownAmps"]
+            }),
+            function (reply) {
+                root.knownAmpsFetchInFlight = false;
+                if (reply.isError) {
+                    console.log("[WARN] explicit Get(KnownAmps) returned a D-Bus error:", JSON.stringify(reply.error));
+                    return;
+                }
+                // Guarded the same way as fetchSourcesFresh() - KnownAmps is
+                // never pruned (daemon side), so a real transition back to
+                // empty never legitimately happens once at least one amp has
+                // ever been seen; only overwrite on a non-empty result so a
+                // spurious empty reply can't wipe already-known amps.
+                const unwrapped = root.unwrapKnownAmps(root.unwrap(reply.value, []));
+                if (unwrapped.length > 0) {
+                    root.knownAmps = unwrapped;
+                }
+            },
+            function (reply) {
+                root.knownAmpsFetchInFlight = false;
+                console.log("[WARN] explicit Get(KnownAmps) call failed:", JSON.stringify(reply.error));
+            }
+        );
+    }
+
+    // Selecting an amp is fire-and-forget from QML's perspective: the
+    // primary properties (DeviceName/AmpIp/Online/...) update via the
+    // existing onPropertiesChanged handling above once the daemon emits,
+    // same path already used for every other control in this file. This
+    // phase has zero awareness of Phase 4.2's persistence work - it just
+    // calls SelectAmp, exactly like it always will.
+    function selectAmpByIp(ip) {
+        root.ampListOpen = false;
+        Dbus.SessionBus.asyncCall(
+            new Dbus.dbusMessage({
+                service: "com.ekmanch.DevialetRemote",
+                path: "/com/ekmanch/DevialetRemote/Amp",
+                interface: "com.ekmanch.DevialetRemote.Amp1",
+                member: "SelectAmp",
+                arguments: [ip]
+            }),
+            function (reply) {
+                if (reply.isError) {
+                    console.log("[WARN] SelectAmp call returned a D-Bus error:", JSON.stringify(reply.error));
+                }
+            },
+            function (reply) {
+                console.log("[WARN] SelectAmp call failed:", JSON.stringify(reply.error));
+            }
+        );
+    }
+
     function runCtl(argsString) {
         const cmd = root.devialetCtlCommand + " --ip " + root.ampIp + " " + argsString;
         console.log("running:", cmd);
@@ -369,6 +463,23 @@ Item {
     // deviceName already is, kept as a named readonly for clarity at each
     // call site below.
     readonly property string ampDisplayName: root.deviceName !== "" ? root.deviceName : "Devialet"
+
+    // Header name/sub-text for the true "nothing selected" state
+    // (root.ampIp === "" - same basis the amp-dot/None-row/other picker
+    // logic already uses). Ported verbatim from the Android app
+    // (devialet-expert-remote, MainActivity.updateDeviceCard() +
+    // res/values/strings.xml): `device_none_selected` = "No Amplifier",
+    // `device_tap_to_choose` = "Tap to connect" (lowercase "connect",
+    // confirmed by reading strings.xml directly, not guessed) - previously
+    // this fell through to the generic ampDisplayName ("Devialet") fallback
+    // and an invented "No amp selected" string, neither of which matched
+    // the app this widget ports. Deliberately distinct from the "selected
+    // but not currently online" case (ampIp non-empty, deviceName empty),
+    // which keeps using ampDisplayName's own "Devialet" fallback - Android's
+    // equivalent there falls back to selectedName/selectedIp instead of its
+    // "No Amplifier" string too (see updateDeviceCard()).
+    readonly property string headerName: root.ampIp === "" ? "No Amplifier" : root.ampDisplayName
+    readonly property string headerSub: root.ampIp === "" ? "Tap to connect" : (root.ampIp + " · " + (root.online ? "Connected" : "Not responding"))
 
     function stepVolume(direction) {
         const base = root.volumeDb !== undefined ? root.volumeDb : root.volumeFloorDb;
@@ -402,6 +513,12 @@ Item {
             if (initialSources.length > 0) {
                 root.sources = initialSources;
             }
+
+            const initialKnownAmps = root.unwrapKnownAmps(root.unwrap(properties.KnownAmps, []));
+            if (initialKnownAmps.length > 0) {
+                root.knownAmps = initialKnownAmps;
+            }
+            root.selectedAmpIp = root.unwrap(properties.SelectedAmpIp, "");
         }
 
         onPropertiesChanged: (interfaceName, changed, invalidated) => {
@@ -446,6 +563,8 @@ Item {
                 // signal itself for this one property.
                 root.fetchSourcesFresh();
             }
+            if ("SelectedAmpIp" in changed) root.selectedAmpIp = root.unwrap(changed.SelectedAmpIp, root.selectedAmpIp);
+            if ("KnownAmps" in changed) root.fetchKnownAmpsFresh();
         }
     }
 
@@ -614,75 +733,364 @@ Item {
         spacing: 0
 
         // ---- Amp header ----
-        // Static display only this phase - no caret, no click handler.
-        // The mockup's clickable dropdown-to-amp-list behavior is Phase
-        // 4.1's job, built against the existing KnownAmps/SelectedAmpIp/
-        // SelectAmp D-Bus surface (Phase 3.5) - deliberately not started
-        // here.
-        RowLayout {
+        // Clickable now (Phase 4.1): toggles root.ampListOpen, which drives
+        // the collapsible amp list below. Wrapped in a plain Rectangle
+        // (rather than putting a MouseArea directly inside the RowLayout,
+        // where it would just occupy one layout cell instead of covering
+        // the whole row) so the whole header area - dot, text, caret - is
+        // one click target, matching the mockup's .amp-header{cursor:
+        // pointer} covering the entire row.
+        Rectangle {
+            id: ampHeaderBg
             Layout.fillWidth: true
-            Layout.topMargin: 14
-            Layout.bottomMargin: 12
-            Layout.leftMargin: 16
-            Layout.rightMargin: 40
-            spacing: 10
+            implicitHeight: ampHeaderRow.implicitHeight + 26
+            color: ampHeaderArea.containsMouse ? Qt.rgba(1, 1, 1, 0.02) : "transparent"
 
-            Rectangle {
-                id: ampDot
-                Layout.alignment: Qt.AlignVCenter
-                width: 8
-                height: 8
-                radius: 4
-                // Three states mirrored from existing D-Bus state, no new
-                // properties: no amp at all (ampIp empty) -> dashed ring,
-                // matches ".amp-dot.none"; known but not currently
-                // broadcasting -> dim; broadcasting -> bright copper dot,
-                // dimmed further while powered off (mockup's
-                // togglePower() -> ampDot opacity 0.3).
-                color: root.ampIp === "" ? "transparent" : (root.online ? root.theme.copperBright : root.theme.textFaint)
-                border.width: root.ampIp === "" ? 1.5 : 0
-                border.color: root.theme.textFaint
-                opacity: root.online && !root.power ? 0.3 : 1.0
+            RowLayout {
+                id: ampHeaderRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 40
+                spacing: 10
+
+                Rectangle {
+                    id: ampDot
+                    Layout.alignment: Qt.AlignVCenter
+                    width: 8
+                    height: 8
+                    radius: 4
+                    // Three states mirrored from existing D-Bus state, no new
+                    // properties: no amp at all (ampIp empty - either
+                    // explicitly cleared or the zero/2+-known-amps fallback,
+                    // see AmpState::effective_ip) -> dashed ring, matches
+                    // ".amp-dot.none"; known/selected but not currently
+                    // broadcasting -> dim; broadcasting -> bright copper dot,
+                    // dimmed further while powered off (mockup's
+                    // togglePower() -> ampDot opacity 0.3).
+                    color: root.ampIp === "" ? "transparent" : (root.online ? root.theme.copperBright : root.theme.textFaint)
+                    border.width: root.ampIp === "" ? 1.5 : 0
+                    border.color: root.theme.textFaint
+                    opacity: root.online && !root.power ? 0.3 : 1.0
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "DEVIALET"
+                        font.family: root.theme.fontMono
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.2
+                        color: root.theme.textFaint
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headerName
+                        font.family: root.theme.fontDisplay
+                        font.weight: Font.DemiBold
+                        font.pixelSize: 14
+                        color: root.theme.text
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headerSub
+                        font.family: root.theme.fontMono
+                        font.pixelSize: 11
+                        color: root.theme.textFaint
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Label {
+                    id: ampCaret
+                    Layout.alignment: Qt.AlignVCenter
+                    text: "⌄"
+                    font.pixelSize: 11
+                    color: root.ampListOpen ? root.theme.copperBright : root.theme.textFaint
+                    rotation: root.ampListOpen ? 180 : 0
+                    Behavior on rotation { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                }
             }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "DEVIALET"
-                    font.family: root.theme.fontMono
-                    font.pixelSize: 10
-                    font.letterSpacing: 1.2
-                    color: root.theme.textFaint
-                    elide: Text.ElideRight
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: root.ampDisplayName
-                    font.family: root.theme.fontDisplay
-                    font.weight: Font.DemiBold
-                    font.pixelSize: 14
-                    color: root.theme.text
-                    elide: Text.ElideRight
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: root.ampIp === "" ? "No amp selected" : root.ampIp + " · " + (root.online ? "Connected" : "Not responding")
-                    font.family: root.theme.fontMono
-                    font.pixelSize: 11
-                    color: root.theme.textFaint
-                    elide: Text.ElideRight
-                }
+            MouseArea {
+                id: ampHeaderArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.ampListOpen = !root.ampListOpen
             }
         }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: root.theme.divider }
 
+        // ---- Amp list (collapsible) ----
+        // Bound directly to root.knownAmps - see fetchKnownAmpsFresh() for
+        // how that stays fresh. clip:true + animated implicitHeight is this
+        // file's equivalent of the mockup's `.amp-list{max-height:0 ->
+        // max-height:220px}` transition.
+        Item {
+            id: ampListContainer
+            Layout.fillWidth: true
+            clip: true
+            implicitHeight: root.ampListOpen ? Math.min(ampListColumn.implicitHeight, 220) : 0
+            Behavior on implicitHeight { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+            ColumnLayout {
+                id: ampListColumn
+                width: ampListContainer.width
+                spacing: 2
+
+                // ---- "None" row ----
+                // Ported from the Android app (devialet-expert-remote,
+                // MainActivity.showAmpSheet/sheet_amp_picker.xml), not
+                // invented: always sits first, above a divider, above
+                // whatever real amps have been heard - same position and
+                // wording as noneRow/ampNoneName/ampNoneSub there ("None" /
+                // "Don't connect to any amplifier"), italic name text, a
+                // dedicated outline-ring dot state (dot_none/
+                // dot_none_selected there - a plain, non-dashed ring "since
+                // a dashed stroke on an oval shape drawable renders
+                // unreliably under hardware acceleration on some API
+                // levels", per that file's own comment; this port already
+                // uses a plain solid-color border for the equivalent header
+                // ampDot "none" state above, so no divergence here either).
+                // "Selected" here mirrors Android's `noneSelected =
+                // !hasSelectedAmp` - ported as root.ampIp === "" (the
+                // effective/primary amp, same basis every ampOption below
+                // uses for its own isCurrent), not root.selectedAmpIp
+                // directly, so this correctly does NOT show as active during
+                // the single-known-amp auto-select case (matching how a real
+                // amp row already claims that highlight instead - see its
+                // own isCurrent comment).
+                Rectangle {
+                    id: ampNoneOption
+                    readonly property bool isCurrent: root.ampIp === ""
+
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
+                    implicitHeight: ampNoneRow.implicitHeight + 16
+                    radius: root.theme.radiusSm
+                    color: ampNoneArea.containsMouse ? root.theme.surface2 : "transparent"
+
+                    RowLayout {
+                        id: ampNoneRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: 8
+                        spacing: 9
+
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            width: 7
+                            height: 7
+                            radius: 3.5
+                            color: "transparent"
+                            border.width: 1.5
+                            border.color: ampNoneOption.isCurrent ? root.theme.copperBright : root.theme.textFaint
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "None"
+                                font.family: root.theme.fontDisplay
+                                font.weight: Font.DemiBold
+                                font.italic: true
+                                font.pixelSize: 13
+                                color: ampNoneOption.isCurrent ? root.theme.copperBright : root.theme.textDim
+                                elide: Text.ElideRight
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Don't connect to any amplifier"
+                                font.family: root.theme.fontMono
+                                font.pixelSize: 10
+                                color: root.theme.textFaint
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignVCenter
+                            text: "✓"
+                            font.pixelSize: 11
+                            color: root.theme.copperBright
+                            visible: ampNoneOption.isCurrent
+                        }
+                    }
+
+                    MouseArea {
+                        id: ampNoneArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.selectAmpByIp("")
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 6
+                    Layout.bottomMargin: 4
+                    Layout.leftMargin: 4
+                    Layout.rightMargin: 4
+                    height: 1
+                    color: root.theme.divider
+                }
+
+                Label {
+                    visible: root.knownAmps.length === 0
+                    Layout.fillWidth: true
+                    Layout.margins: 12
+                    horizontalAlignment: Text.AlignHCenter
+                    text: "No amps discovered yet"
+                    font.family: root.theme.fontMono
+                    font.pixelSize: 11
+                    color: root.theme.textFaint
+                }
+
+                Repeater {
+                    model: root.knownAmps
+
+                    delegate: Rectangle {
+                        id: ampOption
+                        required property var modelData
+                        // The currently effective amp (root.ampIp), not
+                        // necessarily root.selectedAmpIp directly - the two
+                        // diverge exactly when nothing is explicitly
+                        // selected but exactly one amp is known (auto-select,
+                        // see AmpState::effective_ip). Highlighting off
+                        // ampIp matches "the amp actually shown in the
+                        // header above", which is what the mockup's
+                        // .amp-option.connected state means.
+                        readonly property bool isCurrent: root.ampIp !== "" && modelData.ip === root.ampIp
+
+                        // modelName ?: deviceName - same fallback the header
+                        // above already uses (root.ampDisplayName, ultimately
+                        // fed by the daemon's own `DeviceName` property) and
+                        // the same fallback the design mockup's own
+                        // `displayName(a){ return a.modelName || a.udpName; }`
+                        // uses for BOTH the header and each amp-option row
+                        // (devialet_tray_flyout_mockup.html). The daemon's
+                        // `KnownAmps` deliberately keeps `deviceName` as the
+                        // always-raw UDP name (see interface.rs's doc
+                        // comment on `known_amps()`) specifically so a picker
+                        // can show both - resolved name as the main label,
+                        // raw name available for the "unresolved" subtitle
+                        // tag below - which this delegate was not actually
+                        // doing until this fix (it read modelData.deviceName
+                        // directly as the main label, silently ignoring
+                        // modelData.modelName - a regression against Phase
+                        // 3.7's mDNS resolution work, since the header already
+                        // did this correctly via root.ampDisplayName).
+                        readonly property string displayName: modelData.modelName !== "" ? modelData.modelName : modelData.deviceName
+
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 10
+                        implicitHeight: ampOptionRow.implicitHeight + 16
+                        radius: root.theme.radiusSm
+                        color: ampOptionArea.containsMouse ? root.theme.surface2 : "transparent"
+
+                        RowLayout {
+                            id: ampOptionRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: 8
+                            spacing: 9
+
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                width: 7
+                                height: 7
+                                radius: 3.5
+                                color: ampOption.isCurrent ? root.theme.copperBright : root.theme.textFaint
+                                opacity: modelData.online ? 1.0 : 0.5
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: ampOption.displayName !== "" ? ampOption.displayName : modelData.ip
+                                    font.family: root.theme.fontDisplay
+                                    font.weight: Font.DemiBold
+                                    font.pixelSize: 13
+                                    color: ampOption.isCurrent ? root.theme.copperBright : root.theme.textDim
+                                    elide: Text.ElideRight
+                                }
+
+                                // ip, plus " · offline" when not currently
+                                // broadcasting and/or " · name unresolved"
+                                // when mDNS hasn't resolved a model name yet
+                                // - the latter ported verbatim from the
+                                // mockup's own amp-option-sub logic
+                                // (`${a.ip}${a.modelName ? '' : ' · name
+                                // unresolved'}`), which is itself commented
+                                // there as mirroring
+                                // AmpModelNameResolver/MainActivity.kt.
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.ip
+                                        + (modelData.online ? "" : " · offline")
+                                        + (modelData.modelName !== "" ? "" : " · name unresolved")
+                                    font.family: root.theme.fontMono
+                                    font.pixelSize: 10
+                                    color: root.theme.textFaint
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            Label {
+                                Layout.alignment: Qt.AlignVCenter
+                                text: "✓"
+                                font.pixelSize: 11
+                                color: root.theme.copperBright
+                                visible: ampOption.isCurrent
+                            }
+                        }
+
+                        MouseArea {
+                            id: ampOptionArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.selectAmpByIp(ampOption.modelData.ip)
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { Layout.fillWidth: true; height: 1; visible: root.ampListOpen; color: root.theme.divider }
+
         // ---- Volume block ----
+        // Ported from the Android app's setGroupEnabled()/disabledAlpha
+        // (MainActivity.kt): the whole group's opacity dims to 0.4 as ONE
+        // value applied to the container ("not per-child", per that file's
+        // own comment on disabledAlpha) when nothing is selected, layered
+        // on top of the individual controls' own `enabled: root.ampIp !==
+        // ""` bindings (already present below, unchanged - those give the
+        // non-interactive/disabled behavior; this opacity gives the visual
+        // "nothing to control" look Android's updateConnectionState()
+        // produces via the same setGroupEnabled(dialWrap, connected) call).
         ColumnLayout {
             Layout.fillWidth: true
             Layout.topMargin: 16
@@ -690,6 +1098,7 @@ Item {
             Layout.leftMargin: 16
             Layout.rightMargin: 16
             spacing: 10
+            opacity: root.ampIp === "" ? 0.4 : 1.0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -703,7 +1112,17 @@ Item {
                         // below (unchanged from Phase 3) for why this binds
                         // to the slider's live value, not root.volumeDb
                         // directly.
-                        text: root.volumeDb !== undefined ? volumeSlider.value.toFixed(1) : "—"
+                        // "—" (em dash) when nothing is selected, matching
+                        // the Android app's `dial_no_source` string used by
+                        // renderVolume()'s `!hasSelectedAmp` branch - not
+                        // just the "VolumeDb hasn't arrived yet" case this
+                        // condition originally covered alone. Without the
+                        // ampIp check, this showed a real-looking number
+                        // (e.g. clamped to volumeCeilingDb via the slider's
+                        // own from/to bounds) once "None" set VolumeDb to
+                        // the daemon's zero-value default - see the
+                        // Binding below for the matching fix.
+                        text: (root.ampIp !== "" && root.volumeDb !== undefined) ? volumeSlider.value.toFixed(1) : "—"
                         font.family: root.theme.fontMono
                         font.weight: Font.Medium
                         font.pixelSize: 26
@@ -787,7 +1206,19 @@ Item {
                     Binding {
                         target: volumeSlider
                         property: "value"
-                        value: root.volumeDb !== undefined ? root.volumeDb : root.volumeFloorDb
+                        // root.ampIp === "" added alongside the pre-existing
+                        // undefined check: when nothing is selected the
+                        // daemon's AmpState::recompute() "None" branch sets
+                        // VolumeDb to its zero-value default (0.0, not
+                        // undefined - see interface.rs), which is above
+                        // this slider's own `to` (volumeCeilingDb, -15) and
+                        // was silently clamping the handle/value to the
+                        // ceiling - showing a real-looking -15.0dB as if an
+                        // amp were connected. Falls to volumeFloorDb here
+                        // instead, matching Android's renderVolume()
+                        // setting the dial's progress to 0 (its minimum) in
+                        // the equivalent !hasSelectedAmp branch.
+                        value: (root.ampIp !== "" && root.volumeDb !== undefined) ? root.volumeDb : root.volumeFloorDb
                         when: !volumeSlider.pressed
                     }
 
@@ -874,6 +1305,8 @@ Item {
         }
 
         // ---- Action row ----
+        // Same whole-group dim as the volume block above (Android's
+        // setGroupEnabled(actionRow, connected)).
         GridLayout {
             Layout.fillWidth: true
             Layout.topMargin: 14
@@ -883,6 +1316,7 @@ Item {
             columns: 2
             columnSpacing: 8
             rowSpacing: 8
+            opacity: root.ampIp === "" ? 0.4 : 1.0
 
             Button {
                 Layout.fillWidth: true
@@ -958,6 +1392,11 @@ Item {
         }
 
         // ---- Source block ----
+        // Same whole-group dim as the blocks above (Android's
+        // setGroupEnabled(soundControls, connected) - our equivalent of the
+        // "sound tab" here is just this one always-visible source row, not
+        // a separate tab, so the dim is applied directly rather than the
+        // container-swap Android does for its own Sound tab).
         ColumnLayout {
             Layout.fillWidth: true
             Layout.topMargin: 10
@@ -965,6 +1404,7 @@ Item {
             Layout.leftMargin: 16
             Layout.rightMargin: 16
             spacing: 4
+            opacity: root.ampIp === "" ? 0.4 : 1.0
 
             Label {
                 text: "SOURCE"
@@ -1031,7 +1471,11 @@ Item {
                     return -1;
                 }
 
-                displayText: root.activeSourceName !== "" ? root.activeSourceName : (currentIndex >= 0 && currentIndex < model.length ? model[currentIndex].name : "")
+                // "No source" when nothing is selected - ported from the
+                // Android app's `no_source_label` string, used by
+                // updateConnectionState()'s `!connected` branch for both
+                // txtDialSource and txtTriggerName.
+                displayText: root.ampIp === "" ? "No source" : (root.activeSourceName !== "" ? root.activeSourceName : (currentIndex >= 0 && currentIndex < model.length ? model[currentIndex].name : ""))
 
                 // `activated` fires only on genuine user interaction (mouse/
                 // keyboard selection), not on the programmatic `currentIndex`

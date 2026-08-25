@@ -443,14 +443,153 @@ architecture decisions; this file is just sequencing and status.
     parked item below, revisited later with more detail) or start any
     Phase 4.1/4.2/4.3/4.4 scope.
 
+- [x] **Phase 4.1 — Amp picker UI.** Styled using 4.0's copper/graphite/
+      Space Grotesk/JetBrains Mono language throughout, built against Phase
+      3.5's existing `KnownAmps`/`SelectedAmpIp`/`SelectAmp` D-Bus surface.
+      No persistence — the picker has no awareness that Phase 4.2 exists;
+      it just calls `SelectAmp` on user action, unchanged from how it
+      always would.
+  - Amp header (`FullRepresentation.qml`) made clickable — whole row, not
+    just a sub-element, wrapped in a `Rectangle`+`MouseArea` rather than
+    putting the `MouseArea` directly in the header `RowLayout` (which would
+    only occupy one layout cell). Toggles `root.ampListOpen`, driving an
+    animated (`clip: true` + `Behavior on implicitHeight`) collapsible list
+    below the header, caret rotates open/closed.
+  - `KnownAmps` is the same array-of-struct D-Bus type as `Sources`
+    (`a(ssbs)`), so it gets the identical Phase 3 fix: don't trust the
+    `PropertiesChanged` delta payload for it, treat the signal only as a
+    trigger for an explicit `Properties.Get` re-fetch. `SelectedAmpIp` is a
+    plain string scalar and is trusted directly, like `Online`/`DeviceName`/
+    `AmpIp`.
+  - **Bug found and fixed (first round of review)**: amp-list rows showed
+    the raw UDP device name ("My Devialet-ETH") instead of the
+    mDNS-resolved model name ("Devialet Expert 140 Pro") the header already
+    showed correctly — not a daemon regression (`KnownAmps` already
+    carried both `device_name`/`model_name` fields correctly per Phase
+    3.7), but a QML bug: the delegate read `modelData.deviceName` directly
+    and never referenced `modelData.modelName` at all. Fixed with
+    `modelName ?: deviceName`, the same fallback `root.ampDisplayName`
+    already used for the header and the same one the design mockup's own
+    `displayName(a){ return a.modelName || a.udpName; }` uses for both the
+    header and each `.amp-option-name` (confirmed by reading the mockup's
+    JS, not assumed) — including its `" · name unresolved"` subtitle tag,
+    ported verbatim.
+  - **"None" option, ported from the Android app's actual source**
+    (`ekmanch/devialet-expert-remote`, cloned locally), not invented — two
+    rounds:
+    1. First pass added a "None" row with invented wording ("No amp
+       selected"). Corrected after being asked to check the Android app
+       directly: `MainActivity.showAmpSheet()`/`sheet_amp_picker.xml` show
+       "None" always sitting first, above a divider, above the real amps;
+       italic name text, a plain outline-ring dot state (`dot_none`/
+       `dot_none_selected` — Android's own comment explains a dashed stroke
+       renders unreliably under hardware acceleration on some API levels,
+       hence the plain ring, which happened to already match this port's
+       existing header-dot "none" treatment); strings ported verbatim from
+       `strings.xml`: `amp_none_name` = "None", `amp_none_sub` = "Don't
+       connect to any amplifier".
+    2. The *header* text for the true nothing-selected state (`ampIp ===
+       ""`) was separately wrong too — read from `MainActivity.
+       updateDeviceCard()`'s `selectedIp.isBlank()` branch and
+       `strings.xml`: `device_none_selected` = **"No Amplifier"**,
+       `device_tap_to_choose` = **"Tap to connect"** (lowercase "connect")
+       — previously showed "Devialet" / "No amp selected" (both invented).
+  - **Dimmed/disabled controls for the no-amp-selected state, also ported
+    from the Android app** after being asked to check it: `setGroupEnabled()`/
+    `updateConnectionState()` in `MainActivity.kt` apply `disabledAlpha =
+    0.4f` to each control group *as a whole* ("not per-child", per that
+    file's own comment) plus recursive `isEnabled = false`, and show
+    `dial_no_source = "—"` / `no_source_label = "No source"` when
+    `!hasSelectedAmp`. Ported the same shape: `opacity: root.ampIp === ""
+    ? 0.4 : 1.0` on the volume block/action row/source block containers
+    (the individual `enabled: root.ampIp !== ""` bindings already existed
+    from the picker's first pass, just weren't visually dimmed). Along the
+    way, found and fixed the actual bug behind an observed "-15.0dB"
+    artifact when nothing was selected: the daemon's "None" state sets
+    `VolumeDb` to its zero-value default (`0.0`, not undefined), which is
+    below the `Slider`'s own `from` bound and was silently clamping to
+    `to` (the -15dB ceiling) — a real-looking value with nothing connected.
+    Both the readout and the slider's bound value now explicitly check
+    `ampIp === ""` first.
+  - **Incident: a synthetic test amp leaked into the live daemon.**
+    Verifying the picker with a second amp meant injecting a synthetic UDP
+    broadcast (`SYNTH-UNRESOLVED-AMP`/`127.0.0.1`, built with
+    `devialet_protocol::fixtures::StatusFixtureBuilder`) — but the first
+    time, straight into the real systemd-managed daemon rather than an
+    isolated instance. Since `AmpState` never prunes known amps (Phase
+    3.5, intentional, for real amps), it persisted in `KnownAmps` after the
+    throwaway sender was killed, until caught (a real network scan showed
+    no such device existed) and fixed by restarting the live service —
+    confirmed via `busctl` the fake entry was gone and `KnownAmps` held
+    only the real amp. Verification method corrected going forward: stop
+    the real systemd service first, run a disposable foreground instance
+    of the same binary for any synthetic-amp injection, kill it, then
+    start the real service fresh — the long-lived supervised instance
+    backing the actual widget never sees synthetic data at all.
+  - **Bug found and fixed (second round of review): "None" didn't actually
+    stick.** Clicking "None" closed the picker but the previous amp stayed
+    selected. Read `AmpState`/`effective_ip()` in
+    `crates/devialet-remote-daemon/src/interface.rs` to confirm rather
+    than assume: `select_amp()` only ever wrote `selected_ip`, and an
+    explicit `SelectAmp("")` was byte-for-byte identical to "never
+    selected" — so `effective_ip()`'s Phase 3.5 auto-select-if-alone branch
+    (designed for "nothing has ever been chosen" with exactly one known
+    amp) silently re-selected the sole amp immediately after, every time.
+    `SelectedAmpIp` itself did briefly flip to `""` (a real signal fired),
+    but `AmpIp`/`DeviceName`/everything the UI actually renders off of
+    snapped straight back. The QML click handler was never at fault
+    (confirmed it already called `SelectAmp("")` correctly). Fixed by
+    adding `has_explicit_selection: bool` to `AmpState`, set unconditionally
+    by `select_amp()` regardless of `ip` (including `""`), with
+    auto-select-if-alone now gated on `!has_explicit_selection` instead of
+    `selected_ip.is_empty()` — "never selected" and "explicitly cleared"
+    are now genuinely distinct states. **Flagged for Phase 4.2**: loading a
+    persisted selection on startup — even a persisted `""` (a previously-
+    explicit None) — must also set `has_explicit_selection = true`, not
+    just `selected_ip`, or a restart would silently resurrect auto-select
+    for a user who'd deliberately opted out of it.
+  - **Automated tests**: the existing `clearing_selection_back_to_empty_
+    string_returns_to_auto_select_behavior` test directly asserted the
+    buggy behavior (a raw `selected_ip = ""` write auto-selecting again) —
+    replaced with `explicit_none_selection_does_not_fall_back_to_
+    auto_select` (regression test for the fix) and
+    `never_explicitly_selected_still_auto_selects_the_sole_known_amp`
+    (confirms the fix didn't overcorrect and break the genuine fresh-
+    startup case). Full workspace: 51/51 tests (14 daemon + 37 protocol),
+    clippy clean.
+  - **Live verification, all three review rounds, via `busctl` and
+    `grabToImage` screenshots** (not visual-only): amp list correctly
+    showing resolved vs. unresolved names side by side (real amp +
+    synthetic, isolated instance); `SelectAmp("")` with 2 known amps
+    correctly falling back to the not-connected state rather than
+    auto-selecting (Phase 3.5's fallback re-confirmed still intact);
+    dimmed/disabled treatment screenshotted against the real single-amp
+    daemon after the auto-select fix (previously unreachable through a
+    real click, since "None" never actually stuck before that fix);
+    `SelectAmp("")` held for 3s across real incoming UDP broadcasts with
+    zero reversion (previously reverted on the very next `recompute()`);
+    re-selecting the real amp afterward round-tripped cleanly every time.
+    Real daemon confirmed clean (`KnownAmps` = 1 entry, the real amp only)
+    after each round. Widget reloaded live (`kpackagetool6 --upgrade` +
+    `plasmashell --replace`) after every fix.
+  - **Tooling note**: `qml6` in this environment fully swallows QML
+    construction errors (confirmed by testing known-bad QML — no stderr
+    output at all, even with `QT_LOGGING_RULES`/`QT_MESSAGE_PATTERN` set),
+    so a real bug (a fractional `font.pixelSize: 12.5` — QML's `int`-typed
+    property silently rejects non-integer values, same class of bug as
+    Phase 4.0's own `9.5` finding) had to be caught by manually bisecting
+    the file with a scratch copy rather than reading an error message.
+    `qmllint` on this machine remains the Qt5-incompatible build noted in
+    Phase 4.0 — still not usable here.
+  - Did not touch persistence (4.2), the settings view (4.3), or
+    scroll-to-adjust (4.4) — out of scope, confirmed unstarted.
+
 ## Up next
 
-- [ ] **Phase 4.1 — Amp picker UI.** Styled from the start using 4.0's
-      language. Built against Phase 3.5's existing `KnownAmps` /
-      `SelectedAmpIp` / `SelectAmp` D-Bus surface — no persistence yet,
-      same as 3.5 left it. Picker has no awareness that persistence
-      exists; it just calls `SelectAmp` on user action like it always
-      would.
+- [ ] **Phase 4.11 — Add custom icon for widget**
+      The icon used on the panel so far for the widget does not look
+      particularly good. This shall be replaced to a custom-made icon
+      under design/icon/. 
 - [ ] **Phase 4.2 — Amp selection persistence (daemon-side).** Deferred
       from 3.5 specifically so it could be verified against a real picker
       UI (select amp A, restart daemon, confirm A reconnected; select amp
@@ -461,6 +600,16 @@ architecture decisions; this file is just sequencing and status.
     `SelectAmp(ip)`, reads it back on startup, and does the live
     re-discovery reconciliation (don't blindly trust a stale
     persisted IP) before exposing `SelectedAmpIp`.
+  - **Load-bearing detail from Phase 4.1's "None doesn't stick" bug fix —
+    must carry over here:** `AmpState` now has `has_explicit_selection:
+    bool` alongside `selected_ip`, specifically so an explicit `SelectAmp
+    ("")` ("None") isn't indistinguishable from "never selected" and
+    silently overridden by auto-select-if-alone. Startup persistence load
+    must set `has_explicit_selection = true` for *any* persisted value,
+    including a persisted `""` — persisting only `selected_ip` and leaving
+    `has_explicit_selection` at its `false` default on load would
+    resurrect this exact bug after every daemon restart for a user who'd
+    deliberately chosen None.
   - Reasoning: lifecycle mismatch (daemon is the long-lived,
     systemd-supervised process; the widget/plasmoid reloads far more
     often — panel add/remove, plasmashell restarts — so widget-owned

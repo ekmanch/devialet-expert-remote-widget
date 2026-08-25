@@ -48,10 +48,34 @@ struct TrackedAmp {
 /// below (see `effective_ip`). With zero or 2+ known amps and nothing
 /// explicitly selected, the primary properties fall back to the empty
 /// "not connected" state instead of guessing which one to show.
+///
+/// **Post-Phase-4.1 correction:** the paragraph above ("selected_ip... same
+/// value whether nothing has ever been chosen or 'None' was explicitly
+/// chosen") described Android's own collapsing of those two states, which
+/// is fine for Android since it has no auto-select-if-alone behavior to
+/// collapse *into*. Porting that collapse here was a real bug once Phase
+/// 4.1 added a real picker: explicitly choosing "None" (`SelectAmp("")`)
+/// left `selected_ip` empty exactly like "never chosen", so
+/// `effective_ip()`'s auto-select-if-alone branch silently re-selected the
+/// sole known amp anyway - the user's explicit clear appeared to do
+/// nothing (picker closed, selection reverted). Fixed by adding
+/// `has_explicit_selection` below, set the moment `SelectAmp` is ever
+/// called (with any ip, including ""), which is what auto-select-if-alone
+/// now actually gates on instead of `selected_ip.is_empty()` alone - see
+/// `effective_ip`. This also matters for Phase 4.2 (persistence): loading a
+/// persisted selection - even a persisted "" (a previously-explicit
+/// None) - must also set `has_explicit_selection = true`, not just
+/// `selected_ip`, or a restart would silently resurrect the auto-select
+/// behavior for a user who'd explicitly opted out of it.
 #[derive(Debug, Clone, Default)]
 pub struct AmpState {
     amps: HashMap<String, TrackedAmp>,
     selected_ip: String,
+    /// True from the first `SelectAmp` call onward (any ip, including ""),
+    /// false only in the genuine "daemon just started, nothing has ever
+    /// been chosen" state. See the struct doc's "Post-Phase-4.1 correction"
+    /// above for why this exists separately from `selected_ip.is_empty()`.
+    has_explicit_selection: bool,
 
     // ---- exposed fields below, all derived from the two above by
     // `recompute()` - never written to directly outside of it. ----
@@ -174,6 +198,12 @@ impl AmpState {
     /// for when discovery doesn't work) - the primary properties then show
     /// that IP with the empty/not-connected state until/unless a broadcast
     /// from it arrives.
+    ///
+    /// Always sets `has_explicit_selection`, even when `ip` is "" - that's
+    /// the whole fix for the bug described on the struct doc's "Post-
+    /// Phase-4.1 correction": without this, `SelectAmp("")` was
+    /// indistinguishable from "never called" and got silently overridden
+    /// by `effective_ip()`'s auto-select-if-alone branch.
     #[zbus(name = "SelectAmp")]
     async fn select_amp(
         &mut self,
@@ -182,6 +212,7 @@ impl AmpState {
     ) -> zbus::fdo::Result<()> {
         let before = self.clone();
         self.selected_ip = ip;
+        self.has_explicit_selection = true;
         self.recompute();
         if !states_equal(&before, self) {
             emit_all(self, &emitter)
@@ -237,12 +268,16 @@ impl AmpState {
 
     /// The IP whose status should drive the primary properties: the
     /// explicit selection if one exists, else the sole known amp if there's
-    /// exactly one, else nothing. See struct doc for the rationale.
+    /// exactly one AND nothing has ever been explicitly selected (including
+    /// an explicit "None"), else nothing. See struct doc for the rationale.
+    /// The `!self.has_explicit_selection` guard is what makes an explicit
+    /// `SelectAmp("")` actually stick instead of being silently
+    /// re-overridden by the auto-select-if-alone branch below it.
     fn effective_ip(&self) -> Option<String> {
         if !self.selected_ip.is_empty() {
             return Some(self.selected_ip.clone());
         }
-        if self.amps.len() == 1 {
+        if !self.has_explicit_selection && self.amps.len() == 1 {
             return self.amps.keys().next().cloned();
         }
         None
@@ -454,18 +489,73 @@ mod tests {
         assert!(!state.online);
     }
 
+    // Regression test for the bug reported after Phase 4.1 shipped a real
+    // amp picker: SelectAmp("") (choosing "None") left `selected_ip` empty
+    // exactly like "never selected", so `effective_ip()`'s
+    // auto-select-if-alone branch silently re-selected the sole known amp
+    // anyway - the user's explicit clear appeared to do nothing (picker
+    // closed, selection reverted). `has_explicit_selection` is set by the
+    // real `select_amp()` D-Bus method regardless of what `ip` is; mirrored
+    // by hand here since `select_amp` is an async zbus method this test
+    // module doesn't have an interface context to call directly - matches
+    // the existing pattern of the other tests in this file poking
+    // `selected_ip` directly rather than going through the D-Bus method.
+    //
+    // This replaces a previous test of the same name
+    // ("clearing_selection_back_to_empty_string_returns_to_auto_select_
+    // behavior") that asserted the OLD, buggy behavior (auto-select résumés
+    // after a raw `selected_ip = ""` write) - that assertion is exactly the
+    // bug, not a real invariant: a raw field write without also setting
+    // `has_explicit_selection` never happens in production code (only
+    // `select_amp()` ever writes `selected_ip`, and it always sets both
+    // together now), so the old test wasn't exercising anything a real
+    // client could actually trigger.
     #[test]
-    fn clearing_selection_back_to_empty_string_returns_to_auto_select_behavior() {
+    fn explicit_none_selection_does_not_fall_back_to_auto_select() {
         let mut state = AmpState::default();
         state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
         state.selected_ip = "192.168.1.50".to_string();
+        state.has_explicit_selection = true;
         state.recompute();
+        assert_eq!(state.device_name, "Living Room Amp");
 
+        // Explicitly clearing back to "" - matches what a real
+        // SelectAmp("") call does.
         state.selected_ip = String::new();
+        state.has_explicit_selection = true;
         state.recompute();
 
         assert_eq!(state.selected_ip, "");
-        assert_eq!(state.device_name, "Living Room Amp", "sole known amp is still auto-selected");
+        assert_eq!(state.amp_ip, "", "an explicit clear must NOT fall back to auto-select, even with exactly one known amp");
+        assert_eq!(state.device_name, "");
+        assert!(!state.online);
+    }
+
+    #[test]
+    fn never_explicitly_selected_still_auto_selects_the_sole_known_amp() {
+        // Companion to the regression test above: confirms the fix didn't
+        // overcorrect into disabling auto-select-if-alone entirely - it
+        // must still apply for the genuine "nothing has ever been chosen"
+        // case (has_explicit_selection left at its Default::default()
+        // value, false), which is what a fresh daemon startup with no
+        // persisted selection looks like.
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+        state.selected_ip = "192.168.1.50".to_string();
+        state.has_explicit_selection = true;
+        state.recompute();
+
+        // Simulates a second amp being explicitly selected, then a fresh
+        // "never chosen" AmpState (e.g. after a restart with nothing
+        // persisted yet, pre-Phase-4.2) seeing only one amp - not a
+        // continuation of the state above.
+        let mut fresh_state = AmpState::default();
+        fresh_state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+
+        assert_eq!(fresh_state.selected_ip, "");
+        assert!(!fresh_state.has_explicit_selection);
+        assert_eq!(fresh_state.amp_ip, "192.168.1.50", "auto-select-if-alone must still work when nothing was ever explicitly chosen");
+        assert_eq!(fresh_state.device_name, "Living Room Amp");
     }
 
     #[test]
