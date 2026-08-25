@@ -584,12 +584,121 @@ architecture decisions; this file is just sequencing and status.
   - Did not touch persistence (4.2), the settings view (4.3), or
     scroll-to-adjust (4.4) — out of scope, confirmed unstarted.
 
+- [x] **Phase 4.11 — Custom panel icon.** Replaced the Phase 2
+      `audio-speakers-symbolic` Breeze placeholder with a real custom icon
+      from `design/icon/`. Small, self-contained visual change — did not
+      expand into 4.2/4.3/4.4/4.5 scope.
+  - **Mechanism confirmed before implementing, not guessed**: two separate
+    icon references exist in this package. `Plasmoid.icon` (`main.qml`,
+    consumed by `CompactRepresentation.qml`'s `Kirigami.Icon.source`)
+    drives the actual panel/compact-representation icon and accepts an
+    arbitrary resolvable file path — confirmed via a real precedent
+    (`org.kde.desktopcontainment`'s `ConfigIcons.qml` binds a user-browsed
+    `KIconThemes.IconDialog` file path straight to `Plasmoid.icon`/
+    `Plasmoid.configuration.icon`). `metadata.json`'s `KPlugin.Icon` (the
+    "Add Widgets" list entry) is separate and more limited:
+    `KPluginMetaData::iconName()`'s own header doc says `\sa
+    QIcon::fromTheme()` — a system icon-theme name only, confirmed against
+    a real KPackage precedent (`org.kde.plasma.folder`'s
+    `"Icon": "org.kde.plasma.folder"` resolves to an actual Breeze-shipped
+    `.../breeze/applets/256/org.kde.plasma.folder.svg`, not a bundled
+    package file). Getting a custom icon into the "Add Widgets" list too
+    would mean installing into the system/user hicolor icon theme — real
+    packaging work deferred to Phase 4.5, not done here; `metadata.json`'s
+    `Icon` is left as a real Breeze name, unchanged.
+  - Bundled the same way Phase 4.0 bundled its fonts:
+    `plasmoid/contents/icons/`, loaded via `Qt.resolvedUrl(...)` in
+    `main.qml` — matches the real `luisbocanegra.panel.colorizer`
+    precedent of a plasmoid shipping its own `contents/icons/` directory.
+  - **Iteration 1 — `devialet_icon_filled.svg`** (fixed copper colors,
+    `#e3a06a`/`#c17f4e`, matching `Theme.qml`'s palette exactly). Verified
+    live: reinstalled, restarted plasmashell, screenshotted the real top
+    panel with `spectacle`, and located the icon by scanning for its
+    known copper RGB values pixel-by-pixel (not eyeballed) — renders
+    crisply, correct colors, no blur.
+  - **Iteration 2 — switched to `devialet_icon_currentColor_tray.svg`**
+    (asked to try it for comparison). A plain source swap rendered
+    **nearly invisible**: confirmed by sampling actual pixel values, not
+    assumed — `fill="currentColor"` loaded as a bare file path has no CSS
+    context to resolve against, so it defaulted to near-black on the dark
+    panel. Root-caused and fixed via `Kirigami.Icon`'s `isMask: true` +
+    `color: Kirigami.Theme.textColor` (confirmed via its `qmltypes` that
+    both properties exist precisely for this) — the real mechanism
+    real symbolic/tray icons use for theme-adaptive recoloring, not
+    literal SVG `currentColor` resolution. Trade-off flagged, not
+    silently absorbed: this collapses the filled variant's two-tone
+    copper shading into one flat theme color, by design.
+  - A separate background task (concurrent, unrelated to the icon-choice
+    decision above) briefly swapped both files to
+    `devialet_icon_white.svg` (fixed white, no `isMask` needed since it
+    has no `currentColor`) — reverted back to the `currentColor_tray` +
+    `isMask`/`color` combination once confirmed as the actual preference;
+    the now-unused `devialet_icon_white.svg` copy was removed from
+    `plasmoid/contents/icons/` (the shipped package) so it wasn't left as
+    dead weight, while all three original variants remain under
+    `design/icon/` as source reference (same "committed source assets"
+    treatment as `design/font/`).
+  - **Bug found and fixed: icon rendered visibly larger than sibling
+    panel icons** (weather/network/Bluetooth). Investigated before
+    changing anything, per instruction:
+    1. QML sizing was **not** the cause — checked two real shipped KDE
+       applets' `CompactRepresentation.qml` (`org.kde.kdeconnect`, this
+       project's own porting reference, and `org.kde.desktopcontainment`)
+       and both use the identical `Kirigami.Icon { anchors.fill: parent }`
+       pattern with zero extra padding/sizing logic. Ours matched exactly.
+    2. The SVG's own artwork bled nearly edge-to-edge instead: computed
+       (not guessed) where the `rotate(-14 15 15)` transform actually
+       sends each triangle vertex in the `viewBox="0 0 30 30"` canvas —
+       one vertex landed at `y=29.30`, only 0.7 units (2.3%) from the
+       edge. Compared against a real Breeze 22px symbolic icon
+       (`preferences-system-bluetooth-symbolic.svg`) whose artwork sits
+       ~13-14% inset from its canvas edge on all sides — the actual KDE
+       symbolic-icon convention.
+    3. Fix: added `translate(15 15) scale(0.75) translate(-15 -15)` to
+       the `<g transform>`, scaling the artwork down around the same
+       rotation pivot before rotating (preserves shape/proportions, just
+       adds margin) — computed the resulting worst-case margin at 14.2%,
+       matching Breeze's convention. Applied identically to both
+       `plasmoid/contents/icons/devialet_icon_currentColor_tray.svg`
+       (shipped) and `design/icon/devialet_icon_currentColor_tray.svg`
+       (source), so they don't diverge.
+    4. **Verified quantitatively, not just visually**: measured the
+       icon's actual rendered pixel bounding box from same-instant
+       screenshots, using the neighboring moon icon (23×28px, unchanged
+       across every screenshot) as a stable reference rather than
+       absolute panel coordinates (which drift as the panel's digital
+       clock/weather text width changes). Before: 35×33px (1.52× the
+       moon's width, 1.18× its height). After: 26×24px (1.13×/0.86×) —
+       matches the predicted ~25% reduction from `scale(0.75)` almost
+       exactly.
+  - The source SVG was then edited externally (outside this session, a
+    small deliberate-looking tweak: the shared middle vertex split into
+    two slightly different points, `9,15` → `9,14.4`/`9,15.6`, adding a
+    small notch at the paper-plane's tail) with the `scale(0.75)` padding
+    fix removed in the same edit. Per instruction not to silently
+    revert/override an on-disk change I didn't make, set the shipped copy
+    to exactly match when asked to "try" it for comparison, and reported
+    the resulting size regression (measured: back to 35×33px) rather than
+    silently reapplying the fix myself. Once explicitly confirmed the
+    sizing needed to match the other panel icons again, reapplied the
+    identical `scale(0.75)` treatment on top of the new notched shape
+    (re-verified at 26×24px, matching the moon reference again) to both
+    the shipped copy and the `design/icon/` source.
+  - **Not committed.** CLAUDE.md's working-style rules were updated
+    mid-phase to explicitly forbid staging/committing/pushing on my own
+    — every icon-related change in this phase (including the very first,
+    `devialet_icon_filled.svg` iteration, which *was* committed under the
+    prior rules) from the `currentColor_tray` switch onward is sitting as
+    uncommitted working-tree changes, left for deliberate review/commit.
+    Current on-disk state (as of this entry): `Plasmoid.icon` points at
+    `devialet_icon_currentColor_tray.svg`, `CompactRepresentation.qml`
+    has `isMask: true`/`color: Kirigami.Theme.textColor`, and the SVG has
+    the notched-vertex shape with the `scale(0.75)` padding fix applied.
+  - Did not touch metadata.json further, persistence (4.2), the settings
+    view (4.3), or scroll-to-adjust (4.4).
+
 ## Up next
 
-- [ ] **Phase 4.11 — Add custom icon for widget**
-      The icon used on the panel so far for the widget does not look
-      particularly good. This shall be replaced to a custom-made icon
-      under design/icon/. 
 - [ ] **Phase 4.2 — Amp selection persistence (daemon-side).** Deferred
       from 3.5 specifically so it could be verified against a real picker
       UI (select amp A, restart daemon, confirm A reconnected; select amp

@@ -172,6 +172,9 @@ for what's confirmed out of scope.
   here. Check it before assuming what's done vs. pending — but the phase
   stated explicitly in the prompt for a given session takes precedence if
   the two ever seem to disagree (e.g. TODO.md hasn't been updated yet).
+- never add files as tracked, commit changes, or push changes to remote.
+  The user of Claude Code would like to do this himself after verifying
+  that everything works the way he expects it to.
 
 ## Reloading changes into the live widget
 
