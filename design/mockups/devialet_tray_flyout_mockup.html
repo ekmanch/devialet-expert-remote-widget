@@ -71,7 +71,8 @@
   }
   .flyout{
     width:300px; position:relative;
-    background:linear-gradient(180deg,#17171a 0%, #121214 100%);
+    --panel-alpha:1;
+    background:linear-gradient(180deg, rgba(23,23,26,var(--panel-alpha)) 0%, rgba(18,18,20,var(--panel-alpha)) 100%);
     border:1px solid rgba(255,255,255,0.08);
     border-radius:16px;
     box-shadow:0 24px 60px -12px rgba(0,0,0,0.65), 0 0 0 1px rgba(0,0,0,0.4);
@@ -79,9 +80,9 @@
     animation:pop .16s cubic-bezier(.2,.9,.3,1);
   }
   .flyout.blur-enabled{
-    background:linear-gradient(180deg, rgba(23,23,26,0.82) 0%, rgba(18,18,20,0.82) 100%);
     backdrop-filter:blur(18px) saturate(140%);
   }
+  .settings-row-sub{ padding-top:0; margin-top:-4px; transition:opacity .15s ease; }
   @keyframes pop{from{opacity:0; transform:translateY(-4px) scale(0.98);} to{opacity:1; transform:translateY(0) scale(1);}}
 
   .settings-trigger{
@@ -373,12 +374,19 @@
           </div>
           <div class="switch on" id="blurSwitch" onclick="toggleBlur()"></div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" id="transparencyRow">
           <div class="settings-row-text">
-            <span class="settings-row-name">Reduce motion</span>
-            <span class="settings-row-desc">Turn off open/close animation</span>
+            <span class="settings-row-name">Transparency</span>
+            <span class="settings-row-desc">See-through panel background</span>
           </div>
-          <div class="switch" id="motionSwitch" onclick="this.classList.toggle('on')"></div>
+          <div class="switch on" id="transparencySwitch" onclick="toggleTransparency()"></div>
+        </div>
+        <div class="settings-row settings-row-sub" id="transparencyLevelRow" style="flex-direction:column; align-items:stretch; gap:8px;">
+          <div class="settings-row-text" style="flex-direction:row; align-items:center; justify-content:space-between;">
+            <span class="settings-row-desc">Level</span>
+            <span class="settings-row-desc" id="transparencyValue" style="font-family:var(--font-mono); color:var(--copper-bright);">40%</span>
+          </div>
+          <input type="range" class="copper-slider" id="transparencySlider" min="0" max="100" step="1" value="40" style="--fill:40%" oninput="onTransparencyInput(this.value)">
         </div>
 
         <p class="settings-section-label">Scrolling</p>
@@ -533,6 +541,25 @@
     const on = document.getElementById('blurSwitch').classList.toggle('on');
     document.getElementById('flyoutPanel').classList.toggle('blur-enabled', on);
   }
+
+  let transparencyOn = true;
+  let transparencyLevel = 40; // 0 = opaque, 100 = fully see-through
+  function updatePanelAlpha(){
+    const alpha = transparencyOn ? (1 - transparencyLevel / 100) : 1;
+    document.getElementById('flyoutPanel').style.setProperty('--panel-alpha', alpha);
+  }
+  function toggleTransparency(){
+    transparencyOn = document.getElementById('transparencySwitch').classList.toggle('on');
+    document.getElementById('transparencyLevelRow').style.opacity = transparencyOn ? '1' : '0.4';
+    document.getElementById('transparencySlider').disabled = !transparencyOn;
+    updatePanelAlpha();
+  }
+  function onTransparencyInput(v){
+    transparencyLevel = Number(v);
+    document.getElementById('transparencyValue').textContent = v + '%';
+    document.getElementById('transparencySlider').style.setProperty('--fill', v + '%');
+    updatePanelAlpha();
+  }
   function setStep(el, val){
     document.querySelectorAll('.step-seg-btn').forEach(b=> b.classList.remove('active'));
     el.classList.add('active');
@@ -542,6 +569,7 @@
   renderAmpList();
   renderSourceList();
   updateVolDisplay();
+  updatePanelAlpha();
   document.getElementById('flyoutPanel').classList.add('blur-enabled');
 </script>
 
