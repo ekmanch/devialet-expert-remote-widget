@@ -36,6 +36,7 @@
 //! resolves, it's never re-attempted or cleared (matches the Kotlin app -
 //! see `AmpState::resolve_model_name`'s doc in interface.rs).
 
+mod config;
 mod interface;
 
 use devialet_protocol as proto;
@@ -184,8 +185,23 @@ fn main() -> std::io::Result<()> {
     // background thread - this process has none.
     eprintln!("receive loop runs on main() directly - no spawned thread in this binary");
 
+    // Phase 4.2: apply any persisted selection before the object server
+    // starts (so no signal emission is needed - see
+    // AmpState::set_persisted_selection's doc). `None` (nothing ever
+    // persisted, e.g. pre-4.2 install or fresh config dir) leaves the
+    // default `has_explicit_selection = false`, preserving Phase 3.5's
+    // auto-select-if-alone behavior for a genuinely first-ever run.
+    let mut initial_state = AmpState::default();
+    match config::load_selected_ip() {
+        Some(ip) => {
+            eprintln!("config: restoring persisted amp selection: {:?}", if ip.is_empty() { "<none>" } else { &ip });
+            initial_state.set_persisted_selection(ip);
+        }
+        None => eprintln!("config: no persisted amp selection found, starting with none"),
+    }
+
     let connection = zbus::blocking::connection::Builder::session()
-        .and_then(|b| b.serve_at(interface::OBJECT_PATH, AmpState::default()))
+        .and_then(|b| b.serve_at(interface::OBJECT_PATH, initial_state))
         .and_then(|b| b.name(interface::BUS_NAME))
         .and_then(|b| b.build())
         .map_err(std::io::Error::other)?;

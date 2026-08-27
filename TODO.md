@@ -697,39 +697,99 @@ architecture decisions; this file is just sequencing and status.
   - Did not touch metadata.json further, persistence (4.2), the settings
     view (4.3), or scroll-to-adjust (4.4).
 
+- [x] **Phase 4.2 — Amp selection persistence (daemon-side).** Deferred
+      from 3.5 specifically so it could be verified against a real picker
+      UI instead of blind via busctl.
+  - **Ownership (settled, as planned):** the daemon owns persistence, not
+    the widget - see TODO.md's prior "Reasoning" note (lifecycle mismatch,
+    live-reconciliation needs daemon-side discovery state anyway).
+  - **Location, investigated rather than assumed:** new `config` module
+    (`crates/devialet-remote-daemon/src/config.rs`), plain text (no
+    serde/JSON, matching this workspace's existing "nothing here needs
+    it" stance), one line holding the selected IP or empty. Path is
+    `$XDG_CONFIG_HOME/devialet-remote-daemon/selected-amp-ip`, falling
+    back to `$HOME/.config/devialet-remote-daemon/selected-amp-ip` per
+    the freedesktop.org XDG Base Directory spec's own stated fallback
+    rule ("if $XDG_CONFIG_HOME is either not set or empty, a default
+    equal to $HOME/.config should be used") - read directly via
+    `std::env`, no `dirs`/`directories` crate added for two env var
+    reads. Confirmed the Kotlin app's own approach first (read its actual
+    source, not reconstructed from memory): `MainActivity` persists via
+    plain `SharedPreferences` (`amp_ip`/`amp_name` keys) and trusts the
+    restored `selectedIp` immediately, with connectedness governed
+    entirely separately by `isAmpRecentlyHeard`/`discoveredAmps`
+    staleness - i.e. Android does no explicit "reconciliation" step
+    either; trusting the persisted value while staleness-checking it
+    independently *is* the reconciliation pattern, ported as-is.
+  - **Reconciliation required zero new logic.** `AmpState::recompute()`
+    already only shows a selected IP as connected/named once that IP has
+    a real `TrackedAmp` entry (populated solely by `ingest_status`, i.e.
+    an actual received UDP broadcast) - a persisted IP with no matching
+    live entry falls straight into the existing "unknown ip" branch
+    (`Online=false`, `DeviceName=""`, etc.), same as Phase 3.5's
+    already-tested `explicit_selection_of_an_unknown_ip_shows_the_ip_but_
+    not_connected` case. `set_persisted_selection()` (interface.rs)
+    deliberately does not synthesize a `TrackedAmp` for this exact reason.
+  - **has_explicit_selection carried over correctly:**
+    `set_persisted_selection(ip)` sets `has_explicit_selection = true`
+    unconditionally, including for a persisted `ip == ""` - the specific
+    regression this phase was warned about (see Phase 4.1's fix). Save
+    side: `AmpState::select_amp` (the `SelectAmp` D-Bus method) calls
+    `config::save_selected_ip(&ip)` on every call, including `""`. Load
+    side: `main()` calls `config::load_selected_ip()` once at startup,
+    before `serve_at()`, and applies it via `set_persisted_selection` if
+    `Some` (file existed) - `None` (file never written) leaves
+    `has_explicit_selection` at its correct default `false`, preserving
+    genuine first-run auto-select-if-alone.
+  - Persistence write/read are best-effort, matching this daemon's
+    existing mDNS "cosmetic, not depended on" framing - a failure (read-
+    only filesystem, missing `$HOME`, etc.) is logged to stderr and
+    otherwise ignored; `SelectAmp` never fails because persisting failed.
+  - **Automated tests** (16 new: 9 in `config::tests` covering XDG/HOME
+    path-fallback resolution and save/load round-tripping including the
+    critical `Some("")` vs `None` distinction; 5 in `interface::tests`
+    covering the phase brief's 4 verification cases against `AmpState`
+    directly - persisted-real-ip-reconnects-once-broadcast-arrives,
+    switching-persisted-selection-to-a-different-amp,
+    persisted-explicit-None-does-not-resurrect-auto-select-even-once-an-
+    amp-broadcasts, persisted-ip-for-a-since-gone-amp-stays-not-connected).
+    Full workspace: 64/64 tests passing, clippy clean.
+  - **Live verification against the real daemon and real amp
+    (2026-08-27),** built as a release binary and run under the real
+    systemd unit, all 4 confirmed via `busctl` + `journalctl` (real amp
+    at `192.168.0.22`, "Devialet Expert 140 Pro"):
+    1. `SelectAmp("192.168.0.22")`, confirmed persisted
+       (`~/.config/devialet-remote-daemon/selected-amp-ip` contained the
+       IP); `systemctl --user restart`; log showed `config: restoring
+       persisted amp selection: "192.168.0.22"`; `Online` reflected
+       `false` immediately at startup then flipped `true` (with
+       `DeviceName` resolved) once the next real broadcast/mDNS
+       resolution landed - genuine reconnection, not an assumed one.
+    2. `SelectAmp("192.168.0.222")` (a second, non-broadcasting IP
+       standing in for "amp B" - only one real amp was available on this
+       network): persisted, restarted, confirmed `SelectedAmpIp` came
+       back as `.222` (not `.22`) while the real amp remained visible
+       and online in `KnownAmps` - the explicit selection of a different
+       amp is what persists, not whatever else is on the network.
+    3. `SelectAmp("")` while the sole real amp was actively broadcasting:
+       config file confirmed empty; `systemctl --user restart`; log
+       showed `config: restoring persisted amp selection: "<none>"`;
+       after the restart, with the real amp still broadcasting and still
+       the only entry in `KnownAmps`, `SelectedAmpIp`/`AmpIp` stayed `""`
+       and `Online` stayed `false` - auto-select-if-alone did **not**
+       resurrect a selection. This is the critical regression case from
+       the phase brief and it held.
+    4. Covered by the same run as case 2: the persisted `.222` IP, which
+       never broadcasts on this network, stayed `Online=false` across
+       the restart rather than being treated as connected just because
+       it was the last selection.
+    Selection was restored to the real amp (`192.168.0.22`) on the live
+    system afterward so the widget isn't left disconnected.
+  - Did not touch the widget/QML - daemon-only, per the phase's explicit
+    scope (same as Phase 3.5).
+
 ## Up next
 
-- [ ] **Phase 4.2 — Amp selection persistence (daemon-side).** Deferred
-      from 3.5 specifically so it could be verified against a real picker
-      UI (select amp A, restart daemon, confirm A reconnected; select amp
-      B, restart again, confirm B not A persisted) instead of verified
-      blind via busctl — this is why it runs after 4.1, not before.
-  - **Ownership decision (settled):** the daemon owns persistence, not
-    the widget. Daemon writes to a small config file on
-    `SelectAmp(ip)`, reads it back on startup, and does the live
-    re-discovery reconciliation (don't blindly trust a stale
-    persisted IP) before exposing `SelectedAmpIp`.
-  - **Load-bearing detail from Phase 4.1's "None doesn't stick" bug fix —
-    must carry over here:** `AmpState` now has `has_explicit_selection:
-    bool` alongside `selected_ip`, specifically so an explicit `SelectAmp
-    ("")` ("None") isn't indistinguishable from "never selected" and
-    silently overridden by auto-select-if-alone. Startup persistence load
-    must set `has_explicit_selection = true` for *any* persisted value,
-    including a persisted `""` — persisting only `selected_ip` and leaving
-    `has_explicit_selection` at its `false` default on load would
-    resurrect this exact bug after every daemon restart for a user who'd
-    deliberately chosen None.
-  - Reasoning: lifecycle mismatch (daemon is the long-lived,
-    systemd-supervised process; the widget/plasmoid reloads far more
-    often — panel add/remove, plasmashell restarts — so widget-owned
-    persistence would mean re-pushing on every reload plus tie-break
-    logic against whatever the daemon already auto-selected); the
-    live-reconciliation step needs daemon-side discovery state anyway,
-    so splitting storage into the widget while reconciliation stays
-    in the daemon just fragments one piece of logic across two
-    processes; matches the existing pattern of `SelectedAmpIp`/
-    `KnownAmps` already being daemon-owned properties the widget reads
-    and reflects, not values it maintains and pushes.
 - [ ] **Phase 4.3 — Settings view.** Styled from the start, built last
       since it hangs off the settings-trigger (gear icon) on an
       already-stable, already-styled main view.

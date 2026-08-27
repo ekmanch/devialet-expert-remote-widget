@@ -1,3 +1,4 @@
+use crate::config;
 use devialet_protocol as proto;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -204,6 +205,12 @@ impl AmpState {
     /// Phase-4.1 correction": without this, `SelectAmp("")` was
     /// indistinguishable from "never called" and got silently overridden
     /// by `effective_ip()`'s auto-select-if-alone branch.
+    ///
+    /// Phase 4.2: also persists `ip` to disk (`config::save_selected_ip`)
+    /// on every call, including `SelectAmp("")`, so the selection survives
+    /// a daemon restart - see `set_persisted_selection` for the startup
+    /// side of this. Persistence is best-effort (see that module's doc);
+    /// a write failure never fails this D-Bus call.
     #[zbus(name = "SelectAmp")]
     async fn select_amp(
         &mut self,
@@ -211,6 +218,7 @@ impl AmpState {
         #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
         let before = self.clone();
+        config::save_selected_ip(&ip);
         self.selected_ip = ip;
         self.has_explicit_selection = true;
         self.recompute();
@@ -255,6 +263,39 @@ impl AmpState {
         amp.model_name = Some(model_name);
         self.recompute();
         true
+    }
+
+    /// Applies a selection loaded from disk (`config::load_selected_ip`) at
+    /// daemon startup, before the D-Bus object server exists - called at
+    /// most once, from `main()`, on the `AmpState` passed into
+    /// `serve_at()`. No signal emission (nothing is listening yet).
+    ///
+    /// `ip` may legitimately be `""` - a persisted explicit `SelectAmp("")`
+    /// ("None") from before the last restart - and `has_explicit_selection`
+    /// must still be set `true` in that case. This is the load-bearing
+    /// half of Phase 4.2, carried over from the Phase 4.1 "None doesn't
+    /// stick" fix (see struct doc's "Post-Phase-4.1 correction"): if only
+    /// `selected_ip` were restored here and `has_explicit_selection` were
+    /// left at its `Default::default()` value of `false`, a user who'd
+    /// deliberately chosen "None" would see auto-select-if-alone silently
+    /// resurrect a selection on every daemon restart.
+    ///
+    /// Deliberately does NOT insert a synthetic `TrackedAmp` for `ip` -
+    /// `effective_ip()` will return `Some(ip)`, but `recompute()`'s
+    /// `self.amps.get(&ip)` lookup will miss until a real UDP broadcast
+    /// from that amp is actually ingested, so the primary properties
+    /// correctly show the not-connected state (`Online = false`,
+    /// `DeviceName = ""`, etc.) until then. This is exactly the
+    /// live-reconciliation Phase 4.2 asked for - it falls directly out of
+    /// `recompute()`'s existing None-branch, not new logic - and matches
+    /// the Kotlin app's own pattern of trusting `selectedIp` immediately on
+    /// load while `isAmpRecentlyHeard`/`discoveredAmps` (empty at startup
+    /// here, exactly like a fresh `amps: HashMap::new()`) independently
+    /// governs whether it's shown as actually connected.
+    pub fn set_persisted_selection(&mut self, ip: String) {
+        self.selected_ip = ip;
+        self.has_explicit_selection = true;
+        self.recompute();
     }
 
     /// Re-derives every exposed field with no new packet - only staleness
@@ -627,6 +668,108 @@ mod tests {
         assert_eq!(state.device_name, "My Devialet-ETH");
         assert_eq!(state.known_amps[0].3, "", "unresolved model name is empty, not absent/blank-but-set");
     }
+
+    // ---- Phase 4.2: persisted-selection startup behavior ----
+    //
+    // `set_persisted_selection` is what `main()` calls once at startup with
+    // whatever `config::load_selected_ip()` returned. These tests cover the
+    // three verification cases from the phase brief that unit tests can
+    // exercise (the fourth - "restart the real daemon and watch it
+    // reconnect" - needs a live amp and is done manually, not here).
+
+    #[test]
+    fn persisted_real_ip_is_restored_but_not_connected_until_a_real_broadcast_arrives() {
+        // Verification case 1/4: a persisted IP must be trusted for
+        // `AmpIp`/`SelectedAmpIp` immediately, but NOT shown as `Online`
+        // until an actual UDP broadcast from it is ingested - this is the
+        // live-reconciliation Phase 4.2 asked for, falling out of
+        // `recompute()`'s existing "unknown ip" branch rather than new
+        // logic (see `set_persisted_selection`'s doc).
+        let mut state = AmpState::default();
+        state.set_persisted_selection("192.168.1.50".to_string());
+
+        assert_eq!(state.selected_ip, "192.168.1.50");
+        assert_eq!(state.amp_ip, "192.168.1.50", "the persisted IP should still be reported, just not yet connected");
+        assert!(!state.online, "must not be treated as connected before a real broadcast is heard");
+        assert_eq!(state.device_name, "");
+
+        // Now the amp actually broadcasts - reconciliation completes.
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+        assert!(state.online, "must reconnect once a real broadcast from the persisted IP arrives");
+        assert_eq!(state.device_name, "Living Room Amp");
+    }
+
+    #[test]
+    fn switching_persisted_selection_to_a_different_amp_shows_the_new_one_not_the_old() {
+        // Verification case 2/4: simulates "select B, restart, confirm B
+        // (not A) persists" at the state level - a fresh AmpState loading
+        // B's IP must reflect B once B broadcasts, with no trace of A.
+        let mut state = AmpState::default();
+        state.set_persisted_selection("192.168.1.51".to_string());
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Amp A"));
+        state.ingest_status("192.168.1.51".to_string(), parsed_status("Amp B"));
+
+        assert_eq!(state.amp_ip, "192.168.1.51");
+        assert_eq!(state.device_name, "Amp B");
+        assert!(state.online);
+    }
+
+    #[test]
+    fn persisted_explicit_none_does_not_resurrect_auto_select_after_a_broadcast_arrives() {
+        // Verification case 3/4, the critical regression case: a persisted
+        // "" (a previously-explicit "None") must set
+        // has_explicit_selection=true, not just selected_ip="" - otherwise
+        // this is indistinguishable from "never selected" and
+        // auto-select-if-alone silently resurrects a selection, exactly
+        // the Phase 4.1 bug this was designed to prevent from coming back
+        // via a different code path (startup loading instead of a live
+        // SelectAmp("") call).
+        let mut state = AmpState::default();
+        state.set_persisted_selection(String::new());
+
+        assert_eq!(state.selected_ip, "");
+        assert!(state.has_explicit_selection, "a persisted \"\" must count as an explicit selection, not the default");
+        assert_eq!(state.amp_ip, "");
+        assert!(!state.online);
+
+        // The one amp on the network broadcasts - with a genuine "never
+        // selected" state this would auto-select it (see
+        // never_explicitly_selected_still_auto_selects_the_sole_known_amp
+        // above); with a persisted explicit None it must NOT.
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+
+        assert_eq!(state.amp_ip, "", "a persisted explicit None must stay None even once an amp is heard from");
+        assert_eq!(state.device_name, "");
+        assert!(!state.online);
+    }
+
+    #[test]
+    fn persisted_ip_for_an_amp_that_never_reappears_stays_not_connected() {
+        // Verification case 4/4: a persisted IP for an amp that's gone
+        // from the network must not be treated as connected just because
+        // it was the last selection - covered here by simply never
+        // ingesting a broadcast for it, regardless of other amps being
+        // present.
+        let mut state = AmpState::default();
+        state.set_persisted_selection("192.168.1.50".to_string());
+        state.ingest_status("192.168.1.99".to_string(), parsed_status("Some Other Amp"));
+
+        assert_eq!(state.amp_ip, "192.168.1.50", "the explicit selection must not be displaced by an unrelated amp broadcasting");
+        assert!(!state.online);
+        assert_eq!(state.device_name, "");
+    }
+
+    // Note: `select_amp` itself (the async zbus method that calls
+    // `config::save_selected_ip`) has no unit test here - it's an async
+    // method requiring a live zbus interface context this test module
+    // doesn't set up (same constraint as the existing has_explicit_selection
+    // regression test above, which pokes fields directly instead). The
+    // config module's own test suite (config.rs) covers save/load
+    // round-tripping in full; this file's tests cover what `select_amp` and
+    // `set_persisted_selection` do with the resulting `AmpState` once a
+    // selection (real or persisted) is applied. The actual `select_amp` ->
+    // disk write is confirmed by live daemon-restart verification instead
+    // (see TODO.md's Phase 4.2 verification log).
 
     #[test]
     fn resolved_model_name_survives_a_later_udp_broadcast_from_the_same_amp() {
