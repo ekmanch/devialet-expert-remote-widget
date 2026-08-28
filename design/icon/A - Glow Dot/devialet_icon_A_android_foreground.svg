@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <!-- Adaptive icon foreground layer. Canvas 108dp, safe zone ~66dp centered.
+       Mask/background layer applied separately by the launcher. -->
+  <g transform="translate(54,54) scale(2.1) translate(-17,-17)">
+    <circle cx="17" cy="17" r="7.5" fill="#e3a06a"/>
+  </g>
+</svg>
