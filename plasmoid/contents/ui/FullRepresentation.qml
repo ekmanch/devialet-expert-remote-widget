@@ -1206,6 +1206,13 @@ Item {
                 Slider {
                     id: volumeSlider
                     Layout.fillWidth: true
+                    // Widens the click/drag hit area to match the sibling
+                    // -/+ buttons' 26px row height, independent of the
+                    // background delegate's 4px drawn track below - QQC2's
+                    // Slider hit-tests presses against its own item bounding
+                    // box (implicitHeight), not the background/handle
+                    // delegate's drawn geometry. See Phase 4.2.2.
+                    implicitHeight: 26
                     from: root.volumeFloorDb
                     to: root.volumeCeilingDb
                     stepSize: root.volumeStepDb
