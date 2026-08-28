@@ -692,9 +692,21 @@ Item {
     }
 
     // ---- Settings trigger ----
-    // Opens nothing yet - Phase 4.3 builds the actual settings view. Wired
-    // as an explicit no-op (not left silently unwired) so it's obvious
-    // this is deliberately deferred, not forgotten.
+    // Opens nothing yet - Phase 4.3.0 builds the actual ConfigDialog. Wired
+    // toward the standard Plasma mechanism (Plasmoid.internalAction
+    // ("configure")) rather than a bespoke view-toggle, so 4.3.0 can slot
+    // a real config UI in without touching this icon's click wiring again -
+    // confirmed via real shipped applets (e.g. BasicAppletContainer.qml,
+    // BasicPlasmoidHeading.qml in plasma-workspace) that "configure" is a
+    // Plasma-internal QAction* auto-registered once metadata.json/config
+    // declare a config UI, not something the applet creates itself.
+    // internalAction() returns a nullptr QAction* until that exists
+    // (confirmed via corebindingsplugin.qmltypes: isPointer: true, no
+    // NOTIFY-guaranteed non-null) - null in QML - so `?.trigger()` is
+    // required to avoid a "Cannot call method 'trigger' of null" runtime
+    // warning; real Plasma code guards the exact same way
+    // (BasicPlasmoidHeading.qml: `onClicked: internalAction?.trigger()`).
+    // Currently a no-op in practice since no ConfigDialog exists yet.
     Rectangle {
         id: settingsTrigger
         anchors.top: parent.top
@@ -706,10 +718,12 @@ Item {
         color: settingsTriggerArea.containsMouse ? root.theme.surface2 : "transparent"
         z: 10
 
-        Label {
+        Kirigami.Icon {
             anchors.centerIn: parent
-            text: "⋯" // "⋯"
-            font.pixelSize: 15
+            width: 15
+            height: 15
+            source: Qt.resolvedUrl("../icons/settings_gear.svg")
+            isMask: true
             color: settingsTriggerArea.containsMouse ? root.theme.copperBright : root.theme.textFaint
         }
 
@@ -719,8 +733,7 @@ Item {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                // TODO(Phase 4.3): open the settings view. No-op for now -
-                // out of scope for Phase 4.0's pure visual pass.
+                Plasmoid.internalAction("configure")?.trigger()
             }
         }
     }
