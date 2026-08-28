@@ -822,17 +822,52 @@ architecture decisions; this file is just sequencing and status.
     CLAUDE.md and carried into 4.3.0's scope below rather than left as
     a stale assumption.
 
+- [x] **Phase 4.2.2 — Volume slider: widen the click/drag hit target.**
+      Investigated before implementing, per the phase's own instruction:
+      read `qquickslider_p.h` (Qt6 QtQuickTemplates2 header) and confirmed
+      `QQuickSlider` overrides `mousePressEvent` directly on the control
+      item itself — hit-testing is scoped to the control's own bounding
+      box (driven by its `implicitHeight`), not to the background/handle
+      delegate's drawn geometry (neither delegate has its own
+      `MouseArea`/accepted-buttons, so presses fall through to the
+      control). Also traced why the bug existed at all: this system's real
+      QQC2 style for `Slider` is `qqc2-desktop-style`'s
+      `/usr/lib/qt6/qml/org/kde/desktop/Slider.qml` (confirmed by locating
+      it — Plasma always runs `org.kde.desktop`, not `Basic`, for a bare
+      `import QtQuick.Controls`), whose `implicitHeight` binding
+      recomputes off whatever `background`/`handle` delegates are
+      assigned. Our `background` set `implicitHeight: 4`; our `handle` set
+      `height: 15` but never `implicitHeight` (0 by default for a plain
+      `Rectangle`); padding was 0 — so the control's actual on-screen
+      height was exactly 4px, matching the visible line exactly. This is
+      what made the hit area exactly as thin as the track.
+  - **Fix:** `volumeSlider` (`FullRepresentation.qml`) gained
+    `implicitHeight: 26`, matching the sibling `−`/`+` buttons' row
+    height (26px chosen over the 20-30px native-convention default of 24,
+    to make the whole control row visually uniform height). `background`
+    (4px line) and `handle` (15×15) delegates are untouched — both
+    already center via `topPadding + availableHeight/2 - height/2`, so
+    they stay pixel-identical, just now centered within a taller
+    invisible hit box. No MouseArea/DragHandler needed.
+  - Step buttons, debounce logic (`onPressedChanged`,
+    `volumeInteracting`, `lastVolumeSliderReleaseAtMs`), and the
+    `Binding` to `root.volumeDb` untouched, as scoped.
+  - **Verified live by you (2026-08-29):** pressing and dragging with the
+    mouse noticeably above/below the thin visible line starts and tracks
+    the drag correctly now; visible track appearance unchanged.
+
 ## Up next
 
-- [ ] **Phase 4.2.2 — Volume slider: pointer cursor on hover.** When
-      hovering over the volume slider, the cursor should change to a
-      pointer/hand-grab cursor (not the default arrow), per
-      design/mockups/devialet_tray_gear_icon_mockup.html. Scope:
-      cursor styling only — no change to slider behavior, drag
-      handling, or the existing debounce logic. Verify live: hovering
-      over the slider in the real flyout shows the new cursor; dragging
-      still works exactly as before.
-- [ ] **Phase 4.2.3 — Panel icon: switch to Glow Dot variant.** Replace
+- [ ] **Phase 4.2.3 — color on hover over power on/off** Set both color
+      and border of the power on/off button when hovering over the
+      button with the mouse.
+  - If the amplifier is on and the text changes to "Power off" when
+  hovering over the button, change the border, power icon, and
+  "Power off" text to red color.
+  - If the amplifier is off and the text changes to "Power on" when
+  hovering over the button, change the button border, power icon, and
+  "Power on" text to green color.
+- [ ] **Phase 4.2.4 — Panel icon: switch to Glow Dot variant.** Replace
       the current panel icon with
       design/icon/A - Glow Dot/devialet_icon_A_filled.svg. Scope: icon
       asset swap only. Confirm sizing/margin convention still holds
