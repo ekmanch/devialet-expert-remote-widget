@@ -234,6 +234,35 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
+## Settings ConfigDialog (Plasma-provided default — settled, do not re-derive)
+
+`Plasmoid.internalAction("configure")` is **not** null in a real installed
+Plasma 6 applet, even before this project declares any `config.qml`/
+`main.xml` of its own. Plasma's shell auto-provides a default
+`ConfigDialog` for every installed applet — with baseline **Keyboard
+Shortcuts** and **About** pages — regardless of whether the applet ships
+custom config UI. Confirmed live (2026-08-29, real panel, Phase 4.2.1):
+wiring the gear-icon trigger's `onClicked` to
+`Plasmoid.internalAction("configure")?.trigger()` opened a real,
+functioning "Devialet Remote Settings" window with those two pages,
+before any `config.qml`/`main.xml` existed in this repo.
+
+This corrects an earlier pre-implementation claim (made before that live
+test) that the action returns a nullable `QAction*` and is genuinely null
+until a `ConfigDialog` is declared — that claim was reasoned from the
+`QAction*` API surface being nullable in principle (and from a real guard
+seen in `BasicPlasmoidHeading.qml`), not from testing an actual installed
+applet, and it doesn't hold here. The `?.` guard is harmless to keep but
+isn't load-bearing — the action already resolves to something real.
+
+Practical consequence for any future settings-page work (e.g. Phase
+4.3.0): declaring `config.qml` + `main.xml` in `metadata.json` **adds a
+page to this already-existing dialog**, it does not create the dialog or
+wire up the trigger action — both already exist and already work. Confirm
+whether the custom page appears *alongside* the default Keyboard
+Shortcuts/About pages or requires explicit configuration to
+keep/suppress them — not yet verified either way.
+
 ## Environment
 
 - OS: CachyOS (Arch-based); Desktop: KDE Plasma.

@@ -787,31 +787,152 @@ architecture decisions; this file is just sequencing and status.
     system afterward so the widget isn't left disconnected.
   - Did not touch the widget/QML - daemon-only, per the phase's explicit
     scope (same as Phase 3.5).
+- [x] **Phase 4.2.1 — Settings trigger: dots → gear icon.** Replaced the
+      "⋯" text glyph with a proper gear icon per
+      design/mockups/devialet_tray_gear_icon_mockup.html.
+  - **Icon asset:** bundled the mockup's exact custom stroke-based
+    outline gear (`plasmoid/contents/icons/settings_gear.svg`, Feather-
+    style, matches the mockup's inline SVG spec exactly — viewBox,
+    stroke width, notch count) rather than a system Breeze
+    "configure" icon-theme name, so the brand-specific glyph is
+    preserved. Same recoloring pattern as Phase 4.1's panel icon:
+    `Kirigami.Icon { isMask: true; color: ... }`. Position/size/hover-
+    background mechanics (24×24, `root.theme.radiusSm`, hover bg
+    `surface2`) were already correct pre-existing structure — only the
+    glyph itself changed.
+  - **Click handler:** swapped the `// TODO(Phase 4.3)` no-op comment
+    for `Plasmoid.internalAction("configure")?.trigger()`. The `?.`
+    guard was added on the pre-implementation claim that
+    `internalAction("configure")` returns a nullable `QAction*` until
+    a `ConfigDialog` exists (cited against `BasicPlasmoidHeading.qml`'s
+    own use of the same guard) - reasonable defensive coding, but see
+    the correction below.
+  - **Live verification (2026-08-29, real panel) surfaced a wrong
+    pre-implementation assumption, not just confirmed the icon.**
+    Idle/hover rendering matched the mockup exactly. But clicking the
+    gear did **not** no-op as predicted — it opened a real, functioning
+    `ConfigDialog` window ("Devialet Remote Settings") with baseline
+    **Keyboard Shortcuts** and **About** pages. Root cause: Plasma
+    auto-provides a default `ConfigDialog` for every installed applet
+    regardless of whether it declares its own `config.qml`/`main.xml`
+    - `internalAction("configure")` was never actually null here, so
+    the click always did something, even before this phase existed.
+    The `?.` guard is harmless but was guarding against a case that
+    doesn't occur in a real installed Plasma 6 applet. Corrected in
+    CLAUDE.md and carried into 4.3.0's scope below rather than left as
+    a stale assumption.
 
 ## Up next
 
-- [ ] **Phase 4.3 — Settings view.** Styled from the start, built last
-      since it hangs off the settings-trigger (gear icon) on an
-      already-stable, already-styled main view.
-  - **Settled split (two kinds of state, not one):** *Blur background*,
-    *Reduce motion*, *Volume step per scroll notch* are pure UI/widget
-    preferences, stored in `plasmoid.configuration` (KConfig).
-    *Launch at login* is not an independently-stored preference — it's
+- [ ] **Phase 4.2.2 — Volume slider: pointer cursor on hover.** When
+      hovering over the volume slider, the cursor should change to a
+      pointer/hand-grab cursor (not the default arrow), per
+      design/mockups/devialet_tray_gear_icon_mockup.html. Scope:
+      cursor styling only — no change to slider behavior, drag
+      handling, or the existing debounce logic. Verify live: hovering
+      over the slider in the real flyout shows the new cursor; dragging
+      still works exactly as before.
+- [ ] **Phase 4.2.3 — Panel icon: switch to Glow Dot variant.** Replace
+      the current panel icon with
+      design/icon/A - Glow Dot/devialet_icon_A_filled.svg. Scope: icon
+      asset swap only. Confirm sizing/margin convention still holds
+      (re-check against the Breeze-inset convention established during
+      Phase 4.1's icon work — don't assume the new artwork already has
+      equivalent padding) rather than assuming the old scale/inset
+      values carry over unchanged. Verify live: new icon renders
+      correctly-sized and correctly-positioned in the real panel,
+      matching sibling icons the way Phase 4.1's did.
+- [ ] **Phase 4.3.0 — Settings page: add to the existing ConfigDialog.**
+      Corrected scope per Phase 4.2.1's live-verification finding: a
+      default `ConfigDialog` (Keyboard Shortcuts + About pages) already
+      exists and already opens on gear-icon click, provided automatically
+      by Plasma for every installed applet — there is no dialog to create
+      and no action to wire. This phase is "declare `config.qml` +
+      `main.xml` in `metadata.json` to add the widget's own settings page
+      alongside the existing default pages," not "create the
+      dialog/action from nothing." The custom page itself can be empty
+      — a header/title only, no settings content, no toggles, nothing.
+      Investigate rather than assume: confirm whether the custom page
+      appears *alongside* Keyboard Shortcuts/About or requires explicit
+      configuration to keep/suppress them. Verify live: dialog opens
+      showing the new page (plus whatever became of the default pages,
+      confirmed either way), main view is completely unaffected.
+- [ ] **Phase 4.3.1 — Volume step size UI (no wiring).** Add the
+      0.5/1/2 dB segmented control to the ConfigDialog. Purely visual
+      — selecting an option doesn't need to persist or do anything yet.
+- [ ] **Phase 4.3.2 — Volume step size wiring.** Store the selection in
+      `plasmoid.configuration` (KConfig) and make the existing +/-
+      step buttons in the main view actually read it, replacing the
+      hardcoded 0.5dB. Verify live: set each of 0.5/1/2 dB, return to
+      the main view, confirm each button click moves the amp's volume
+      by exactly that amount.
+- [ ] **Phase 4.3.3 — Blur background toggle UI (no wiring).** Add the
+      toggle to the ConfigDialog. Purely visual — flipping it doesn't
+      need to do anything yet.
+  - State model: this is a pure UI/widget preference, stored in
+    `plasmoid.configuration` (KConfig) — settled, not something to
+    re-derive when wiring it up in 4.3.4.
+- [ ] **Phase 4.3.4 — Blur background wiring.** Wire the toggle to
+      switch `Plasmoid.backgroundHints` between the default (blur-
+      behind + system shadow, Phase 4.0's baseline) and `NoBackground`.
+      `NoBackground` needs a custom-drawn fallback panel (matching the
+      widget's own copper/graphite background, not a mismatched color
+      — this was a real bug last attempt, check it explicitly this
+      time) so the flyout doesn't look broken with blur off. Verify
+      live: toggle in both directions, confirm no dead space or
+      clipping is introduced (shouldn't be possible with 4.3.0's real
+      ConfigDialog approach, but confirm rather than assume).
+- [ ] **Phase 4.3.5 — Transparency toggle + level slider UI (no
+      wiring).** Add both controls to the ConfigDialog — toggle plus a
+      0-100% slider that's visually disabled/dimmed when the toggle is
+      off. Purely visual, nothing reads these values yet.
+  - State model: pure UI/widget preference, KConfig — same as blur,
+    independent of it (not mutually exclusive, per earlier design
+    discussion).
+- [ ] **Phase 4.3.6 — Transparency on/off wiring.** Make the toggle
+      actually apply *some* alpha value to the widget's own content
+      background when on (a fixed default level is fine here — the
+      slider itself is 4.3.7's job). Verify live: toggle on/off,
+      confirm the panel's background visibly changes opacity.
+- [ ] **Phase 4.3.7 — Transparency level slider wiring.** Make the
+      slider's value actually drive the panel's alpha in real time.
+      This is the control that got stuck at a fixed value and never
+      responded to drag input last attempt — confirm the Slider is
+      genuinely receiving pointer/drag events (check for a binding loop
+      between the slider's `value` and the KConfig property it both
+      reads from and writes to, since "frozen, can't drag at all" was
+      the actual symptom last time, not "drags but doesn't visually
+      update"). Verify live: drag to several different positions,
+      confirm the panel's visible transparency changes accordingly at
+      each one, not just at the default.
+- [ ] **Phase 4.3.8 — Launch at login toggle UI (no wiring).** Add the
+      toggle to the ConfigDialog. Purely visual — no systemd
+      interaction yet, just a static on/off control.
+  - State model: NOT an independently-stored KConfig preference — it's
     a live reflection of `systemctl --user is-enabled` for the Phase
-    3.6 systemd unit. Toggling it enables/disables the unit directly
-    rather than setting a KConfig bool that could drift out of sync
-    with actual systemd state.
-  - Given the two different state models, likely drafted as two
-    sub-prompts (KConfig-backed toggles vs. the systemd-state row)
-    rather than one.
-- [ ] **Phase 4.4 - scroll-over-panel-icon volume control.** When the
+    3.6 systemd unit. Flagging this now so 4.3.9 doesn't get built as
+    a stored bool by mistake.
+- [ ] **Phase 4.3.9 — Launch at login wiring.** Reading the toggle's
+      displayed state must query actual systemd state
+      (`systemctl --user is-enabled`), not a stored bool; toggling it
+      calls `systemctl --user enable`/`disable` directly. Investigate
+      the correct way to shell out to systemd from QML (likely the same
+      `Plasma5Support.DataSource` executable-engine pattern already
+      used for `devialet-ctl` invocations) and handle query/toggle
+      failure explicitly rather than assuming success. Verify live:
+      toggle it, confirm via `systemctl --user is-enabled` independently
+      that it actually changed, not just that the UI shows a different
+      state; restart the widget and confirm the toggle reflects real
+      systemd state on load, not a remembered UI value.
+- [ ] **Phase 4.4.0 - scroll-over-panel-icon volume control.** When the
       mouse is hovering over the widget's panel icon, it should be
       possible to scroll using the mouse wheel to change the volume
       up/down depending on if the user is scrolling up or down. (Renamed
       from "scroll-over-tray-icon" - this widget is panel-pinned, not
       tray-hosted, see the architecture-change entry above. Scope itself
-      is unchanged, not started here.)
-- [ ] **Phase 4.5 - install script + devialet-ctl packaging story.**
+      is unchanged, not started here.) Should read the same volume-step
+      KConfig value as Phase 4.3.2's buttons, not a separate setting.
+- [ ] **Phase 4.5.0 - install script + devialet-ctl packaging story.**
       Bash install script (.sh) so a user can clone the repo, run it, and
       have the widget fully installed and usable — this necessarily
       includes deciding how devialet-ctl gets placed somewhere on PATH
