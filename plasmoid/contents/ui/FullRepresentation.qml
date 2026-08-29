@@ -1399,13 +1399,13 @@ Item {
                         implicitWidth: 13
                         implicitHeight: 13
                         source: "system-shutdown-symbolic"
-                        color: (powerBtn.hovered && !root.power) ? root.theme.successBright : root.theme.text
+                        color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.successBright) : root.theme.text
                     }
                     Label {
                         text: root.power ? "Power Off" : "Power On"
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: (powerBtn.hovered && !root.power) ? root.theme.successBright : root.theme.text
+                        color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.successBright) : root.theme.text
                     }
                     Item { Layout.fillWidth: true }
                 }

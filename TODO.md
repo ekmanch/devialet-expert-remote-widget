@@ -893,18 +893,38 @@ architecture decisions; this file is just sequencing and status.
     while the amp is off shows a green border, icon, and "Power On"
     text, screenshot confirmed.
 
+- [x] **Phase 4.2.4 — Power button hover: on → red.** When the
+      amplifier is on (button shows "Power Off"), hovering over the
+      power button changes its border, icon, and text to red. Per
+      design/mockups/devialet_tray_boot_state_mockup.html
+      (`.action-btn.power-btn.state-on:hover{border-color:var(--danger);
+      color:var(--danger);}`) — border-color + color only, both the
+      *same* `--danger` value (`#b5544a`), unlike 4.2.3's off-hover
+      rule which used two shades (`--success` for border,
+      `--success-bright` for text). Confirmed by reading the CSS
+      before implementing.
+  - **Investigated before implementing, per the phase's own
+    instruction:** after 4.2.3, `background.border.color` on the power
+    button (`FullRepresentation.qml`) already branched correctly
+    (`theme.danger` when hovered+on, `theme.success` when hovered+off,
+    `theme.divider` otherwise) — untouched by this phase. The gap was
+    the `Kirigami.Icon`/`Label` `color` bindings inside
+    `contentItem`, which 4.2.3 had only wired for the off+hovered case
+    (`successBright`); on+hovered fell through to `theme.text`, so
+    icon/label didn't redden on hover while the amp was on.
+  - **Fix:** extended both the icon and label `color` bindings to a
+    three-way branch: `powerBtn.hovered ? (root.power ?
+    root.theme.danger : root.theme.successBright) : root.theme.text`.
+    No new `Theme.qml` property needed — `theme.danger` already
+    existed (added before 4.2.3, ported from the same `--danger` var).
+  - Scope held: off-state hover (green border/icon/text) untouched;
+    `border.color` logic untouched; no other button/element touched.
+  - **Verified live by you (2026-08-29):** hovering the power button
+    while the amp is on shows a red border, icon, and "Power Off"
+    text, screenshot confirmed; off-state hover re-checked unchanged.
+
 ## Up next
 
-- [ ] **Phase 4.2.4 — Power button hover: on → red.** When the
-      amplifier is on (button shows "Power Off"), hovering over the
-      power button should change its border, icon, and text to red.
-      Per the same mockup (`.action-btn.power-btn.state-on:hover`).
-      Now that 4.2.3 has landed, note the on-hover styling currently
-      only sets `border.color: theme.danger` (icon/label stay
-      `theme.text`) — decide whether to extend it to icon/text
-      (`theme.danger`, matching the mockup's `color:var(--danger)` on
-      both border and text) as part of this phase, same as 4.2.3 added
-      for the off state.
 - [ ] **Phase 4.2.5 — Panel icon: switch to Glow Dot variant.** Replace
       the current panel icon with
       design/icon/A - Glow Dot/devialet_icon_A_filled.svg. Scope: icon
