@@ -141,12 +141,6 @@ KCM.SimpleKCM {
         SectionLabel { text: "Appearance"; first: true }
 
         SettingsRow {
-            name: "Blur background"
-            desc: "Glassy vibrancy behind the flyout"
-            SettingsSwitch { id: blurSwitch; checked: true }
-        }
-
-        SettingsRow {
             name: "Transparency"
             desc: "Let the desktop show through the panel"
             SettingsSwitch { id: transSwitch; checked: true }
@@ -207,6 +201,19 @@ KCM.SimpleKCM {
                 Layout.preferredWidth: 34
                 horizontalAlignment: Text.AlignRight
             }
+        }
+
+        // Requires Transparency (KWin's Blur effect only blurs behind
+        // semi-transparent windows) - dimmed/inert when that switch is
+        // off, same opacity/enabled cascade as the sub-row above.
+        SettingsRow {
+            opacity: transSwitch.checked ? 1.0 : 0.35
+            enabled: transSwitch.checked
+            Behavior on opacity { NumberAnimation { duration: 150 } }
+
+            name: "Blur background"
+            desc: "Glassy vibrancy behind the flyout. Requires transparency to enable."
+            SettingsSwitch { id: blurSwitch; checked: true }
         }
 
         // ---- Volume ----

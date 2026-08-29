@@ -1352,25 +1352,44 @@ architecture decisions; this file is just sequencing and status.
     `stepSize: root.volumeStepDb` behaves the same way as the button
     handlers.
 
+- [x] **Phase 4.4.2.1 — Appearance section: reorder Blur below
+      Transparency, add dependent-row disable.** Per the mockup's
+      revision (`devialet_config_dialog_mockup_v3.html`): "Blur
+      background" now sits below Transparency (and its slider sub-row)
+      instead of above it, its description text is now "Glassy
+      vibrancy behind the flyout. Requires transparency to enable.",
+      and its row dims/disables whenever the Transparency switch is
+      off. Still purely visual/no-op, same as the rest of Phase
+      4.4.1 - both toggles remain local UI state only, nothing wired to
+      real KConfig or background rendering yet.
+  - **Investigated before implementing, per instruction:** read
+    `SettingsRow.qml`/`SettingsSwitch.qml` directly rather than
+    assuming a disable mechanism existed. Confirmed `SettingsRow`'s
+    root is a bare `ColumnLayout` (an `Item` subclass) with no
+    `opacity`/`enabled` alias of its own - none was needed, since Qt
+    Quick's `opacity` and `enabled` are both documented as cascading
+    down an item's entire child subtree automatically (`Item.enabled`'s
+    own doc: a disabled ancestor disables all descendants regardless of
+    their own `enabled` value). This is the same mechanism the existing
+    Transparency slider sub-row already relied on
+    (`ConfigGeneral.qml`'s bare `RowLayout` with
+    `opacity`/`enabled`/`Behavior on opacity` bound to
+    `transSwitch.checked`) - so Blur's `SettingsRow` instance just
+    needed the identical three bindings added directly on it, no change
+    to `SettingsRow.qml`/`SettingsSwitch.qml` themselves.
+  - `ConfigGeneral.qml`: moved the Transparency `SettingsRow` + its
+    slider sub-row above Blur's `SettingsRow`; updated Blur's `desc`;
+    added `opacity: transSwitch.checked ? 1.0 : 0.35`,
+    `enabled: transSwitch.checked`, `Behavior on opacity` to Blur's
+    `SettingsRow`.
+  - **Verified live by you:** all four checks confirmed - Blur's row
+    fully interactive with Transparency on; dims and becomes
+    unclickable immediately when Transparency is switched off; re-
+    enables immediately when switched back on; row order matches the
+    mockup exactly (Transparency + slider sub-row, then Blur beneath).
+
 ## Up next
 
-- [ ] **Phase 4.4.2.1 — Appearance section: reorder Blur below
-      Transparency, add dependent-row disable.** Per the mockup's
-      revision: move the "Blur background" row to sit below
-      Transparency (and its slider sub-row) rather than above it, and
-      update Blur's description text to "Glassy vibrancy behind the
-      flyout. Requires transparency to enable." Blur's row must be
-      visibly disabled/dimmed (same `.kcm-row.disabled { opacity:0.35;
-      pointer-events:none; }` treatment already used for the
-      Transparency slider's own sub-row) whenever the Transparency
-      toggle is off, and re-enabled the instant Transparency is
-      switched back on. This is still purely visual/no-op, same as the
-      rest of Phase 4.4.1 - both toggles remain local UI state only,
-      nothing is wired to real KConfig or background rendering yet.
-  - Verify live: with Transparency on, Blur's row is fully interactive.
-    Toggle Transparency off - confirm Blur's row visibly dims and
-    becomes unclickable immediately. Toggle Transparency back on -
-    confirm Blur's row re-enables immediately.
 - [ ] **Phase 4.4.3 — Transparency on/off wiring.** Store the toggle's
       value in `plasmoid.configuration` (KConfig) so it persists across
       dialog closes and widget reloads, and make it actually apply
