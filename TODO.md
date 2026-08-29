@@ -969,42 +969,103 @@ architecture decisions; this file is just sequencing and status.
     copper dot + glow ring at correct size next to sibling systray
     icons.
 
+- [x] **Phase 4.3.0 — Power-on "booting" state: daemon-side.** Exposes
+      a three-state `PowerState` (`"Off"`/`"Booting"`/`"On"`) over
+      D-Bus, tracked per-amp, plus a new `BeginPowerOnBoot(ip)` method
+      to start tracking a boot. Daemon-owned, matching this project's
+      convention that long-lived state belongs in the systemd-
+      supervised daemon, not the widget.
+  - **Investigated before implementing, per the phase's own
+    instruction:** found that the daemon never sends the power-on
+    command at all — that's `devialet-ctl`, invoked directly by QML,
+    which by design "never talks to the daemon or D-Bus" (CLAUDE.md).
+    So there was no existing "where the power-on command is sent in
+    the daemon" to show — the premise didn't hold. Resolved as: this
+    phase adds the D-Bus surface for something to report a boot
+    starting; nothing calls it yet (Phase 4.3.1, blocked on this
+    phase, is what wires QML to call it — orthogonal to `devialet-ctl`,
+    whose "never talks to D-Bus" boundary stays intact permanently).
+  - **Shape:** `PowerState: String` is additive alongside the existing
+    `Power: bool` (not a type change to it) — `Power` already has live
+    QML bindings that would've broken from a wire-format change even
+    though no QML is touched this phase. `TrackedAmp` gained
+    `boot_deadline: Option<Instant>`, carried forward across
+    re-ingestion exactly like `model_name` (a naive overwrite would
+    wipe it on the amp's next ~1s broadcast). `BOOT_TIMEOUT` originally
+    15s per spec — see live verification below for why it's now 20s.
+  - **Timer:** no spawned task — `resolve_boot_deadlines()` (clears a
+    deadline once `power_on` is confirmed true, or the deadline
+    elapses) runs inside `recompute()`, which already fires on every
+    real UDP packet *and* the receive loop's existing 1s `POLL_TICK`
+    staleness tick, so the fallback is checked at least once a second
+    with zero new plumbing. Confirmed disconnect/reconnect-safe: since
+    `PowerState` is a real zbus property (not signal-only), any client
+    querying mid-boot gets the live derived value directly via
+    `Properties.Get`, not dependent on catching a specific signal.
+  - **`BeginPowerOnBoot` double-call guard:** confirmed with you and
+    implemented as proposed — no-ops (doesn't reset/extend the
+    deadline) if a boot is already in progress for that amp, so
+    repeated calls can't keep it reporting "Booting" indefinitely.
+    Noted for 4.3.1: the widget disabling the power button during
+    boot is the primary protection against spamming; this is
+    defense-in-depth against races/stale clients.
+  - **Fallback:** falls out of the derivation with no extra code —
+    once `resolve_boot_deadlines` clears an expired deadline with
+    `power_on` still false, `PowerState` is just `"Off"`. No retry, no
+    distinct error state.
+  - **Tests:** 5 new unit tests (`cargo test -p devialet-remote-daemon`,
+    32/32 passing) covering Off/Booting/On derivation, deadline
+    clearing on real confirmation, timeout fallback, and a non-primary
+    amp's boot resolving independently of the primary one.
+    `BeginPowerOnBoot` itself has no unit test, same constraint as the
+    existing `select_amp` (async zbus method, no interface context in
+    the test module) — covered by live verification instead.
+  - **Verified live against the real amp (2026-08-29):** rebuilt the
+    release daemon, restarted the systemd unit, `busctl --user monitor`
+    while triggering a real boot. Real timeline: `BeginPowerOnBoot` at
+    T+0 → `PowerState` "Booting" immediately; at **T+15.07s** the
+    original 15s timeout fired with no confirmation yet → fell back to
+    "Off"; at **T+16.07s** the amp's real UDP broadcast confirmed
+    power-on → "On". This amp's real boot time (~16s) sits right past
+    a 15s timeout, so an ordinary successful boot would flash "Off"
+    before "On" — not a bug, but real evidence 15s was too tight.
+    Raised `BOOT_TIMEOUT` to 20s (your call, ~4s headroom over the one
+    real sample), rebuilt, retested (32/32), restarted the live daemon.
+  - **Deliberately forced the pure-timeout path** (isolated from the
+    real-boot race above): amp powered off for real, `BOOT_TIMEOUT`
+    temporarily dropped to 4s, `BeginPowerOnBoot` called with **no**
+    real power-on command sent — `PowerState` held "Booting" for the
+    full window then fell back to "Off" and stayed there, confirming
+    the failure path with no real (rare) boot failure needed. Reverted
+    the constant to 20s afterward, rebuilt, retested, restarted the
+    live daemon, and sent a real power-on to leave the amp back "On"
+    (its state at the start of this verification).
+
 ## Up next
 
-- [ ] **Phase 4.3 — Power-on "booting" intermediate state (daemon +
-      widget).** The amp's UDP status only reports off/on — there's no
-      distinct "booting" signal — and power-on is slow while power-off
-      is fast. Per
-      design/mockups/devialet_tray_boot_state_mockup.html: clicking
-      "Power On" should immediately show an intermediate "booting"
-      state (spinner replacing the power icon, "Powering on…" label,
-      pulsing amber amp-status dot, amp header sub-text "Booting…"),
-      then transition to "on" once the amp's real status confirms it,
-      or fall back to "off" if a timeout elapses first. Power-off stays
-      an immediate transition, no intermediate state, unchanged.
-  - **Daemon-owned, not QML-owned:** the daemon must run the optimistic
-    boot timer itself (push "booting" over D-Bus immediately on
-    power-on command, then push "on" on confirmed status or "off" on
-    timeout) — matches this project's existing convention that
-    long-lived, systemd-supervised state belongs in the daemon rather
-    than the widget, which reloads more frequently.
-  - **Timeout: 15 seconds**, per your own real-world observation of how
-    long the amp typically takes to boot. Amp boot failures are
-    expected to be extremely rare (not yet observed even once), so this
-    is a safety-net fallback rather than a commonly-hit path — implement
-    it, but don't over-invest in polishing the rare-failure UX beyond
-    what the mockup already shows (falls back to plain "off").
-  - Investigate before implementing: confirm the exact D-Bus property/
-    signal shape for exposing a three-state (off/booting/on) status to
-    QML — likely an addition to whatever property already carries
-    on/off state today — and show it to me before writing QML that
-    assumes a specific shape.
+- [ ] **Phase 4.3.1 — Power-on "booting" state: widget-side.** Consume
+      the three-state status from Phase 4.3.0 and drive the booting UI
+      per design/mockups/devialet_tray_boot_state_mockup.html: spinner
+      replacing the power icon, "Powering on…" label, pulsing amber
+      amp-status dot, amp header sub-text "Booting…" — transitioning
+      to the existing "on" or "off" visual states once the daemon
+      reports one. Blocked on 4.3.0's D-Bus shape being confirmed.
+  - **Button must be unclickable for the entire booting duration** —
+    no repeat power-on, no power-off — per the mockup's
+    `.state-booting{ cursor:default; pointer-events:none; }`. This is
+    the primary defense against the user spamming the button during
+    boot; the daemon's own idempotency guard on BeginPowerOnBoot
+    (Phase 4.3.0) is the secondary one, not a substitute for this.
   - Verify live: click Power On, confirm the booting UI appears
-    immediately and the real amp is heard to power on within the
-    window; separately, a way to simulate/force the timeout path
-    (e.g. temporarily lowering the timeout constant, or disconnecting
-    the amp mid-boot) should be discussed before calling this phase
-    done, since the failure path may be hard to trigger for real.
+    immediately and transitions to "on" once the real amp finishes
+    booting; separately, discuss a way to force the timeout path
+    (e.g. temporarily lowering 4.3.0's timeout constant, or
+    disconnecting the amp mid-boot) to confirm the "on"→"off" fallback
+    UI, since the failure path may be hard to trigger for real.
+  - **Also verify the button is genuinely inert while booting**, not
+    just visually styled as disabled — click it during the booting
+    window and confirm nothing happens (no command sent, no state
+    change), not just that it looks unclickable.
 - [ ] **Phase 4.4.0 — Settings page: add to the existing ConfigDialog.**
       Corrected scope per Phase 4.2.1's live-verification finding: a
       default `ConfigDialog` (Keyboard Shortcuts + About pages) already

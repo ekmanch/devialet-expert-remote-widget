@@ -2,12 +2,28 @@ use crate::config;
 use devialet_protocol as proto;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use zbus::interface;
 
 pub const BUS_NAME: &str = "com.ekmanch.DevialetRemote";
 pub const OBJECT_PATH: &str = "/com/ekmanch/DevialetRemote/Amp";
 pub const INTERFACE_NAME: &str = "com.ekmanch.DevialetRemote.Amp1";
+
+/// Phase 4.3.0: how long the daemon waits, after `BeginPowerOnBoot` is
+/// called for an amp, for a real UDP status broadcast to confirm
+/// `power_on = true` before silently giving up and reporting `PowerState =
+/// "Off"` again - see `AmpState::resolve_boot_deadlines`. No retry, no
+/// distinct error/failure state - amp boot failures are expected to be
+/// extremely rare (not yet observed even once), so this isn't polished
+/// beyond a silent fallback.
+///
+/// 20s, not the originally-specified 15s: live verification against a
+/// real Devialet Expert 140 Pro measured an actual boot time of ~16.07s
+/// (BeginPowerOnBoot -> real UDP confirmation, busctl-monitor timestamps,
+/// see TODO.md's Phase 4.3.0 verification log) - with 15s, an ordinary
+/// successful boot would flash "Off" for about a second before settling
+/// on "On". 20s gives ~4s of headroom above that one real sample.
+const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// One amp's last-known status broadcast, keyed by IP in `AmpState::amps`.
 /// Never evicted once seen - matches the Kotlin app's `discoveredAmps`
@@ -27,6 +43,15 @@ struct TrackedAmp {
     /// Once set, never cleared - matches the Kotlin app, which also never
     /// resets a resolved `modelName` back to `null`.
     model_name: Option<String>,
+    /// Phase 4.3.0: set by `BeginPowerOnBoot` to `Some(deadline)`, cleared
+    /// back to `None` by `resolve_boot_deadlines` once the boot resolves
+    /// (real `power_on = true` confirmed, or `BOOT_TIMEOUT` elapses).
+    /// `Some` is what makes `PowerState` report "Booting" regardless of
+    /// the amp's last-known `power_on` bit. Carried forward across
+    /// re-ingestion in `ingest_status`, same reasoning as `model_name`
+    /// above - a naive overwrite would wipe it on the very next ~1s status
+    /// broadcast.
+    boot_deadline: Option<Instant>,
 }
 
 /// D-Bus-exposed state, covering both the Phase 1-3 "primary amp" surface
@@ -84,6 +109,14 @@ pub struct AmpState {
     amp_ip: String,
     online: bool,
     power: bool,
+    /// Phase 4.3.0: three-state `"Off"` / `"Booting"` / `"On"`, additive
+    /// alongside `power` above rather than replacing it - `power` keeps
+    /// its original bool wire type unchanged since already-shipped QML
+    /// binds to it directly (see this field's `#[zbus(property)]` doc for
+    /// the full reasoning). Empty string only transiently, before the
+    /// first `recompute()` call ever runs (same as `device_name`/`amp_ip`
+    /// below) - never a value a real D-Bus client should see settle.
+    power_state: String,
     muted: bool,
     volume_raw: u8,
     volume_db: f64,
@@ -117,6 +150,21 @@ impl AmpState {
     #[zbus(property, name = "Power")]
     pub fn power(&self) -> bool {
         self.power
+    }
+
+    /// Phase 4.3.0: `"Off"` / `"Booting"` / `"On"` - additive alongside
+    /// `Power` above, not a replacement for it. `Power` remains a pure,
+    /// unfiltered reflection of the amp's real UDP `power_on` bit (so the
+    /// already-shipped QML reading it keeps working completely unchanged);
+    /// `PowerState` layers the transient "Booting" window on top, driven
+    /// by `BeginPowerOnBoot` below plus `resolve_boot_deadlines`. Nothing
+    /// calls `BeginPowerOnBoot` yet as of this phase - the widget-side
+    /// wiring is Phase 4.3.1, blocked on this property's shape - so in
+    /// practice this currently only ever reads "On"/"Off" until exercised
+    /// manually (e.g. via `busctl call ... BeginPowerOnBoot`).
+    #[zbus(property, name = "PowerState")]
+    pub fn power_state(&self) -> String {
+        self.power_state.clone()
     }
 
     #[zbus(property, name = "Muted")]
@@ -229,6 +277,52 @@ impl AmpState {
         }
         Ok(())
     }
+
+    /// Phase 4.3.0: marks `ip` as beginning a power-on boot sequence.
+    /// `PowerState` reports `"Booting"` for it (once it's the effective/
+    /// primary amp - see `recompute`'s `effective_ip` logic) until either a
+    /// real UDP broadcast confirms `Power = true`, or `BOOT_TIMEOUT` (20s)
+    /// elapses with no confirmation - whichever happens first, resolved by
+    /// `resolve_boot_deadlines` on the next `recompute()` (driven by every
+    /// real UDP packet AND the receive loop's 1s staleness tick, so no
+    /// separate timer/task is needed here).
+    ///
+    /// No-ops (no state change, no signal) in two cases:
+    /// - `ip` has no `TrackedAmp` entry yet (never heard broadcasting) -
+    ///   mirrors `resolve_model_name`'s existing "unknown ip" guard. Can't
+    ///   realistically happen via a legitimate caller, since a power-on is
+    ///   only ever requested for an amp already known to be broadcasting.
+    /// - A boot is already in progress for `ip` (`boot_deadline` already
+    ///   `Some`) - deliberately does NOT reset/extend the deadline, so a
+    ///   repeated call (a race, a stale/reconnecting client re-sending)
+    ///   can't keep an amp reporting "Booting" indefinitely. Phase 4.3.1's
+    ///   widget is expected to disable the power button for the whole
+    ///   booting window anyway - this is defense-in-depth against races,
+    ///   not the primary protection against a user spamming the button.
+    ///
+    /// Nothing calls this yet as of this phase - see this struct's
+    /// `power_state` doc.
+    #[zbus(name = "BeginPowerOnBoot")]
+    async fn begin_power_on_boot(
+        &mut self,
+        ip: String,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let before = self.clone();
+        match self.amps.get_mut(&ip) {
+            Some(amp) if amp.boot_deadline.is_none() => {
+                amp.boot_deadline = Some(Instant::now() + BOOT_TIMEOUT);
+            }
+            _ => return Ok(()), // unknown ip, or a boot is already in progress - no-op either way
+        }
+        self.recompute();
+        if !states_equal(&before, self) {
+            emit_all(self, &emitter)
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
 impl AmpState {
@@ -241,7 +335,11 @@ impl AmpState {
         // naive overwrite here would wipe a Phase 3.7 mDNS resolution on
         // every single ~1s UDP broadcast from that amp.
         let model_name = self.amps.get(&ip).and_then(|amp| amp.model_name.clone());
-        self.amps.insert(ip, TrackedAmp { status, last_seen: Instant::now(), model_name });
+        // Same reasoning, Phase 4.3.0: an in-progress boot_deadline must
+        // not be wiped by the very next status broadcast that arrives
+        // while still mid-boot (the amp can broadcast up to ~5Hz).
+        let boot_deadline = self.amps.get(&ip).and_then(|amp| amp.boot_deadline);
+        self.amps.insert(ip, TrackedAmp { status, last_seen: Instant::now(), model_name, boot_deadline });
         self.recompute();
     }
 
@@ -298,11 +396,16 @@ impl AmpState {
         self.recompute();
     }
 
-    /// Re-derives every exposed field with no new packet - only staleness
-    /// (elapsed time since each amp's `last_seen`) can have changed. Called
-    /// once per receive-loop tick even with no incoming packet, so an amp
-    /// going quiet is still noticed and reflected (both in `Online` for the
-    /// primary amp and per-entry in `KnownAmps`).
+    /// Re-derives every exposed field with no new packet - staleness
+    /// (elapsed time since each amp's `last_seen`) and, since Phase 4.3.0,
+    /// any in-progress boot deadline can have changed. Called once per
+    /// receive-loop tick even with no incoming packet, so an amp going
+    /// quiet is still noticed and reflected (both in `Online` for the
+    /// primary amp and per-entry in `KnownAmps`) - and, not incidentally,
+    /// this is also what gives `BOOT_TIMEOUT` a place to actually get
+    /// checked without a dedicated timer/task: `resolve_boot_deadlines`
+    /// (called from `recompute` below) re-evaluates every tracked amp's
+    /// `boot_deadline` on this same tick.
     pub fn recompute_staleness(&mut self) {
         self.recompute();
     }
@@ -324,7 +427,30 @@ impl AmpState {
         None
     }
 
+    /// Phase 4.3.0: clears `boot_deadline` for every tracked amp whose
+    /// boot has resolved one way or the other - either a real UDP
+    /// broadcast confirmed `power_on = true`, or `BOOT_TIMEOUT` has
+    /// elapsed with no confirmation. The timeout fallback needs no
+    /// special-case code beyond this: once the deadline is cleared with
+    /// `power_on` still `false`, `recompute`'s normal derivation already
+    /// produces `PowerState = "Off"` - no distinct error state. Runs for
+    /// every tracked amp, not just the effective/primary one, so a
+    /// non-primary amp's boot still resolves correctly even without a
+    /// picker UI reading it yet.
+    fn resolve_boot_deadlines(&mut self) {
+        let now = Instant::now();
+        for amp in self.amps.values_mut() {
+            if let Some(deadline) = amp.boot_deadline {
+                if amp.status.power_on || now >= deadline {
+                    amp.boot_deadline = None;
+                }
+            }
+        }
+    }
+
     fn recompute(&mut self) {
+        self.resolve_boot_deadlines();
+
         let mut known_amps: Vec<(String, String, bool, String)> = self
             .amps
             .iter()
@@ -367,6 +493,14 @@ impl AmpState {
                     .unwrap_or_else(|| amp.status.device_name.clone());
                 self.online = amp.last_seen.elapsed() < proto::STALE_AFTER;
                 self.power = amp.status.power_on;
+                self.power_state = if amp.boot_deadline.is_some() {
+                    "Booting"
+                } else if amp.status.power_on {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .to_string();
                 self.muted = amp.status.muted;
                 self.volume_raw = amp.status.volume_raw;
                 self.volume_db = amp.status.volume_db();
@@ -383,6 +517,7 @@ impl AmpState {
                 self.device_name = String::new();
                 self.online = false;
                 self.power = false;
+                self.power_state = "Off".to_string();
                 self.muted = false;
                 self.volume_raw = 0;
                 self.volume_db = 0.0;
@@ -404,6 +539,7 @@ pub(crate) fn states_equal(a: &AmpState, b: &AmpState) -> bool {
         && a.amp_ip == b.amp_ip
         && a.online == b.online
         && a.power == b.power
+        && a.power_state == b.power_state
         && a.muted == b.muted
         && a.volume_raw == b.volume_raw
         && a.volume_db == b.volume_db
@@ -424,6 +560,7 @@ pub async fn emit_all(state: &AmpState, emitter: &zbus::object_server::SignalEmi
     state.amp_ip_changed(emitter).await?;
     state.online_changed(emitter).await?;
     state.power_changed(emitter).await?;
+    state.power_state_changed(emitter).await?;
     state.muted_changed(emitter).await?;
     state.volume_raw_changed(emitter).await?;
     state.volume_db_changed(emitter).await?;
@@ -450,6 +587,20 @@ mod tests {
             .source(0, "Optical 1", true)
             .active_source_index(0)
             .power(true)
+            .volume_raw(195)
+            .build();
+        proto::parse_status(&bytes).expect("fixture packet should parse")
+    }
+
+    /// Same as `parsed_status` but with `power_on = false` - used by the
+    /// Phase 4.3.0 boot-state tests below, which need to start from a real
+    /// "off" broadcast the way an amp actually mid-boot would report.
+    fn parsed_status_off(device_name: &str) -> proto::Status {
+        let bytes = StatusFixtureBuilder::new()
+            .device_name(device_name)
+            .source(0, "Optical 1", true)
+            .active_source_index(0)
+            .power(false)
             .volume_raw(195)
             .build();
         proto::parse_status(&bytes).expect("fixture packet should parse")
@@ -786,5 +937,103 @@ mod tests {
 
         assert_eq!(state.device_name, "Devialet Expert 140 Pro");
         assert_eq!(state.known_amps[0].3, "Devialet Expert 140 Pro");
+    }
+
+    // ---- Phase 4.3.0: three-state PowerState (Off/Booting/On) ----
+    //
+    // `begin_power_on_boot` itself has no unit test here, same constraint
+    // as `select_amp` above: it's an async zbus method requiring a live
+    // interface context this test module doesn't set up. These tests
+    // instead poke `boot_deadline` directly (same "manipulate the private
+    // field, matching what the real method would have set" pattern the
+    // `has_explicit_selection` tests above already use) to cover the
+    // actual resolution mechanics in `resolve_boot_deadlines`/`recompute`.
+    // The no-op-while-already-booting guard in `begin_power_on_boot`
+    // itself is confirmed live instead (see TODO.md's Phase 4.3.0
+    // verification log).
+
+    #[test]
+    fn power_state_is_off_when_never_booting_and_amp_reports_off() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status_off("Living Room Amp"));
+
+        assert_eq!(state.power_state, "Off");
+        assert!(!state.power);
+    }
+
+    #[test]
+    fn power_state_is_booting_while_a_deadline_is_pending_even_though_power_is_still_false() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status_off("Living Room Amp"));
+
+        state.amps.get_mut("192.168.1.50").unwrap().boot_deadline = Some(Instant::now() + Duration::from_secs(15));
+        state.recompute();
+
+        assert_eq!(state.power_state, "Booting");
+        // `Power` stays a pure, unfiltered reflection of the amp's real
+        // UDP status - it must NOT flip true just because a boot started.
+        assert!(!state.power);
+    }
+
+    #[test]
+    fn power_state_resolves_to_on_once_a_real_broadcast_confirms_power_and_clears_the_deadline() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status_off("Living Room Amp"));
+        state.amps.get_mut("192.168.1.50").unwrap().boot_deadline = Some(Instant::now() + Duration::from_secs(15));
+        state.recompute();
+        assert_eq!(state.power_state, "Booting");
+
+        // The real amp broadcasts power_on = true before the deadline -
+        // ingest_status carries the still-pending deadline forward (see
+        // its own doc), and recompute must resolve it to "On" and clear it.
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+
+        assert_eq!(state.power_state, "On");
+        assert!(state.power);
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().boot_deadline.is_none(),
+            "a resolved boot must not leave a stale deadline behind"
+        );
+    }
+
+    #[test]
+    fn power_state_falls_back_to_off_once_the_deadline_elapses_with_no_confirmation() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status_off("Living Room Amp"));
+
+        // Deadline already in the past - simulates BOOT_TIMEOUT having
+        // elapsed with no real "on" broadcast ever arriving (the rare
+        // boot-failure case this phase's fallback exists for).
+        state.amps.get_mut("192.168.1.50").unwrap().boot_deadline = Some(Instant::now() - Duration::from_millis(1));
+        state.recompute();
+
+        assert_eq!(state.power_state, "Off", "silent fallback, no distinct error state");
+        assert!(!state.power);
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().boot_deadline.is_none(),
+            "an expired deadline must be cleared, not left pending forever"
+        );
+    }
+
+    #[test]
+    fn a_non_primary_amps_boot_still_resolves_even_though_nothing_reads_it_yet() {
+        // resolve_boot_deadlines runs for every tracked amp, not just the
+        // effective/primary one (see its own doc) - covers a second known
+        // amp's boot_deadline still getting cleared correctly even while
+        // it isn't the one driving the primary PowerState property.
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Primary Amp"));
+        state.selected_ip = "192.168.1.50".to_string();
+        state.has_explicit_selection = true;
+        state.ingest_status("192.168.1.51".to_string(), parsed_status_off("Other Amp"));
+        state.amps.get_mut("192.168.1.51").unwrap().boot_deadline = Some(Instant::now() - Duration::from_millis(1));
+
+        state.recompute();
+
+        assert_eq!(state.power_state, "On", "primary amp (.50) is unaffected by the other amp's boot");
+        assert!(
+            state.amps.get("192.168.1.51").unwrap().boot_deadline.is_none(),
+            "the non-primary amp's expired deadline must still be cleared"
+        );
     }
 }
