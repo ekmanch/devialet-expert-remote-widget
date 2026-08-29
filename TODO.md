@@ -1304,6 +1304,12 @@ architecture decisions; this file is just sequencing and status.
   - This is Plasma's own page (per CLAUDE.md, not ours to visually
     redesign) - scope is filling in real content via the metadata
     fields it already reads, not building custom QML for it.
+  - **Addendum (mockup revised after this phase shipped):** the
+    Appearance section's row order and Blur's description text
+    described above reflect the mockup as it existed when this phase
+    was built. The mockup was later revised to move Blur below
+    Transparency and disable/dim it when Transparency is off - see
+    Phase 4.4.2.1, which owns that reorder.
 
 - [x] **Phase 4.4.2 — Volume step size wiring.** The settings page's
       "Step per scroll notch" segmented control (0.5/1/2 dB) now
@@ -1348,29 +1354,33 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 4.4.3 — Blur background wiring.** Store the toggle's
-      value in `plasmoid.configuration` (KConfig) so it persists across
-      dialog closes and widget reloads, and wire it to switch
-      `Plasmoid.backgroundHints` between the default (blur-behind +
-      system shadow, Phase 4.0's baseline) and `NoBackground`.
-      `NoBackground` needs a custom-drawn fallback panel (matching the
-      widget's own copper/graphite background, not a mismatched color
-      — this was a real bug last attempt, check it explicitly this
-      time) so the flyout doesn't look broken with blur off. Verify
-      live: toggle in both directions, confirm no dead space or
-      clipping is introduced; close and reopen the settings dialog
-      (and separately, reload the widget) to confirm the choice
-      actually persists rather than resetting to default.
-- [ ] **Phase 4.4.4 — Transparency on/off wiring.** Store the toggle's
+- [ ] **Phase 4.4.2.1 — Appearance section: reorder Blur below
+      Transparency, add dependent-row disable.** Per the mockup's
+      revision: move the "Blur background" row to sit below
+      Transparency (and its slider sub-row) rather than above it, and
+      update Blur's description text to "Glassy vibrancy behind the
+      flyout. Requires transparency to enable." Blur's row must be
+      visibly disabled/dimmed (same `.kcm-row.disabled { opacity:0.35;
+      pointer-events:none; }` treatment already used for the
+      Transparency slider's own sub-row) whenever the Transparency
+      toggle is off, and re-enabled the instant Transparency is
+      switched back on. This is still purely visual/no-op, same as the
+      rest of Phase 4.4.1 - both toggles remain local UI state only,
+      nothing is wired to real KConfig or background rendering yet.
+  - Verify live: with Transparency on, Blur's row is fully interactive.
+    Toggle Transparency off - confirm Blur's row visibly dims and
+    becomes unclickable immediately. Toggle Transparency back on -
+    confirm Blur's row re-enables immediately.
+- [ ] **Phase 4.4.3 — Transparency on/off wiring.** Store the toggle's
       value in `plasmoid.configuration` (KConfig) so it persists across
       dialog closes and widget reloads, and make it actually apply
       *some* alpha value to the widget's own content background when on
       (a fixed default level is fine here — the slider itself is Phase
-      4.4.5's job). Verify live: toggle on/off, confirm the panel's
+      4.4.4's job). Verify live: toggle on/off, confirm the panel's
       background visibly changes opacity; close and reopen the
       settings dialog (and separately, reload the widget) to confirm
       the choice actually persists rather than resetting to default.
-- [ ] **Phase 4.4.5 — Transparency level slider wiring.** Make the
+- [ ] **Phase 4.4.4 — Transparency level slider wiring.** Make the
       slider's value actually drive the panel's alpha in real time.
       This is the control that got stuck at a fixed value and never
       responded to drag input last attempt — confirm the Slider is
@@ -1383,6 +1393,35 @@ architecture decisions; this file is just sequencing and status.
       each one, not just at the default; close and reopen the settings
       dialog (and separately, reload the widget) to confirm the last
       dragged value actually persists rather than resetting to default.
+- [ ] **Phase 4.4.5 — Blur background wiring (depends on Transparency).**
+      Wire the toggle to real behavior: store its value in
+      `plasmoid.configuration` (KConfig) so it persists across dialog
+      closes and widget reloads, and switch `Plasmoid.backgroundHints`
+      between the default (blur-behind + system shadow, Phase 4.0's
+      baseline) and `NoBackground`. Confirmed via KWin's own
+      documentation ("Blurs the background behind semi-transparent
+      windows") that blur is genuinely inert without transparency -
+      the row's disabled state (Phase 4.4.2.1) reflects a real
+      dependency, not a cosmetic one. `NoBackground` needs a
+      custom-drawn fallback panel (matching the widget's own copper/
+      graphite background at full opacity, not a mismatched or
+      translucent-looking one — this was a real bug on two separate
+      attempts now, verify the fix with a real measured pixel check
+      this time, not just a code read) so the flyout doesn't look
+      broken with blur off. Also decide and confirm: if a user turns
+      Transparency off while Blur was on, does Blur's stored KConfig
+      value stay `true` (silently resuming if Transparency is
+      re-enabled later) or reset to `false`? Leaning toward "leave the
+      stored value as-is, only the row's enabled state changes" to
+      match how the Transparency slider's own value already behaves
+      when disabled - confirm this explicitly rather than assuming.
+      Verify live: with Transparency on, toggle Blur in both
+      directions, confirm no dead space, clipping, or stray border
+      artifact is introduced; with Transparency off, confirm Blur's
+      row is disabled per Phase 4.4.2.1 and its stored value is
+      untouched by simply toggling Transparency; close and reopen the
+      settings dialog (and separately, reload the widget) to confirm
+      the choice actually persists rather than resetting to default.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
