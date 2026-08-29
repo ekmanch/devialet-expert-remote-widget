@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet Tray Flyout — Gear Icon Mockup</title>
+<title>Devialet Tray Flyout — Boot State Mockup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -19,6 +19,10 @@
     --text-faint:#5c5c60;
     --divider:rgba(255,255,255,0.08);
     --danger:#b5544a;
+    --success:#5fa374;
+    --success-bright:#7bc796;
+    --warning:#a3813a;
+    --warning-bright:#e0b563;
     --font-display:'Space Grotesk',sans-serif;
     --font-mono:'JetBrains Mono',monospace;
     --font-body:'Inter',sans-serif;
@@ -108,6 +112,20 @@
     flex-shrink:0;
   }
   .amp-dot.none{background:transparent; box-shadow:none; border:1.5px dashed var(--text-faint);}
+  .amp-dot.booting{
+    background:var(--warning-bright); box-shadow:0 0 7px 2px rgba(224,181,99,0.5);
+    animation:dotPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes dotPulse{
+    0%,100%{opacity:1;}
+    50%{opacity:0.35;}
+  }
+  .spinner{
+    width:13px; height:13px; border-radius:50%;
+    border:2px solid rgba(224,181,99,0.25); border-top-color:var(--warning-bright);
+    animation:spin 0.7s linear infinite; flex-shrink:0;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
   .header-text{flex:1; min-width:0;}
   .header-eyebrow{
     font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase;
@@ -160,12 +178,12 @@
   input[type="range"].copper-slider{
     -webkit-appearance:none; appearance:none; flex:1; height:4px; border-radius:999px;
     background:linear-gradient(90deg, var(--copper) 0%, var(--copper) var(--fill,55%), var(--surface-3) var(--fill,55%), var(--surface-3) 100%);
-    outline:none; margin:0; cursor:pointer;
+    outline:none; margin:0; cursor:default;
   }
   input[type="range"].copper-slider::-webkit-slider-thumb{
     -webkit-appearance:none; appearance:none; width:15px; height:15px; border-radius:50%;
     background:var(--copper-bright); box-shadow:0 0 0 3px rgba(227,160,106,0.18), 0 1px 3px rgba(0,0,0,0.5);
-    cursor:pointer;
+    cursor:default;
   }
   .step-btn{
     width:26px; height:26px; border-radius:8px; background:var(--surface); border:1px solid var(--divider);
@@ -186,7 +204,12 @@
   }
   .action-btn:hover{border-color:var(--copper-dim);}
   .action-btn.active{background:rgba(193,127,78,0.14); border-color:var(--copper-dim); color:var(--copper-bright);}
-  .action-btn.danger:hover{border-color:var(--danger); color:var(--danger);}
+  .action-btn.power-btn.state-on:hover{border-color:var(--danger); color:var(--danger);}
+  .action-btn.power-btn.state-off:hover{border-color:var(--success); color:var(--success-bright);}
+  .action-btn.power-btn.state-booting{
+    border-color:var(--warning); color:var(--warning-bright);
+    cursor:default; pointer-events:none;
+  }
   .icon{width:13px; height:13px; flex-shrink:0;}
 
   .source-block{padding:10px 16px 14px;}
@@ -237,7 +260,7 @@
   <div class="panel-icon"></div>
   <div class="panel-clock">14:32</div>
 </div>
-<div class="mockup-tag">MOCKUP · GEAR ICON · MAIN VIEW ONLY</div>
+<div class="mockup-tag">MOCKUP · POWER-ON BOOTING STATE</div>
 
 <div class="flyout-wrap" id="flyoutWrap">
   <div class="nub"></div>
@@ -285,8 +308,9 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
           <span>Mute</span>
         </div>
-        <div class="action-btn danger" onclick="togglePower()">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+        <div class="action-btn power-btn state-on" id="powerBtn" onclick="togglePower()">
+          <svg class="icon" id="powerIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          <div class="spinner" id="powerSpinner" style="display:none;"></div>
           <span id="powerLabel">Power Off</span>
         </div>
       </div>
@@ -413,10 +437,58 @@
     muted = !muted;
     document.getElementById('muteBtn').classList.toggle('active', muted);
   }
+  const BOOT_DURATION_MS = 3200; // mockup only — real duration comes from actual amp status, not a timer
+
+  function setPowerVisualState(state){
+    // state: 'on' | 'off' | 'booting'
+    const btn = document.getElementById('powerBtn');
+    const dot = document.getElementById('ampDot');
+    const sub = document.getElementById('ampSub');
+    const icon = document.getElementById('powerIcon');
+    const spinner = document.getElementById('powerSpinner');
+    const label = document.getElementById('powerLabel');
+
+    btn.classList.remove('state-on','state-off','state-booting');
+    dot.classList.remove('booting');
+    dot.style.opacity = '1';
+
+    if(state === 'on'){
+      btn.classList.add('state-on');
+      label.textContent = 'Power Off';
+      icon.style.display = '';
+      spinner.style.display = 'none';
+      sub.textContent = '192.168.0.22 · Connected';
+    } else if(state === 'off'){
+      btn.classList.add('state-off');
+      label.textContent = 'Power On';
+      icon.style.display = '';
+      spinner.style.display = 'none';
+      dot.style.opacity = '0.3';
+      sub.textContent = '192.168.0.22 · Off';
+    } else if(state === 'booting'){
+      btn.classList.add('state-booting');
+      label.textContent = 'Powering on…';
+      icon.style.display = 'none';
+      spinner.style.display = '';
+      dot.classList.add('booting');
+      sub.textContent = 'Booting…';
+    }
+  }
+
   function togglePower(){
-    poweredOn = !poweredOn;
-    document.getElementById('powerLabel').textContent = poweredOn ? 'Power Off' : 'Power On';
-    document.getElementById('ampDot').style.opacity = poweredOn ? '1' : '0.3';
+    if(poweredOn){
+      // Power-off is fast on the real amp — reflect it immediately.
+      poweredOn = false;
+      setPowerVisualState('off');
+    } else {
+      // Power-on takes real time on the amp — show an intermediate
+      // "booting" state rather than jumping straight to "on".
+      setPowerVisualState('booting');
+      setTimeout(()=>{
+        poweredOn = true;
+        setPowerVisualState('on');
+      }, BOOT_DURATION_MS);
+    }
   }
 
   function toggleFlyout(){
