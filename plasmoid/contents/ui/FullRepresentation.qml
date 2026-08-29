@@ -66,6 +66,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Shapes
 import org.kde.kirigami as Kirigami
 import org.kde.ksvg as KSvg
 import org.kde.plasma.components as PlasmaComponents3
@@ -242,6 +243,12 @@ Item {
     property double lastMuteChangeAtMs: 0
 
     property bool power: false
+    // Phase 4.3.1: three-state mirror of the daemon's PowerState
+    // ("Off"/"Booting"/"On", Phase 4.3.0) - drives all booting UI. `power`
+    // above is kept as-is (raw bool mirror, still what 4.2.3/4.2.4's hover
+    // colors key off) rather than replaced - see this file's power button
+    // for how the two combine.
+    property string powerState: "Off"
     property double lastPowerChangeAtMs: 0
 
     property int activeSourceIndex: -1
@@ -447,6 +454,34 @@ Item {
         );
     }
 
+    // Phase 4.3.1: tells the daemon a power-on boot is starting, so it can
+    // start tracking BOOT_TIMEOUT (Phase 4.3.0). Called synchronously,
+    // back-to-back with runCtl("power on") in the power button's
+    // onClicked, before the devialet-ctl invocation - both are
+    // fire-and-forget async dispatches issued in the same handler, with no
+    // wait on either one's completion in between, so there's no window
+    // where the real power-on command has gone out but the daemon doesn't
+    // yet know a boot is in progress.
+    function beginPowerOnBoot() {
+        Dbus.SessionBus.asyncCall(
+            new Dbus.dbusMessage({
+                service: "com.ekmanch.DevialetRemote",
+                path: "/com/ekmanch/DevialetRemote/Amp",
+                interface: "com.ekmanch.DevialetRemote.Amp1",
+                member: "BeginPowerOnBoot",
+                arguments: [root.ampIp]
+            }),
+            function (reply) {
+                if (reply.isError) {
+                    console.log("[WARN] BeginPowerOnBoot call returned a D-Bus error:", JSON.stringify(reply.error));
+                }
+            },
+            function (reply) {
+                console.log("[WARN] BeginPowerOnBoot call failed:", JSON.stringify(reply.error));
+            }
+        );
+    }
+
     function runCtl(argsString) {
         const cmd = root.devialetCtlCommand + " --ip " + root.ampIp + " " + argsString;
         console.log("running:", cmd);
@@ -479,7 +514,7 @@ Item {
     // equivalent there falls back to selectedName/selectedIp instead of its
     // "No Amplifier" string too (see updateDeviceCard()).
     readonly property string headerName: root.ampIp === "" ? "No Amplifier" : root.ampDisplayName
-    readonly property string headerSub: root.ampIp === "" ? "Tap to connect" : (root.ampIp + " · " + (root.online ? "Connected" : "Not responding"))
+    readonly property string headerSub: root.ampIp === "" ? "Tap to connect" : (root.powerState === "Booting" ? "Booting…" : (root.ampIp + " · " + (root.online ? "Connected" : "Not responding")))
 
     function stepVolume(direction) {
         const base = root.volumeDb !== undefined ? root.volumeDb : root.volumeFloorDb;
@@ -504,6 +539,7 @@ Item {
             root.volumeDb = root.unwrap(properties.VolumeDb, undefined);
             root.muted = root.unwrap(properties.Muted, false);
             root.power = root.unwrap(properties.Power, false);
+            root.powerState = root.unwrap(properties.PowerState, "Off");
             root.activeSourceIndex = root.unwrap(properties.ActiveSourceIndex, -1);
             root.activeSourceName = root.unwrap(properties.ActiveSourceName, "");
             // Guarded the same way as the onPropertiesChanged Sources
@@ -540,6 +576,15 @@ Item {
             if ("Power" in changed) {
                 if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
                     root.power = root.unwrap(changed.Power, root.power);
+                }
+            }
+            // Phase 4.3.1: PowerState shares Power's debounce timestamp -
+            // both are driven by the exact same click, so one guard is
+            // enough (see beginPowerOnBoot's doc for why there's no gap
+            // between the optimistic set below and this signal).
+            if ("PowerState" in changed) {
+                if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
+                    root.powerState = root.unwrap(changed.PowerState, root.powerState);
                 }
             }
             if (("ActiveSourceIndex" in changed || "ActiveSourceName" in changed)
@@ -781,11 +826,25 @@ Item {
                     // ".amp-dot.none"; known/selected but not currently
                     // broadcasting -> dim; broadcasting -> bright copper dot,
                     // dimmed further while powered off (mockup's
-                    // togglePower() -> ampDot opacity 0.3).
-                    color: root.ampIp === "" ? "transparent" : (root.online ? root.theme.copperBright : root.theme.textFaint)
+                    // togglePower() -> ampDot opacity 0.3). Phase 4.3.1:
+                    // booting takes priority over the copper/dim coloring -
+                    // matches ".amp-dot.booting".
+                    color: root.ampIp === "" ? "transparent" : (root.powerState === "Booting" ? root.theme.warningBright : (root.online ? root.theme.copperBright : root.theme.textFaint))
                     border.width: root.ampIp === "" ? 1.5 : 0
                     border.color: root.theme.textFaint
-                    opacity: root.online && !root.power ? 0.3 : 1.0
+                    // Resting opacity when not booting; while booting, the
+                    // pulse animation below drives pulseOpacity instead -
+                    // kept as a separate property (not animating this
+                    // opacity binding directly) so the binding is never
+                    // permanently broken by having run an animation on it.
+                    property real pulseOpacity: 1.0
+                    opacity: root.powerState === "Booting" ? ampDot.pulseOpacity : (root.online && !root.power ? 0.3 : 1.0)
+                    SequentialAnimation on pulseOpacity {
+                        running: root.powerState === "Booting"
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1.0; to: 0.35; duration: 550; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 0.35; to: 1.0; duration: 550; easing.type: Easing.InOutQuad }
+                    }
                 }
 
                 ColumnLayout {
@@ -1378,11 +1437,31 @@ Item {
                 id: powerBtn
                 Layout.fillWidth: true
                 Layout.preferredHeight: 38
-                enabled: root.ampIp !== ""
+                // Phase 4.3.1: genuinely inert during boot, not just
+                // visually dimmed - `enabled: false` on a QQC2 Button
+                // blocks mouse/keyboard event delivery outright (the same
+                // mechanism already relied on for the ampIp!=="" guard
+                // below), matching the mockup's `pointer-events:none` for
+                // .state-booting. This is the primary defense against
+                // click-spam; the daemon's own BeginPowerOnBoot no-op
+                // guard (Phase 4.3.0) is defense-in-depth, not a
+                // substitute for this.
+                enabled: root.ampIp !== "" && root.powerState !== "Booting"
                 onClicked: {
                     const newPower = !root.power;
                     root.power = newPower;
+                    // Optimistic set, mirroring `root.power` above - kept
+                    // in sync so the two never disagree during the shared
+                    // debounce window (see lastPowerChangeAtMs below).
+                    root.powerState = newPower ? "Booting" : "Off";
                     root.lastPowerChangeAtMs = root.now();
+                    if (newPower) {
+                        // Told the daemon first, then the real command -
+                        // see beginPowerOnBoot()'s own doc for why this
+                        // ordering leaves no gap. Power-off stays exactly
+                        // as before: immediate, no daemon notification.
+                        root.beginPowerOnBoot();
+                    }
                     root.runCtl("power " + (newPower ? "on" : "off"));
                 }
 
@@ -1390,22 +1469,80 @@ Item {
                     radius: root.theme.radiusMd
                     color: root.theme.surface
                     border.width: 1
-                    border.color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.success) : root.theme.divider
+                    // Booting takes priority over the 4.2.3/4.2.4 hover
+                    // colors below it, which stay completely untouched -
+                    // the mockup's .state-booting rule isn't a :hover
+                    // variant, it applies unconditionally while booting.
+                    border.color: root.powerState === "Booting"
+                        ? root.theme.warning
+                        : (powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.success) : root.theme.divider)
                 }
                 contentItem: RowLayout {
                     spacing: 6
                     Item { Layout.fillWidth: true }
+
                     Kirigami.Icon {
                         implicitWidth: 13
                         implicitHeight: 13
                         source: "system-shutdown-symbolic"
                         color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.successBright) : root.theme.text
+                        visible: root.powerState !== "Booting"
                     }
+
+                    // Literal port of the mockup's .spinner (a static dim
+                    // ring plus a rotating bright ~90° arc, via
+                    // QtQuick.Shapes' PathAngleArc - not a theme-dependent
+                    // shape, just self-drawn geometry, so none of the
+                    // corner-radius Known Issue's Darkly-matching concerns
+                    // apply here).
+                    Item {
+                        id: powerSpinner
+                        implicitWidth: 13
+                        implicitHeight: 13
+                        visible: root.powerState === "Booting"
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: width / 2
+                            color: "transparent"
+                            border.width: 2
+                            border.color: Qt.rgba(root.theme.warningBright.r, root.theme.warningBright.g, root.theme.warningBright.b, 0.25)
+                        }
+
+                        Shape {
+                            anchors.fill: parent
+                            rotation: 0
+                            RotationAnimation on rotation {
+                                running: powerSpinner.visible
+                                loops: Animation.Infinite
+                                from: 0
+                                to: 360
+                                duration: 700
+                            }
+                            ShapePath {
+                                strokeWidth: 2
+                                strokeColor: root.theme.warningBright
+                                fillColor: "transparent"
+                                capStyle: ShapePath.RoundCap
+                                PathAngleArc {
+                                    centerX: powerSpinner.width / 2
+                                    centerY: powerSpinner.height / 2
+                                    radiusX: powerSpinner.width / 2 - 1
+                                    radiusY: powerSpinner.height / 2 - 1
+                                    startAngle: -90
+                                    sweepAngle: 90
+                                }
+                            }
+                        }
+                    }
+
                     Label {
-                        text: root.power ? "Power Off" : "Power On"
+                        text: root.powerState === "Booting" ? "Powering on…" : (root.power ? "Power Off" : "Power On")
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.successBright) : root.theme.text
+                        color: root.powerState === "Booting"
+                            ? root.theme.warningBright
+                            : (powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.successBright) : root.theme.text)
                     }
                     Item { Layout.fillWidth: true }
                 }

@@ -43,6 +43,8 @@ QtObject {
     readonly property color danger: "#b5544a"
     readonly property color success: "#5fa374"
     readonly property color successBright: "#7bc796"
+    readonly property color warning: "#a3813a"
+    readonly property color warningBright: "#e0b563"
 
     // Flyout panel gradient + blur-enabled tint, from .flyout /
     // .flyout.blur-enabled in the mockup - see FullRepresentation.qml's

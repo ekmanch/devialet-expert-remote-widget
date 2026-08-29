@@ -1041,31 +1041,76 @@ architecture decisions; this file is just sequencing and status.
     live daemon, and sent a real power-on to leave the amp back "On"
     (its state at the start of this verification).
 
-## Up next
-
-- [ ] **Phase 4.3.1 — Power-on "booting" state: widget-side.** Consume
-      the three-state status from Phase 4.3.0 and drive the booting UI
-      per design/mockups/devialet_tray_boot_state_mockup.html: spinner
+- [x] **Phase 4.3.1 — Power-on "booting" state: widget-side.** Consumes
+      the three-state `PowerState` from Phase 4.3.0 and drives the
+      booting UI per
+      design/mockups/devialet_tray_boot_state_mockup.html: spinner
       replacing the power icon, "Powering on…" label, pulsing amber
       amp-status dot, amp header sub-text "Booting…" — transitioning
-      to the existing "on" or "off" visual states once the daemon
-      reports one. Blocked on 4.3.0's D-Bus shape being confirmed.
-  - **Button must be unclickable for the entire booting duration** —
-    no repeat power-on, no power-off — per the mockup's
-    `.state-booting{ cursor:default; pointer-events:none; }`. This is
-    the primary defense against the user spamming the button during
-    boot; the daemon's own idempotency guard on BeginPowerOnBoot
-    (Phase 4.3.0) is the secondary one, not a substitute for this.
-  - Verify live: click Power On, confirm the booting UI appears
-    immediately and transitions to "on" once the real amp finishes
-    booting; separately, discuss a way to force the timeout path
-    (e.g. temporarily lowering 4.3.0's timeout constant, or
-    disconnecting the amp mid-boot) to confirm the "on"→"off" fallback
-    UI, since the failure path may be hard to trigger for real.
-  - **Also verify the button is genuinely inert while booting**, not
-    just visually styled as disabled — click it during the booting
-    window and confirm nothing happens (no command sent, no state
-    change), not just that it looks unclickable.
+      to the existing "on"/"off" visual states once the daemon reports
+      one.
+  - **Investigated before implementing, per the phase's own
+    instruction:** the power button already had the exact right
+    pattern to extend, not a new one - optimistic local set +
+    400ms-debounce-guarded D-Bus property mirror (same shape already
+    used for `Power`/`Muted`/volume). `BeginPowerOnBoot` is called via
+    `Dbus.SessionBus.asyncCall` (same shape as the existing
+    `SelectAmp` call in `selectAmpByIp`), synchronously first in the
+    click handler, immediately before `runCtl("power on")` - both
+    fire-and-forget dispatches issued back-to-back with no wait
+    between them, so there's no window where the real command went out
+    before the daemon knew a boot was starting. `PowerState` reads
+    into a new local mirror `root.powerState` via the identical
+    `onRefreshed`/`onPropertiesChanged` pattern as `Power`, sharing
+    `Power`'s existing debounce timestamp (both driven by the same
+    click, one guard is enough) - `root.power` itself is untouched,
+    still what 4.2.3/4.2.4's hover colors key off.
+  - **Button inertness - confirmed mechanism, not a new one:** the
+    button already had `enabled: root.ampIp !== ""` (QQC2's
+    `Control.enabled = false` blocks mouse/keyboard event delivery
+    outright, the same mechanism CSS `pointer-events:none` achieves) -
+    just extended to `&& root.powerState !== "Booting"`.
+  - **Spinner:** implemented as a literal port of the mockup's arc
+    technique via `QtQuick.Shapes` (`PathAngleArc`, static dim ring +
+    rotating bright 90° arc), not a Rectangle-based approximation -
+    per your correction that the corner-radius Known Issue's
+    theme-dependency concern doesn't apply to self-drawn geometry with
+    no external theme asset to match. Rendered cleanly at 13×13 with
+    no QML errors (`journalctl` checked clean after install/restart).
+  - Scope held: power-off stays immediate/unaffected; 4.2.3/4.2.4
+    hover colors untouched (booting styling is unconditional, not
+    hover-gated, matching the mockup's `.state-booting` having no
+    `:hover` in its selector); daemon untouched except for the
+    verification-only `BOOT_TIMEOUT` drops described below (reverted
+    both times).
+  - **Verified live (2026-08-29), all three checklist items:**
+    1. Clicked Power On for real with the amp off - booting UI
+       (spinner, "Powering on…", warning border/icon/label, pulsing
+       amber dot, "Booting…" sub-text) appeared immediately
+       (screenshot confirmed).
+    2. Clicked the button again during the booting window - confirmed
+       genuinely inert (no command sent, no state change), not just
+       visually disabled.
+    3. Confirmed it transitions to the normal "on" UI once the real
+       amp finishes booting - including the case where `BOOT_TIMEOUT`
+       had already fired and fallen back to "Off" first, then the
+       amp's real confirmation arrived late and it silently corrected
+       to "On" anyway (no stuck/error state).
+    4. Forced the timeout/fallback path twice: temporarily dropped
+       `BOOT_TIMEOUT` to 5s (rebuilt, restarted the daemon), called
+       `BeginPowerOnBoot` with no real power-on sent - widget fell
+       back to the normal "off" visual state correctly. Reverted to
+       20s, rebuilt (`cargo test`: 32/32), restarted the daemon, and
+       restored the real amp to "On" (its state before this
+       verification pass).
+  - **Found, triaged, and parked as a separate bug** (not folded into
+    this phase): a stale-volume-display mismatch after power-on,
+    confirmed unrelated to this phase's own work (reproduces on a
+    completely normal boot too, and matches a symptom previously seen
+    in the Kotlin Android app) - see "Not yet scoped / parked" below.
+
+## Up next
+
 - [ ] **Phase 4.4.0 — Settings page: add to the existing ConfigDialog.**
       Corrected scope per Phase 4.2.1's live-verification finding: a
       default `ConfigDialog` (Keyboard Shortcuts + About pages) already
@@ -1168,7 +1213,31 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
-
+- [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
+      didn't itself send.** Observed during Phase 4.3.1's live
+      verification: after a real power-on (both via timeout-forced
+      fallback and normal boot), the amp reports its actual post-boot
+      default volume (-40dB, set in the Devialet configurator) but the
+      widget continues showing whatever it displayed pre-power-off
+      (e.g. -44.5dB) instead of updating to match. The mismatch
+      persists indefinitely until the volume slider/step buttons are
+      touched in the widget itself - at which point it starts tracking
+      correctly again. Neither side appears to overwrite the other
+      incorrectly; they just silently diverge and stay diverged.
+  - Also reproduces on a completely normal boot (no timeout/fallback
+    involved) - the widget shows its own stale pre-boot value (e.g.
+    -42dB) while the amp is actually at its real -40dB default. Not
+    specific to the Phase 4.3.0/4.3.1 boot-state work at all.
+  - Same symptom previously observed in the Kotlin Android app - not
+    new to this port, likely a pre-existing protocol/reactivity gap
+    (amp-initiated volume changes not picked up unless the widget/app
+    has sent a volume command at least once itself) rather than
+    something specific to this widget's implementation.
+  - Not investigated yet - root cause could be in the daemon (not
+    picking up/re-broadcasting an amp-initiated UDP volume change) or
+    the widget (not reacting to a D-Bus property it does receive).
+    Likely also affects volume changes from the amp's own front panel
+    or another remote, not just power-cycling - worth confirming.
 
 ## Tasks to complete outside repo
 
