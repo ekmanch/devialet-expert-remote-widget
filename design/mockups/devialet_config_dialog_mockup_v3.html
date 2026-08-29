@@ -202,6 +202,7 @@
     padding:8px 2px 4px; transition:opacity .15s ease;
   }
   .kcm-sub-row.disabled{ opacity:0.35; pointer-events:none; }
+  .kcm-row.disabled{ opacity:0.35; pointer-events:none; }
 
   .danger-btn{
     padding:7px 14px; border-radius:8px; font-size:12px; font-weight:600;
@@ -319,13 +320,6 @@
           <p class="kcm-section-label first">Appearance</p>
           <div class="kcm-row">
             <div class="kcm-row-text">
-              <span class="kcm-row-name">Blur background</span>
-              <span class="kcm-row-desc">Glassy vibrancy behind the flyout</span>
-            </div>
-            <div class="kcm-switch on" id="blurSwitch" onclick="toggleSwitch(this)"></div>
-          </div>
-          <div class="kcm-row">
-            <div class="kcm-row-text">
               <span class="kcm-row-name">Transparency</span>
               <span class="kcm-row-desc">Let the desktop show through the panel</span>
             </div>
@@ -336,6 +330,13 @@
               <input type="range" class="kcm-slider" min="0" max="100" value="72" style="--fill:72%" oninput="onTransInput(this.value)">
               <span class="kcm-slider-value" id="transValue">72%</span>
             </div>
+          </div>
+          <div class="kcm-row" id="blurRow">
+            <div class="kcm-row-text">
+              <span class="kcm-row-name">Blur background</span>
+              <span class="kcm-row-desc">Glassy vibrancy behind the flyout. Requires transparency to enable.</span>
+            </div>
+            <div class="kcm-switch on" id="blurSwitch" onclick="toggleSwitch(this)"></div>
           </div>
 
           <p class="kcm-section-label">Volume</p>
@@ -417,7 +418,9 @@
   }
   function toggleSwitch(el){ el.classList.toggle('on'); }
   function toggleTransSub(){
-    document.getElementById('transSub').classList.toggle('disabled', !document.getElementById('transSwitch').classList.contains('on'));
+    const on = document.getElementById('transSwitch').classList.contains('on');
+    document.getElementById('transSub').classList.toggle('disabled', !on);
+    document.getElementById('blurRow').classList.toggle('disabled', !on);
   }
   function onTransInput(v){
     document.getElementById('transValue').textContent = v + '%';
