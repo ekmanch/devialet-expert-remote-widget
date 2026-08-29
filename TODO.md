@@ -1229,6 +1229,82 @@ architecture decisions; this file is just sequencing and status.
     option changes on click, and Forget All correctly reverts to the
     real count after ~3s when not confirmed a second time.
 
+- [x] **Phase 4.4.0.1 — Settings sidebar: General category icon.** The
+      "General" entry in the ConfigDialog's sidebar now shows the
+      widget's own copper glow-dot branding instead of a generic
+      default icon.
+  - **Investigated before implementing, per the phase's own
+    instruction:** confirmed by reading the shell's own
+    `AppletConfiguration.qml` again that Keyboard Shortcuts'
+    (`"preferences-desktop-keyboard"`) and About's (`"help-about"`)
+    icons are hardcoded inline in that file - a separate KPackage
+    (`org.kde.plasma.desktop`), no property/hook exposed to override
+    them from ours. Confirmed `ConfigCategory.icon`'s real behavior by
+    tracing `ConfigCategoryDelegate.qml` (the actual sidebar delegate):
+    it feeds straight into `Kirigami.Icon.source`, the same mechanism
+    `Plasmoid.icon` already uses - an arbitrary resolvable path works,
+    unlike `metadata.json`'s `KPlugin.Icon` (Phase 4.1: theme-name
+    only). Went with the colored copper glow-dot variant (the "likely
+    outcome" branch), reusing the exact SVG already bundled for the
+    panel icon (`devialet_icon_glow_dot.svg`, Phase 4.2.5) rather than
+    duplicating the asset.
+  - **A real bug found and fixed live:** a bare relative string
+    (`icon: "../icons/devialet_icon_glow_dot.svg"`) rendered as a
+    broken-image placeholder. Unlike `source:` (a `QUrl`-typed
+    property, auto-resolved against config.qml's own base URL at
+    assignment time - see Phase 4.4.0's ROOT CAUSE finding), `icon:`
+    appears to be a plain string passed through unresolved to
+    `ConfigCategoryDelegate.qml`'s `Kirigami.Icon { source: model.icon
+    }`, which then resolves a relative source against *its own*
+    location in the shell's package, not ours. Fixed with an explicit
+    `Qt.resolvedUrl()` call made inside config.qml - a genuinely
+    absolute URL once computed, needing no further resolution
+    regardless of which file later reads it.
+  - **Verified live by you (2026-08-29):** sidebar icon renders
+    correctly, no blur/scaling artifacts.
+  - **Separate finding, not fixed here** (see the new Phase 4.4.0.2
+    below): tracing this also surfaced that `AboutPlugin.qml` (the
+    shell's own file) has undocumented special handling for
+    `metadata.json`'s `KPlugin.Icon` - a value starting with `/` is
+    treated as a path relative to the plasmoid's own `contents/`,
+    unlike the "Add Widgets" list's use of the same field (Phase 4.1:
+    theme-name only via `QIcon::fromTheme()`). The About page's own
+    content still shows the generic `audio-speakers-symbolic`
+    placeholder set at scaffold time - out of this phase's scope
+    (sidebar icon only), and changing `KPlugin.Icon` to a `/`-prefixed
+    path to fix it would risk breaking the "Add Widgets" list icon,
+    which reads the same field differently - a real trade-off, not a
+    free fix.
+- [ ] **Phase 4.4.0.2 — About page: full polish, including its own icon.**
+      The About page (Plasma-provided, `AboutPlugin.qml`, per the
+      "Settings ConfigDialog" section of CLAUDE.md) still shows generic
+      placeholder content from scaffold time - most visibly its own big
+      icon, still the default `audio-speakers-symbolic` from
+      `metadata.json`'s `KPlugin.Icon` rather than the widget's actual
+      branding.
+  - Icon: resolve the trade-off Phase 4.4.0.1 surfaced but didn't
+    act on - `KPlugin.Icon` is read by at least two different
+    consumers with different rules (`AboutPlugin.qml`'s special
+    `/`-prefixed-path handling vs. the "Add Widgets" list's
+    theme-name-only `QIcon::fromTheme()`, Phase 4.1). Changing it to
+    fix the About page risks breaking the list icon there - confirm
+    live whether that's actually a problem before deciding, rather
+    than assuming either way; real hicolor icon-theme installation
+    (avoiding the trade-off entirely) is deferred to real
+    packaging work (Phase 4.5) per CLAUDE.md, so weigh a real fix now
+    against that.
+  - Everything else on the page Plasma auto-populates from
+    `metadata.json`/`main.xml` (name/version, description, website,
+    license, authors, "Get Help"/"Read License" links) - audit what
+    actually shows today against what a real user should see, and
+    fill in/correct anything missing or placeholder-looking (e.g. a
+    real bug-report URL if one should exist, confirming the MIT
+    license text actually resolves via "Read License", etc.) rather
+    than assuming the scaffold-time values were ever revisited.
+  - This is Plasma's own page (per CLAUDE.md, not ours to visually
+    redesign) - scope is filling in real content via the metadata
+    fields it already reads, not building custom QML for it.
+
 ## Up next
 
 - [ ] **Phase 4.4.2 — Volume step size wiring.** Store the selection in

@@ -49,10 +49,43 @@
 
 import org.kde.plasma.configuration
 
+// Phase 4.4.0.1: General's own copper glow-dot icon, replacing the
+// generic "audio-speakers-symbolic" fallback. Keyboard Shortcuts/About's
+// icons ("preferences-desktop-keyboard"/"help-about") are hardcoded
+// inline in the shell's own AppletConfiguration.qml (a separate
+// KPackage, org.kde.plasma.desktop) - confirmed by reading that file
+// again, no property/hook exists to override them from here, so a
+// matching monochrome set isn't possible; the colored glow-dot (matching
+// About's own fixed colored icon) is the right call, not a mismatched
+// half-measure.
+//
+// ConfigCategory.icon feeds Kirigami.Icon.source (confirmed by tracing
+// ConfigCategoryDelegate.qml, the real sidebar delegate) - the same
+// mechanism Plasmoid.icon already uses, so an arbitrary resolvable path
+// works here too, unlike metadata.json's KPlugin.Icon (Phase 4.1 finding:
+// QIcon::fromTheme()-only). Reuses the exact SVG already bundled for the
+// panel icon (plasmoid/contents/icons/devialet_icon_glow_dot.svg, Phase
+// 4.2.5) rather than duplicating the asset.
+//
+// A bare relative string (`icon: "../icons/devialet_icon_glow_dot.svg"`)
+// rendered as a broken-image placeholder live, confirmed by testing -
+// unlike `source:` (a QUrl-typed property, auto-resolved against
+// config.qml's own base URL at assignment time, per this file's ROOT
+// CAUSE comment above), `icon:` appears to be a plain string passed
+// through unresolved to ConfigCategoryDelegate.qml's `Kirigami.Icon {
+// source: model.icon }` - and Kirigami.Icon resolves a relative source
+// against ConfigCategoryDelegate.qml's OWN location (a different
+// KPackage, the shell's org.kde.plasma.desktop), not ours. Fixed with an
+// explicit `Qt.resolvedUrl()` call made here, inside config.qml - a
+// genuinely absolute URL once computed, so it needs no further
+// resolution regardless of which file later reads it.
+
+import org.kde.plasma.configuration
+
 ConfigModel {
     ConfigCategory {
         name: i18n("General")
-        icon: "audio-speakers-symbolic" // matches metadata.json's KPlugin.Icon
+        icon: Qt.resolvedUrl("../icons/devialet_icon_glow_dot.svg")
         source: "../config/ConfigGeneral.qml"
     }
 }
