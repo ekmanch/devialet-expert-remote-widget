@@ -54,6 +54,11 @@ KCM.SimpleKCM {
     property real cfg_volumeStepDb: 1.0
     readonly property var stepValues: [0.5, 1, 2]
 
+    // Phase 4.4.3: same cfg_ convention as cfg_volumeStepDb above - the
+    // shell pushes the live KConfig value in here on dialog open and reads
+    // it back only on Apply/OK.
+    property bool cfg_transparencyEnabled: true
+
     // Read-only live count for the "Forget All (N)" button's idle label -
     // explicitly sanctioned by this phase's scope (display only, not
     // wiring the forget action itself). Deliberately simpler than
@@ -143,7 +148,20 @@ KCM.SimpleKCM {
         SettingsRow {
             name: "Transparency"
             desc: "Let the desktop show through the panel"
-            SettingsSwitch { id: transSwitch; checked: true }
+
+            // Phase 4.4.3: checked mirrors cfg_transparencyEnabled; clicking
+            // writes back via onCheckedChanged since SettingsSwitch owns its
+            // own toggle internally (self-assigns `checked` on click, which
+            // severs this binding for the rest of the dialog session - see
+            // ConfigGeneral's own Phase 4.4.3 investigation notes - but
+            // onCheckedChanged keeps cfg_transparencyEnabled in sync from
+            // then on regardless, and a dialog reopen creates a fresh
+            // instance with a fresh, unbroken binding).
+            SettingsSwitch {
+                id: transSwitch
+                checked: root.cfg_transparencyEnabled
+                onCheckedChanged: root.cfg_transparencyEnabled = checked
+            }
         }
 
         // Mockup's .kcm-sub-row: not a SettingsRow (no name/desc/divider of

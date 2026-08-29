@@ -20,5 +20,12 @@
     <entry name="volumeStepDb" type="Double">
       <default>1.0</default>
     </entry>
+    <!-- Phase 4.4.3: whether the flyout's own background renders with a
+         fixed translucent alpha (0.82, applied in FullRepresentation.qml)
+         or fully opaque. Default true matches the Appearance section's
+         Transparency toggle default (Phase 4.4.1/4.4.2.1 mockup). -->
+    <entry name="transparencyEnabled" type="Bool">
+      <default>true</default>
+    </entry>
   </group>
 </kcfg>

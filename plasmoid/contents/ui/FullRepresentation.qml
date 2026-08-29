@@ -226,6 +226,10 @@ Item {
     // Phase 4.4.2: sourced from KConfig (settings page's "Step per scroll
     // notch" segmented control), was a hardcoded 0.5.
     readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
+    // Phase 4.4.3: whether the background gradient below renders at the
+    // fixed 0.82 alpha or fully opaque - sourced from KConfig the same way
+    // as volumeStepDb above (direct live read, no manual re-fetch needed).
+    readonly property bool transparencyEnabled: Plasmoid.configuration.transparencyEnabled
     readonly property real volumeCeilingDb: -15.0
     readonly property real volumeFloorDb: -60.0
     readonly property int debounceMs: 400
@@ -733,8 +737,12 @@ Item {
         border.width: 1
         border.color: root.theme.divider
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.theme.panelGradientTop }
-            GradientStop { position: 1.0; color: root.theme.panelGradientBottom }
+            // Phase 4.4.3: alpha now follows the Transparency toggle - 0.82
+            // (unchanged from before this phase) when on, fully opaque when
+            // off. RGB channels still come from Theme.qml; only alpha is
+            // substituted here.
+            GradientStop { position: 0.0; color: Qt.rgba(root.theme.panelGradientTop.r, root.theme.panelGradientTop.g, root.theme.panelGradientTop.b, root.transparencyEnabled ? 0.82 : 1.0) }
+            GradientStop { position: 1.0; color: Qt.rgba(root.theme.panelGradientBottom.r, root.theme.panelGradientBottom.g, root.theme.panelGradientBottom.b, root.transparencyEnabled ? 0.82 : 1.0) }
         }
     }
 

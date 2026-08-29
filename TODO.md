@@ -1388,17 +1388,62 @@ architecture decisions; this file is just sequencing and status.
     enables immediately when switched back on; row order matches the
     mockup exactly (Transparency + slider sub-row, then Blur beneath).
 
+- [x] **Phase 4.4.3 — Transparency on/off wiring.** Toggle's value now
+      lives in `plasmoid.configuration` (KConfig), persists across
+      dialog closes and widget reloads, and actually drives a fixed
+      alpha on the flyout's own content background when on (fully
+      opaque when off) — the slider's own live value is still Phase
+      4.4.4's job, this phase only needed *some* fixed on-level.
+  - `main.xml`: added `transparencyEnabled` (`Bool`, default `true` —
+    matches the toggle's existing default-on state from Phase
+    4.4.1/4.4.2.1).
+  - `FullRepresentation.qml`: added `root.transparencyEnabled`, reading
+    `Plasmoid.configuration.transparencyEnabled` directly (same live-
+    read pattern as Phase 4.4.2's `volumeStepDb`, no manual re-fetch
+    needed). The panel background gradient's two `GradientStop` colors
+    (`FullRepresentation.qml:725-739`) now build their color via
+    `Qt.rgba(theme color's r/g/b, transparencyEnabled ? 0.82 : 1.0)`
+    instead of reading the theme colors' baked-in alpha directly - RGB
+    still comes from `Theme.qml` unchanged, only alpha is substituted
+    at render time. 0.82 is the exact value already shipping pre-phase
+    (no visual change for a fresh/default install); off is fully
+    opaque (1.0), as confirmed before implementing.
+  - `ConfigGeneral.qml`: added `cfg_transparencyEnabled` (same
+    cfg_/Apply-OK-gated convention as `cfg_volumeStepDb`).
+    `transSwitch`'s `checked` binds to it; `onCheckedChanged` writes
+    back, since `SettingsSwitch` self-toggles internally (its own
+    `MouseArea` assigns its own `checked`, which severs the external
+    binding after the first click in a given dialog session - flagged
+    and confirmed acceptable before implementing, since
+    `onCheckedChanged` keeps `cfg_transparencyEnabled` in sync from
+    then on regardless, and a dialog reopen creates a fresh
+    `SettingsSwitch` instance with an unbroken binding).
+    `SettingsSwitch.qml` itself untouched.
+  - **Verified live, measured rather than eyeballed** (matching or
+    exceeding the phase's own request, since a same-wallpaper on/off
+    screenshot pair looked visually indistinguishable to you at first
+    glance): pixel-diffed the two real screenshots. Differing pixels
+    were confined exactly to the flyout's own bounds (x 1623-1954,
+    y 45-457), confirming the change is scoped correctly. Sampling flat
+    background areas of the panel (avoiding text/icons): on-values
+    consistently ~2-5/255 higher than off-values, blue channel shifting
+    most (+3 to +5) - exactly the expected direction for an 18%
+    wallpaper blend through a dark, blue-leaning starfield background.
+    Grid-averaged diff across the whole panel background: **+1.7, +1.7,
+    +3.3** (R, G, B). "Off" measured within 1-2/255 of the flat theme
+    color (23,23,26)/(18,18,20) - i.e. genuinely opaque, not just
+    visually close. Confirms the toggle is compositing a real 0.82-
+    alpha blend, not a no-op - the effect is small enough to be
+    imperceptible by eye at this specific wallpaper region (dark
+    starfield behind the panel, similar luminance to the panel itself)
+    but is real and directionally consistent with the intended alpha
+    value; expected to be far more visible against a brighter part of
+    a wallpaper, or once Phase 4.4.4's slider allows a lower alpha.
+    Reload (`kpackagetool6 --upgrade` + `plasmashell --replace`)
+    confirmed the setting survives a full widget restart.
+
 ## Up next
 
-- [ ] **Phase 4.4.3 — Transparency on/off wiring.** Store the toggle's
-      value in `plasmoid.configuration` (KConfig) so it persists across
-      dialog closes and widget reloads, and make it actually apply
-      *some* alpha value to the widget's own content background when on
-      (a fixed default level is fine here — the slider itself is Phase
-      4.4.4's job). Verify live: toggle on/off, confirm the panel's
-      background visibly changes opacity; close and reopen the
-      settings dialog (and separately, reload the widget) to confirm
-      the choice actually persists rather than resetting to default.
 - [ ] **Phase 4.4.4 — Transparency level slider wiring.** Make the
       slider's value actually drive the panel's alpha in real time.
       This is the control that got stuck at a fixed value and never
