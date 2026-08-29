@@ -316,6 +316,36 @@ or `metadata.json` API keys first — check this path resolution rule
 first, it is the far more likely cause for this specific failure
 signature.
 
+### Every settings control must persist, not just apply its effect
+
+A settings toggle/slider "working" during a live session and a
+settings toggle/slider actually being **wired** are two different
+things — don't treat the first as proof of the second. Every control
+on the settings page must have its value stored in
+`plasmoid.configuration` (a `main.xml` kcfg entry), read back from
+there on load, and written back on change. If a control instead only
+drives its visual effect directly (e.g. a toggle that flips
+`Plasmoid.backgroundHints` straight from its own local `checked`
+state, with nothing backing it in KConfig), it will appear fully
+functional within that one dialog session and then silently reset to
+default the next time the dialog opens or the widget reloads — this
+already happened once (Phase 4.4.3/4.4.4's original wording didn't
+say "store in KConfig" explicitly, only "wire the toggle to the
+effect," which is exactly the gap that produced this).
+
+The exception is any control that deliberately reflects live external
+state rather than a stored preference — Launch at login is the one
+example so far, which must always show real `systemctl --user
+is-enabled` output, not a remembered KConfig bool (see its own TODO
+entry). Don't apply the "must persist to KConfig" rule to that kind of
+control; applying it there would be the opposite mistake.
+
+**Verification for any settings-wiring phase must include a reload,
+not just an in-session toggle check**: close and reopen the settings
+dialog, and separately reload the widget itself, and confirm the
+control still reflects the value you set — not just that toggling it
+visibly changed something in the moment.
+
 ## Environment
 
 - OS: CachyOS (Arch-based); Desktop: KDE Plasma.

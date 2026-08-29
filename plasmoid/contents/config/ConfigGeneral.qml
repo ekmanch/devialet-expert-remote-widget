@@ -43,6 +43,17 @@ KCM.SimpleKCM {
 
     readonly property Ui.Theme theme: Ui.Theme {}
 
+    // Phase 4.4.2: cfg_<entryName> is the standard Plasma ConfigModule
+    // convention - the shell's own AppletConfiguration.qml (open()/
+    // saveConfig()) pushes the live KConfig value in here on dialog open
+    // and reads it back only when Apply/OK is clicked, also using
+    // cfg_volumeStepDbChanged to drive the Apply button's dirty state.
+    // Confirmed by reading that shell source directly, not assumed - see
+    // a real precedent doing the same (luisbocanegra.panel.colorizer's
+    // configWidgetIslands.qml, property alias cfg_*).
+    property real cfg_volumeStepDb: 1.0
+    readonly property var stepValues: [0.5, 1, 2]
+
     // Read-only live count for the "Forget All (N)" button's idle label -
     // explicitly sanctioned by this phase's scope (display only, not
     // wiring the forget action itself). Deliberately simpler than
@@ -214,7 +225,10 @@ KCM.SimpleKCM {
                 implicitWidth: stepRow.implicitWidth + 6
                 implicitHeight: stepRow.implicitHeight + 6
 
-                property int activeIndex: 1 // "1 dB", matching the mockup's default
+                // Phase 4.4.2: derived from cfg_volumeStepDb rather than a
+                // literal, so it stays in sync whether that value came from
+                // the dialog's own initial load or a click below.
+                property int activeIndex: root.stepValues.indexOf(root.cfg_volumeStepDb)
 
                 RowLayout {
                     id: stepRow
@@ -245,7 +259,7 @@ KCM.SimpleKCM {
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: stepSegmented.activeIndex = parent.index
+                                onClicked: root.cfg_volumeStepDb = root.stepValues[parent.index]
                             }
                         }
                     }

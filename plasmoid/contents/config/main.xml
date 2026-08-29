@@ -13,5 +13,12 @@
       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
   <kcfgfile name="" />
   <group name="General">
+    <!-- Phase 4.4.2: volume step size used by the main view's +/- buttons
+         and slider stepSize, and by the settings page's "Step per scroll
+         notch" segmented control. Default 1.0 matches that control's
+         Phase 4.4.1 mockup default ("1 dB" active). -->
+    <entry name="volumeStepDb" type="Double">
+      <default>1.0</default>
+    </entry>
   </group>
 </kcfg>

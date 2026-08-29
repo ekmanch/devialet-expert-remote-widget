@@ -223,7 +223,9 @@ Item {
     Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.2, 0.9, 0.3, 1, 1, 1] } }
     Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.2, 0.9, 0.3, 1, 1, 1] } }
 
-    readonly property real volumeStepDb: 0.5
+    // Phase 4.4.2: sourced from KConfig (settings page's "Step per scroll
+    // notch" segmented control), was a hardcoded 0.5.
+    readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
     readonly property real volumeCeilingDb: -15.0
     readonly property real volumeFloorDb: -60.0
     readonly property int debounceMs: 400

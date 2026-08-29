@@ -1305,28 +1305,71 @@ architecture decisions; this file is just sequencing and status.
     redesign) - scope is filling in real content via the metadata
     fields it already reads, not building custom QML for it.
 
+- [x] **Phase 4.4.2 — Volume step size wiring.** The settings page's
+      "Step per scroll notch" segmented control (0.5/1/2 dB) now
+      actually controls the volume step used by the main view's +/-
+      buttons and slider, replacing the hardcoded 0.5dB from Phase 3.
+  - **Investigated before implementing, per the phase's own
+    instruction:** read the shell's own `AppletConfiguration.qml`
+    (`open()`/`saveConfig()`/`isConfigurationChanged()`) directly
+    rather than assuming a mechanism - confirmed the standard Plasma
+    ConfigModule convention is a `cfg_<entryName>` property on the
+    config page: the shell pushes the live KConfig value into it on
+    dialog open and reads it back only on Apply/OK, also using
+    `cfg_<entryName>Changed` to drive the Apply button's dirty state.
+    Confirmed with you before implementing that this (Apply/OK-gated,
+    matching every other stock Plasma settings page) was preferred
+    over writing straight to `Plasmoid.configuration` from the click
+    handler - the pattern later phases (4.4.3+) will reuse for the
+    other controls.
+  - `main.xml`: added `volumeStepDb` (`Double`, default `1.0` -
+    matches the segmented control's Phase 4.4.1 mockup default).
+  - `FullRepresentation.qml`: `volumeStepDb` now reads
+    `Plasmoid.configuration.volumeStepDb` instead of a hardcoded
+    literal - both existing consumers (`stepVolume()`, the slider's
+    `stepSize`) already referenced `root.volumeStepDb`, so no other
+    change was needed there.
+  - `ConfigGeneral.qml`: added `cfg_volumeStepDb` and
+    `stepValues: [0.5, 1, 2]`; `stepSegmented.activeIndex` is now a
+    binding derived from `cfg_volumeStepDb` (`stepValues.indexOf(...)`)
+    instead of a literal, and the click handler writes
+    `cfg_volumeStepDb` instead of `activeIndex` directly, so the
+    highlighted option follows automatically rather than needing two
+    separate writes kept in sync.
+  - **Verified live by you (2026-08-29):** all three of 0.5/1/2 dB
+    move the amp's actual volume by exactly that amount via the +/-
+    buttons; the settings dialog shows the correct previously-selected
+    option after close/reopen; the step size survives a full
+    `kpackagetool6`/`plasmashell --replace` reload. Bonus finding not
+    originally in scope: dragging the volume slider itself also snaps
+    to the configured step size per increment, confirming
+    `stepSize: root.volumeStepDb` behaves the same way as the button
+    handlers.
+
 ## Up next
 
-- [ ] **Phase 4.4.2 — Volume step size wiring.** Store the selection in
-      `plasmoid.configuration` (KConfig) and make the existing +/-
-      step buttons in the main view actually read it, replacing the
-      hardcoded 0.5dB. Verify live: set each of 0.5/1/2 dB, return to
-      the main view, confirm each button click moves the amp's volume
-      by exactly that amount.
-- [ ] **Phase 4.4.3 — Blur background wiring.** Wire the toggle to
-      switch `Plasmoid.backgroundHints` between the default (blur-
-      behind + system shadow, Phase 4.0's baseline) and `NoBackground`.
+- [ ] **Phase 4.4.3 — Blur background wiring.** Store the toggle's
+      value in `plasmoid.configuration` (KConfig) so it persists across
+      dialog closes and widget reloads, and wire it to switch
+      `Plasmoid.backgroundHints` between the default (blur-behind +
+      system shadow, Phase 4.0's baseline) and `NoBackground`.
       `NoBackground` needs a custom-drawn fallback panel (matching the
       widget's own copper/graphite background, not a mismatched color
       — this was a real bug last attempt, check it explicitly this
       time) so the flyout doesn't look broken with blur off. Verify
       live: toggle in both directions, confirm no dead space or
-      clipping is introduced.
-- [ ] **Phase 4.4.4 — Transparency on/off wiring.** Make the toggle
-      actually apply *some* alpha value to the widget's own content
-      background when on (a fixed default level is fine here — the
-      slider itself is Phase 4.4.5's job). Verify live: toggle on/off,
-      confirm the panel's background visibly changes opacity.
+      clipping is introduced; close and reopen the settings dialog
+      (and separately, reload the widget) to confirm the choice
+      actually persists rather than resetting to default.
+- [ ] **Phase 4.4.4 — Transparency on/off wiring.** Store the toggle's
+      value in `plasmoid.configuration` (KConfig) so it persists across
+      dialog closes and widget reloads, and make it actually apply
+      *some* alpha value to the widget's own content background when on
+      (a fixed default level is fine here — the slider itself is Phase
+      4.4.5's job). Verify live: toggle on/off, confirm the panel's
+      background visibly changes opacity; close and reopen the
+      settings dialog (and separately, reload the widget) to confirm
+      the choice actually persists rather than resetting to default.
 - [ ] **Phase 4.4.5 — Transparency level slider wiring.** Make the
       slider's value actually drive the panel's alpha in real time.
       This is the control that got stuck at a fixed value and never
@@ -1337,7 +1380,9 @@ architecture decisions; this file is just sequencing and status.
       the actual symptom last time, not "drags but doesn't visually
       update"). Verify live: drag to several different positions,
       confirm the panel's visible transparency changes accordingly at
-      each one, not just at the default.
+      each one, not just at the default; close and reopen the settings
+      dialog (and separately, reload the widget) to confirm the last
+      dragged value actually persists rather than resetting to default.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
