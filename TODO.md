@@ -1122,26 +1122,47 @@ architecture decisions; this file is just sequencing and status.
       dialog/action from nothing." The custom page itself can be empty
       — a header/title only, no settings content, no toggles, nothing.
       Investigate rather than assume: confirm whether the custom page
-      appears *alongside* Keyboard Shortcuts/About or requires explicit
-      configuration to keep/suppress them. Verify live: dialog opens
-      showing the new page (plus whatever became of the default pages,
-      confirmed either way), main view is completely unaffected.
-- [ ] **Phase 4.4.1 — Volume step size UI (no wiring).** Add the
-      0.5/1/2 dB segmented control to the ConfigDialog. Purely visual
-      — selecting an option doesn't need to persist or do anything yet.
+      appears alongside Keyboard Shortcuts/About or requires explicit
+      configuration to keep/suppress them — not yet verified either way.
+- [ ] **Phase 4.4.1 — Settings page: full UI, all controls no-op.** Build
+      the entire General page's visual layout in one pass, matching
+      design/mockups/devialet_config_dialog_mockup_v3.html: brand
+      header; Appearance section (blur toggle, transparency toggle +
+      0-100% slider shown dimmed/disabled when the toggle is off);
+      Volume section (0.5/1/2 dB segmented control); Amplifiers section
+      (a "Forget All (N)" danger-styled button with the mockup's
+      two-step confirm interaction — click once shows "Click to
+      confirm" for ~3s and reverts if not confirmed, click again shows
+      the executed state); Startup section (launch at login toggle).
+      Deliberately combining all controls into one task rather than
+      splitting per-control, since nothing here has real logic yet —
+      every control is purely visual, flipping/dragging/clicking any of
+      them does nothing. This makes the whole page comparable against
+      the mockup in one screenshot rather than partial pages at each
+      step. If any individual control turns out to be genuinely fiddly
+      to get right, say so and propose splitting rather than pushing
+      through.
+  - For the "Forget All (N)" button's idle count: either a static
+    placeholder number or the real count from the existing `KnownAmps`
+    D-Bus property are both fine here — reading real state isn't
+    "wiring the action," just displaying something that already
+    exists. Use your judgment on which is simpler to wire up cleanly
+    now vs. revisiting in Phase 4.4.7.
+  - No wiring in this phase at all - not blur, not transparency, not
+    volume step, not launch-at-login, not forget-amps. Each gets its
+    own dedicated wiring phase below.
+  - Verify live: open the settings page, compare against the mockup
+    control-by-control; confirm every toggle/slider/button visually
+    responds to interaction (switches flip, slider drags, confirm-
+    button's two-step text/state changes) without actually doing
+    anything real yet.
 - [ ] **Phase 4.4.2 — Volume step size wiring.** Store the selection in
       `plasmoid.configuration` (KConfig) and make the existing +/-
       step buttons in the main view actually read it, replacing the
       hardcoded 0.5dB. Verify live: set each of 0.5/1/2 dB, return to
       the main view, confirm each button click moves the amp's volume
       by exactly that amount.
-- [ ] **Phase 4.4.3 — Blur background toggle UI (no wiring).** Add the
-      toggle to the ConfigDialog. Purely visual — flipping it doesn't
-      need to do anything yet.
-  - State model: this is a pure UI/widget preference, stored in
-    `plasmoid.configuration` (KConfig) — settled, not something to
-    re-derive when wiring it up in 4.3.4.
-- [ ] **Phase 4.4.4 — Blur background wiring.** Wire the toggle to
+- [ ] **Phase 4.4.3 — Blur background wiring.** Wire the toggle to
       switch `Plasmoid.backgroundHints` between the default (blur-
       behind + system shadow, Phase 4.0's baseline) and `NoBackground`.
       `NoBackground` needs a custom-drawn fallback panel (matching the
@@ -1149,21 +1170,13 @@ architecture decisions; this file is just sequencing and status.
       — this was a real bug last attempt, check it explicitly this
       time) so the flyout doesn't look broken with blur off. Verify
       live: toggle in both directions, confirm no dead space or
-      clipping is introduced (shouldn't be possible with 4.3.0's real
-      ConfigDialog approach, but confirm rather than assume).
-- [ ] **Phase 4.4.5 — Transparency toggle + level slider UI (no
-      wiring).** Add both controls to the ConfigDialog — toggle plus a
-      0-100% slider that's visually disabled/dimmed when the toggle is
-      off. Purely visual, nothing reads these values yet.
-  - State model: pure UI/widget preference, KConfig — same as blur,
-    independent of it (not mutually exclusive, per earlier design
-    discussion).
-- [ ] **Phase 4.4.6 — Transparency on/off wiring.** Make the toggle
+      clipping is introduced.
+- [ ] **Phase 4.4.4 — Transparency on/off wiring.** Make the toggle
       actually apply *some* alpha value to the widget's own content
       background when on (a fixed default level is fine here — the
-      slider itself is 4.3.7's job). Verify live: toggle on/off,
+      slider itself is Phase 4.4.5's job). Verify live: toggle on/off,
       confirm the panel's background visibly changes opacity.
-- [ ] **Phase 4.4.7 — Transparency level slider wiring.** Make the
+- [ ] **Phase 4.4.5 — Transparency level slider wiring.** Make the
       slider's value actually drive the panel's alpha in real time.
       This is the control that got stuck at a fixed value and never
       responded to drag input last attempt — confirm the Slider is
@@ -1174,14 +1187,7 @@ architecture decisions; this file is just sequencing and status.
       update"). Verify live: drag to several different positions,
       confirm the panel's visible transparency changes accordingly at
       each one, not just at the default.
-- [ ] **Phase 4.4.8 — Launch at login toggle UI (no wiring).** Add the
-      toggle to the ConfigDialog. Purely visual — no systemd
-      interaction yet, just a static on/off control.
-  - State model: NOT an independently-stored KConfig preference — it's
-    a live reflection of `systemctl --user is-enabled` for the Phase
-    3.6 systemd unit. Flagging this now so 4.3.9 doesn't get built as
-    a stored bool by mistake.
-- [ ] **Phase 4.4.9 — Launch at login wiring.** Reading the toggle's
+- [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
       calls `systemctl --user enable`/`disable` directly. Investigate
@@ -1193,6 +1199,24 @@ architecture decisions; this file is just sequencing and status.
       that it actually changed, not just that the UI shows a different
       state; restart the widget and confirm the toggle reflects real
       systemd state on load, not a remembered UI value.
+- [ ] **Phase 4.4.7 — Forget remembered amps wiring.** Per the mockup:
+      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
+      and explicitly does **not** disconnect or forget the currently
+      active/selected amp. Investigate before implementing: known amps
+      are daemon-owned persisted state (Phase 4.2's architecture), so
+      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
+      — there is no existing way to clear this from outside the daemon
+      today. Confirm exactly what "does not disconnect the active amp"
+      means in terms of daemon state: does the active amp get
+      re-added to `KnownAmps` immediately (since it's still
+      broadcasting), or does it stay disconnected-but-not-forgotten
+      until its next broadcast is naturally re-ingested? Decide and
+      implement the button's real confirm-click behavior (currently
+      just a visual mock from Phase 4.4.1) to actually call the new
+      method on the second click. Verify live: forget all amps with
+      one connected and playing, confirm the connection is undisturbed
+      (volume/mute/source controls keep working) while the amp list
+      empties out and repopulates only as amps re-broadcast.
 - [ ] **Phase 4.5.0 - scroll-over-panel-icon volume control.** When the
       mouse is hovering over the widget's panel icon, it should be
       possible to scroll using the mouse wheel to change the volume
@@ -1201,15 +1225,53 @@ architecture decisions; this file is just sequencing and status.
       tray-hosted, see the architecture-change entry above. Scope itself
       is unchanged, not started here.) Should read the same volume-step
       KConfig value as Phase 4.4.2's buttons, not a separate setting.
-- [ ] **Phase 4.6.0 - install script + devialet-ctl packaging story.**
-      Bash install script (.sh) so a user can clone the repo, run it, and
-      have the widget fully installed and usable — this necessarily
-      includes deciding how devialet-ctl gets placed somewhere on PATH
-      (currently a manual `~/.local/bin` symlink per README, fine for
-      dev but not a real install path), alongside installing the
-      plasmoid itself and the Phase 3.6 systemd unit. Treat this as one
-      combined install story rather than a separate CLI-only packaging
-      step, since the script would need to solve both anyway.
+  - If scroll doesn't feel right at the same step size the +/- buttons
+    use, don't force a shared value - split into its own separate
+    KConfig value and its own settings control, following the same
+    pattern as 4.4.2, rather than compromising either interaction to
+    fit a single shared setting.
+- [ ] **Phase 4.6.0 — devialet-ctl build + PATH placement.** Decide the
+      real install location for the `devialet-ctl` binary (system-wide
+      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
+      than the current manual symlink, or `cargo install` into
+      `~/.cargo/bin`) and build/place it as part of the install script.
+      Currently a manual `~/.local/bin` symlink per README — fine for
+      dev, not a real install path.
+  - Verify: `devialet-ctl` is invocable from a fresh shell with no
+    manual step, on a machine that hasn't had it built/placed before.
+- [ ] **Phase 4.6.1 — Plasmoid install step.** Wrap the `kpackagetool6`
+      install/upgrade logic the script needs — including handling the
+      "already installed, needs upgrade not install" case cleanly when
+      the script is re-run on a system that already has the widget.
+  - Verify: widget installs cleanly on a fresh system; re-running the
+    script on an already-installed system upgrades cleanly with no
+    `kpackagetool6` errors.
+- [ ] **Phase 4.6.2 — Systemd user unit install.** Copy the Phase 3.6
+      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
+      `enable --now` as part of the script.
+  - Verify: `systemctl --user status` shows the daemon running
+    immediately after install; survives a logout/login.
+- [ ] **Phase 4.6.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
+      into one script a user runs after cloning the repo. Must be
+      idempotent — safe to re-run on an already-installed system
+      without duplicating units, breaking an existing install, or
+      erroring out. Sensible failure messages if a step fails partway
+      (don't leave the system in a half-installed state silently).
+  - Verify: a clean clone → run script → fully working widget + daemon
+    + CLI, end to end, no manual steps outside the script.
+- [ ] **Phase 4.6.4 — Uninstall script (decide scope first).** Decide
+      deliberately whether an uninstall script is in scope for v1.0.0
+      or explicitly deferred — don't let it default to "skipped"
+      silently. If in scope: reverse of 4.6.3 (disable/remove the
+      systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
+      remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
+  - Verify (if implemented): a full uninstall leaves no systemd unit,
+    no installed plasmoid, and no leftover binary.
+- [ ] **Phase 4.6.5 — README install instructions.** Replace the
+      current manual multi-step install instructions with "clone the
+      repo, run install.sh." Keep the manual steps documented separately
+      only if 4.6.4's uninstall is deferred and manual removal
+      instructions are still needed.
 
 ## Not yet scoped / parked
 
