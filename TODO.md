@@ -1109,21 +1109,60 @@ architecture decisions; this file is just sequencing and status.
     completely normal boot too, and matches a symptom previously seen
     in the Kotlin Android app) - see "Not yet scoped / parked" below.
 
+- [x] **Phase 4.4.0 — Settings page: add to the existing ConfigDialog.**
+      Adds a "General" category to the `ConfigDialog` Plasma already
+      auto-provides for every installed applet (Keyboard Shortcuts +
+      About, confirmed live in Phase 4.2.1) — no dialog to create, no
+      action to wire. The page itself is empty this phase per scope — just
+      the brand header (icon mark + "Devialet Expert Remote" / "Widget
+      Settings"), no settings content yet (that's Phase 4.4.1).
+  - **Investigated before implementing, per the phase's own
+    instruction:** confirmed by reading the shell's own
+    `AppletConfiguration.qml` that our category always appears
+    *alongside* Keyboard Shortcuts/About (separate `Repeater`s, no
+    merge/suppress mechanism exists), and that no `metadata.json` key
+    is involved at all — three real shipped Plasma 6 applets checked,
+    none reference `config.qml` there. Confirmed the real KCM page
+    convention (`KCM.SimpleKCM` root, checked its own source — plain
+    `Kirigami.ScrollablePage`, no forced Breeze-form styling) against
+    two real applets. See CLAUDE.md's "Settings ConfigDialog" section
+    for the corrected/expanded writeup.
+  - **A long live-debugging session, root-caused and documented so it
+    never has to be rediscovered** (see CLAUDE.md's new
+    `ConfigCategory.source` subsection for the permanent record): the
+    page loaded fine as a bare file, `qmllint` clean, root type matched
+    every working precedent — but every real click in the actual
+    ConfigDialog produced a deep, misleading Kirigami `PageRow` crash
+    ("Could not convert argument 1 ... to QQuickItem*"), which then
+    broke page navigation for the rest of that dialog session (even
+    Plasma's own Keyboard Shortcuts got stuck afterward). Ruled out in
+    order, each confirmed live rather than assumed: page content
+    complexity, the `../ui/Theme.qml` cross-directory import, a
+    missing `org.kde.plasma.plasmoid` import, a legacy
+    `X-Plasma-API: declarativeappletscript` key in `metadata.json`
+    (removed anyway - matches real convention, 13/15 real installed
+    plasmoids omit it). A local `PageRow.push()` repro (bare `qml6`,
+    no shell) succeeded cleanly, proving the shell environment itself
+    mattered. Two other real, independently-verified-live installed
+    plasmoids (Panel Colorizer, Digital Clock) opening their own
+    settings fine ruled out a general Plasma/Kirigami bug. The
+    breakthrough: pointing our category at Panel Colorizer's own file
+    worked, but an absolute path to *our own* file also worked while a
+    relative one didn't - which led to the real cause, found in other
+    installed plasmoids' own config.qml comments:
+    **`ConfigCategory.source` resolves relative to `contents/ui/`, not
+    to `config.qml`'s own location in `contents/config/`** - true for
+    a bare string or an explicit `Qt.resolvedUrl()` call alike. Fixed
+    with `source: "../config/ConfigGeneral.qml"`. Restored the
+    `Theme.qml` reuse afterward (confirmed not the actual cause,
+    no reason to keep the inlined-color workaround).
+  - **Verified live by you (2026-08-29):** gear icon → General shows
+    the brand header correctly, matching the mockup's style, alongside
+    working Keyboard Shortcuts/About; re-verified again after the
+    Theme.qml cleanup.
+
 ## Up next
 
-- [ ] **Phase 4.4.0 — Settings page: add to the existing ConfigDialog.**
-      Corrected scope per Phase 4.2.1's live-verification finding: a
-      default `ConfigDialog` (Keyboard Shortcuts + About pages) already
-      exists and already opens on gear-icon click, provided automatically
-      by Plasma for every installed applet — there is no dialog to create
-      and no action to wire. This phase is "declare `config.qml` +
-      `main.xml` in `metadata.json` to add the widget's own settings page
-      alongside the existing default pages," not "create the
-      dialog/action from nothing." The custom page itself can be empty
-      — a header/title only, no settings content, no toggles, nothing.
-      Investigate rather than assume: confirm whether the custom page
-      appears alongside Keyboard Shortcuts/About or requires explicit
-      configuration to keep/suppress them — not yet verified either way.
 - [ ] **Phase 4.4.1 — Settings page: full UI, all controls no-op.** Build
       the entire General page's visual layout in one pass, matching
       design/mockups/devialet_config_dialog_mockup_v3.html: brand

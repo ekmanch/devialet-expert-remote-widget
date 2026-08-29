@@ -255,13 +255,66 @@ seen in `BasicPlasmoidHeading.qml`), not from testing an actual installed
 applet, and it doesn't hold here. The `?.` guard is harmless to keep but
 isn't load-bearing — the action already resolves to something real.
 
-Practical consequence for any future settings-page work (e.g. Phase
-4.3.0): declaring `config.qml` + `main.xml` in `metadata.json` **adds a
-page to this already-existing dialog**, it does not create the dialog or
-wire up the trigger action — both already exist and already work. Confirm
-whether the custom page appears *alongside* the default Keyboard
-Shortcuts/About pages or requires explicit configuration to
-keep/suppress them — not yet verified either way.
+Practical consequence for any future settings-page work: shipping
+`contents/config/config.qml` (+ `contents/config/main.xml`) **adds a page
+to this already-existing dialog**, it does not create the dialog or wire
+up the trigger action — both already exist and already work. No
+`metadata.json` key is involved at all — confirmed by checking three real
+shipped Plasma 6 applets (`luisbocanegra.panel.colorizer`,
+`org.kde.desktopcontainment`, `org.kde.plasma.systemmonitor`), none of
+which reference `config.qml` there; Plasma's KPackage structure
+auto-detects it purely by its fixed conventional path.
+
+Confirmed live (Phase 4.4.0, 2026-08-29, reading the shell's own
+`/usr/share/plasma/shells/org.kde.plasma.desktop/contents/configuration/
+AppletConfiguration.qml`): the custom page(s) always appear *alongside*
+Keyboard Shortcuts/About, never replacing them — the sidebar is built
+from separate `Repeater`s (own categories, then Keyboard Shortcuts, then
+About for a non-containment applet like this one), not a single merged
+model, so there is no way to suppress the default two pages even if
+wanted. Once a `config.qml` category list is non-empty, the dialog also
+defaults to opening on the applet's own first category on launch, rather
+than Keyboard Shortcuts as it does with no `config.qml` present.
+
+### `ConfigCategory.source` resolves relative to `contents/ui/`, not `contents/config/` (found the hard way — Phase 4.4.0)
+
+Not documented in any official KDE reference found, but independently
+stated in several real third-party plasmoids' own source comments and
+confirmed live here: a `ConfigCategory { source: "X.qml" }` path is
+always resolved relative to the plasmoid's **`contents/ui/`** directory
+(the main QML root), **regardless of where `config.qml` itself lives**.
+This holds for a bare string *and* for an explicit `Qt.resolvedUrl("X.qml")`
+call written inside `config.qml` — both resolve relative to
+`config.qml`'s own file (`contents/config/`), which is the wrong base
+either way, so neither form is a workaround for the other.
+
+Getting this wrong doesn't produce a clean "file not found" error. It
+manifests as a deep, misleading Kirigami `PageRow` failure instead:
+`"Could not convert argument 1 from  to QQuickItem*"` /
+`TypeError: Passing incompatible arguments to C++ functions from
+JavaScript is not allowed.` (in `initAndInsertPage@PageRow.qml`, called
+from the shell's own `AppletConfiguration.qml`), and — worse — that
+failed *first* push corrupts page navigation for the **rest of that
+dialog session**: every other category (including Plasma's own,
+definitely-fine Keyboard Shortcuts/About) then fails identically via
+`replace()`, making the bug look far more general than it is. A blank
+category page plus other categories getting stuck showing stale content
+after switching are the visible symptoms.
+
+This project's `contents/config/` (per Repository Layout below) holds
+`config.qml`, `main.xml`, *and* the actual category page QML files
+(`ConfigGeneral.qml` etc.) side by side — a layout choice that directly
+collides with this resolution rule. The fix used here: reference category
+pages from `config.qml` with an explicit `"../config/"` prefix (e.g.
+`source: "../config/ConfigGeneral.qml"`), the same "prefix to reach pages
+living elsewhere" technique real precedents use for their own
+`ui/config/` subdirectories (e.g. `com.github.tilorenz.compact_pager`'s
+`source: "config/ConfigGeneral.qml"`), just adapted for `config/` being a
+*sibling* of `ui/` here rather than nested under it. Do not "fix" a blank
+or stuck config page by suspecting the page's own QML content, imports,
+or `metadata.json` API keys first — check this path resolution rule
+first, it is the far more likely cause for this specific failure
+signature.
 
 ## Environment
 
@@ -414,10 +467,12 @@ devialet-expert-remote-widget/
 │   ├── metadata.json
 │   └── contents/
 │       ├── ui/                     # main.qml, FullRepresentation.qml, etc.
-│       └── config/                 # config.qml + main.xml — Plasmoid.configuration
-│                                    #   (blur, reduce-motion, scroll-step,
-│                                    #   launch-at-login display). Added when a
-│                                    #   phase actually needs a settings view.
+│       └── config/                 # config.qml + main.xml + the "General"
+│                                    #   ConfigDialog page (Phase 4.4.0) — see
+│                                    #   "Settings ConfigDialog" above for the
+│                                    #   ConfigCategory.source path-resolution
+│                                    #   gotcha this layout runs into (fixed
+│                                    #   with a "../config/" source prefix).
 ├── systemd/
 │   └── devialet-remote-daemon.service   # user unit (Restart=on-failure) for
 │                                    #   `systemctl --user enable`, per the settled
