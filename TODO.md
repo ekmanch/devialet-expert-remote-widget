@@ -856,18 +856,56 @@ architecture decisions; this file is just sequencing and status.
     mouse noticeably above/below the thin visible line starts and tracks
     the drag correctly now; visible track appearance unchanged.
 
+- [x] **Phase 4.2.3 — Power button hover: off → green.** When the
+      amplifier is off (button shows "Power On"), hovering over the
+      power button changes its border, icon, and text to green,
+      signaling that clicking it will turn the amp on. Per
+      design/mockups/devialet_tray_boot_state_mockup.html
+      (`.action-btn.power-btn.state-off:hover`), which sets
+      `border-color:var(--success)` (`#5fa374`) and
+      `color:var(--success-bright)` (`#7bc796`) — nothing else
+      (no background/size change), confirmed by reading the CSS
+      directly before implementing.
+  - **Investigated before implementing, per the phase's own
+    instruction:** the power button (`FullRepresentation.qml`) is a
+    plain QQC2 `Button` already reading its own `hovered` property
+    directly (no `MouseArea`/`HoverHandler` needed — same pattern as
+    the mute button and the volume step buttons). Before this phase,
+    hover only drove `border.color`, unconditionally to `theme.danger`
+    regardless of power state — there was no on/off branch at all, and
+    icon/label color didn't respond to hover. "Amp is off" is already
+    tracked via `root.power` (bool, sourced from the daemon's D-Bus
+    `Power` property), the same property the button's own label text
+    already gates off — no new flag needed.
+  - **Fix:** added `theme.success` (`#5fa374`) and
+    `theme.successBright` (`#7bc796`) to `Theme.qml`, matching the
+    mockup 1:1 (same pattern as the existing `danger` port). Gave the
+    power `Button` an explicit `id: powerBtn` and branched its
+    `background.border.color` on `root.power` (`danger` when on,
+    `success` when off, both only while hovered); added matching
+    `powerBtn.hovered && !root.power` guards to the `Kirigami.Icon`
+    and `Label` colors (`successBright`) inside `contentItem`, which
+    previously never changed color on hover at all.
+  - Scope held: on-state hover (border only, `theme.danger`, icon/text
+    unchanged) is untouched — deferred to Phase 4.2.4 below. No change
+    to click behavior, power toggle logic, or any other button.
+  - **Verified live by you (2026-08-29):** hovering the power button
+    while the amp is off shows a green border, icon, and "Power On"
+    text, screenshot confirmed.
+
 ## Up next
 
-- [ ] **Phase 4.2.3 — color on hover over power on/off** Set both color
-      and border of the power on/off button when hovering over the
-      button with the mouse.
-  - If the amplifier is on and the text changes to "Power off" when
-  hovering over the button, change the border, power icon, and
-  "Power off" text to red color.
-  - If the amplifier is off and the text changes to "Power on" when
-  hovering over the button, change the button border, power icon, and
-  "Power on" text to green color.
-- [ ] **Phase 4.2.4 — Panel icon: switch to Glow Dot variant.** Replace
+- [ ] **Phase 4.2.4 — Power button hover: on → red.** When the
+      amplifier is on (button shows "Power Off"), hovering over the
+      power button should change its border, icon, and text to red.
+      Per the same mockup (`.action-btn.power-btn.state-on:hover`).
+      Now that 4.2.3 has landed, note the on-hover styling currently
+      only sets `border.color: theme.danger` (icon/label stay
+      `theme.text`) — decide whether to extend it to icon/text
+      (`theme.danger`, matching the mockup's `color:var(--danger)` on
+      both border and text) as part of this phase, same as 4.2.3 added
+      for the off state.
+- [ ] **Phase 4.2.5 — Panel icon: switch to Glow Dot variant.** Replace
       the current panel icon with
       design/icon/A - Glow Dot/devialet_icon_A_filled.svg. Scope: icon
       asset swap only. Confirm sizing/margin convention still holds
@@ -877,7 +915,41 @@ architecture decisions; this file is just sequencing and status.
       values carry over unchanged. Verify live: new icon renders
       correctly-sized and correctly-positioned in the real panel,
       matching sibling icons the way Phase 4.1's did.
-- [ ] **Phase 4.3.0 — Settings page: add to the existing ConfigDialog.**
+- [ ] **Phase 4.3 — Power-on "booting" intermediate state (daemon +
+      widget).** The amp's UDP status only reports off/on — there's no
+      distinct "booting" signal — and power-on is slow while power-off
+      is fast. Per
+      design/mockups/devialet_tray_boot_state_mockup.html: clicking
+      "Power On" should immediately show an intermediate "booting"
+      state (spinner replacing the power icon, "Powering on…" label,
+      pulsing amber amp-status dot, amp header sub-text "Booting…"),
+      then transition to "on" once the amp's real status confirms it,
+      or fall back to "off" if a timeout elapses first. Power-off stays
+      an immediate transition, no intermediate state, unchanged.
+  - **Daemon-owned, not QML-owned:** the daemon must run the optimistic
+    boot timer itself (push "booting" over D-Bus immediately on
+    power-on command, then push "on" on confirmed status or "off" on
+    timeout) — matches this project's existing convention that
+    long-lived, systemd-supervised state belongs in the daemon rather
+    than the widget, which reloads more frequently.
+  - **Timeout: 15 seconds**, per your own real-world observation of how
+    long the amp typically takes to boot. Amp boot failures are
+    expected to be extremely rare (not yet observed even once), so this
+    is a safety-net fallback rather than a commonly-hit path — implement
+    it, but don't over-invest in polishing the rare-failure UX beyond
+    what the mockup already shows (falls back to plain "off").
+  - Investigate before implementing: confirm the exact D-Bus property/
+    signal shape for exposing a three-state (off/booting/on) status to
+    QML — likely an addition to whatever property already carries
+    on/off state today — and show it to me before writing QML that
+    assumes a specific shape.
+  - Verify live: click Power On, confirm the booting UI appears
+    immediately and the real amp is heard to power on within the
+    window; separately, a way to simulate/force the timeout path
+    (e.g. temporarily lowering the timeout constant, or disconnecting
+    the amp mid-boot) should be discussed before calling this phase
+    done, since the failure path may be hard to trigger for real.
+- [ ] **Phase 4.4.0 — Settings page: add to the existing ConfigDialog.**
       Corrected scope per Phase 4.2.1's live-verification finding: a
       default `ConfigDialog` (Keyboard Shortcuts + About pages) already
       exists and already opens on gear-icon click, provided automatically
@@ -892,22 +964,22 @@ architecture decisions; this file is just sequencing and status.
       configuration to keep/suppress them. Verify live: dialog opens
       showing the new page (plus whatever became of the default pages,
       confirmed either way), main view is completely unaffected.
-- [ ] **Phase 4.3.1 — Volume step size UI (no wiring).** Add the
+- [ ] **Phase 4.4.1 — Volume step size UI (no wiring).** Add the
       0.5/1/2 dB segmented control to the ConfigDialog. Purely visual
       — selecting an option doesn't need to persist or do anything yet.
-- [ ] **Phase 4.3.2 — Volume step size wiring.** Store the selection in
+- [ ] **Phase 4.4.2 — Volume step size wiring.** Store the selection in
       `plasmoid.configuration` (KConfig) and make the existing +/-
       step buttons in the main view actually read it, replacing the
       hardcoded 0.5dB. Verify live: set each of 0.5/1/2 dB, return to
       the main view, confirm each button click moves the amp's volume
       by exactly that amount.
-- [ ] **Phase 4.3.3 — Blur background toggle UI (no wiring).** Add the
+- [ ] **Phase 4.4.3 — Blur background toggle UI (no wiring).** Add the
       toggle to the ConfigDialog. Purely visual — flipping it doesn't
       need to do anything yet.
   - State model: this is a pure UI/widget preference, stored in
     `plasmoid.configuration` (KConfig) — settled, not something to
     re-derive when wiring it up in 4.3.4.
-- [ ] **Phase 4.3.4 — Blur background wiring.** Wire the toggle to
+- [ ] **Phase 4.4.4 — Blur background wiring.** Wire the toggle to
       switch `Plasmoid.backgroundHints` between the default (blur-
       behind + system shadow, Phase 4.0's baseline) and `NoBackground`.
       `NoBackground` needs a custom-drawn fallback panel (matching the
@@ -917,19 +989,19 @@ architecture decisions; this file is just sequencing and status.
       live: toggle in both directions, confirm no dead space or
       clipping is introduced (shouldn't be possible with 4.3.0's real
       ConfigDialog approach, but confirm rather than assume).
-- [ ] **Phase 4.3.5 — Transparency toggle + level slider UI (no
+- [ ] **Phase 4.4.5 — Transparency toggle + level slider UI (no
       wiring).** Add both controls to the ConfigDialog — toggle plus a
       0-100% slider that's visually disabled/dimmed when the toggle is
       off. Purely visual, nothing reads these values yet.
   - State model: pure UI/widget preference, KConfig — same as blur,
     independent of it (not mutually exclusive, per earlier design
     discussion).
-- [ ] **Phase 4.3.6 — Transparency on/off wiring.** Make the toggle
+- [ ] **Phase 4.4.6 — Transparency on/off wiring.** Make the toggle
       actually apply *some* alpha value to the widget's own content
       background when on (a fixed default level is fine here — the
       slider itself is 4.3.7's job). Verify live: toggle on/off,
       confirm the panel's background visibly changes opacity.
-- [ ] **Phase 4.3.7 — Transparency level slider wiring.** Make the
+- [ ] **Phase 4.4.7 — Transparency level slider wiring.** Make the
       slider's value actually drive the panel's alpha in real time.
       This is the control that got stuck at a fixed value and never
       responded to drag input last attempt — confirm the Slider is
@@ -940,14 +1012,14 @@ architecture decisions; this file is just sequencing and status.
       update"). Verify live: drag to several different positions,
       confirm the panel's visible transparency changes accordingly at
       each one, not just at the default.
-- [ ] **Phase 4.3.8 — Launch at login toggle UI (no wiring).** Add the
+- [ ] **Phase 4.4.8 — Launch at login toggle UI (no wiring).** Add the
       toggle to the ConfigDialog. Purely visual — no systemd
       interaction yet, just a static on/off control.
   - State model: NOT an independently-stored KConfig preference — it's
     a live reflection of `systemctl --user is-enabled` for the Phase
     3.6 systemd unit. Flagging this now so 4.3.9 doesn't get built as
     a stored bool by mistake.
-- [ ] **Phase 4.3.9 — Launch at login wiring.** Reading the toggle's
+- [ ] **Phase 4.4.9 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
       calls `systemctl --user enable`/`disable` directly. Investigate
@@ -959,15 +1031,15 @@ architecture decisions; this file is just sequencing and status.
       that it actually changed, not just that the UI shows a different
       state; restart the widget and confirm the toggle reflects real
       systemd state on load, not a remembered UI value.
-- [ ] **Phase 4.4.0 - scroll-over-panel-icon volume control.** When the
+- [ ] **Phase 4.5.0 - scroll-over-panel-icon volume control.** When the
       mouse is hovering over the widget's panel icon, it should be
       possible to scroll using the mouse wheel to change the volume
       up/down depending on if the user is scrolling up or down. (Renamed
       from "scroll-over-tray-icon" - this widget is panel-pinned, not
       tray-hosted, see the architecture-change entry above. Scope itself
       is unchanged, not started here.) Should read the same volume-step
-      KConfig value as Phase 4.3.2's buttons, not a separate setting.
-- [ ] **Phase 4.5.0 - install script + devialet-ctl packaging story.**
+      KConfig value as Phase 4.4.2's buttons, not a separate setting.
+- [ ] **Phase 4.6.0 - install script + devialet-ctl packaging story.**
       Bash install script (.sh) so a user can clone the repo, run it, and
       have the widget fully installed and usable — this necessarily
       includes deciding how devialet-ctl gets placed somewhere on PATH

@@ -1375,6 +1375,7 @@ Item {
             }
 
             Button {
+                id: powerBtn
                 Layout.fillWidth: true
                 Layout.preferredHeight: 38
                 enabled: root.ampIp !== ""
@@ -1389,7 +1390,7 @@ Item {
                     radius: root.theme.radiusMd
                     color: root.theme.surface
                     border.width: 1
-                    border.color: parent.hovered ? root.theme.danger : root.theme.divider
+                    border.color: powerBtn.hovered ? (root.power ? root.theme.danger : root.theme.success) : root.theme.divider
                 }
                 contentItem: RowLayout {
                     spacing: 6
@@ -1398,13 +1399,13 @@ Item {
                         implicitWidth: 13
                         implicitHeight: 13
                         source: "system-shutdown-symbolic"
-                        color: root.theme.text
+                        color: (powerBtn.hovered && !root.power) ? root.theme.successBright : root.theme.text
                     }
                     Label {
                         text: root.power ? "Power Off" : "Power On"
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: root.theme.text
+                        color: (powerBtn.hovered && !root.power) ? root.theme.successBright : root.theme.text
                     }
                     Item { Layout.fillWidth: true }
                 }
