@@ -1161,40 +1161,76 @@ architecture decisions; this file is just sequencing and status.
     working Keyboard Shortcuts/About; re-verified again after the
     Theme.qml cleanup.
 
+- [x] **Phase 4.4.1 — Settings page: full UI, all controls no-op.** Built
+      the entire General page's visual layout in one pass, matching
+      design/mockups/devialet_config_dialog_mockup_v3.html: Appearance
+      (blur toggle, transparency toggle + 0-100% slider dimmed/disabled
+      when the toggle is off), Volume (0.5/1/2 dB segmented control),
+      Amplifiers ("Forget All (N)" button with the mockup's two-step
+      confirm interaction, ~3s revert timeout), Startup (launch at
+      login toggle) — all purely visual this phase, nothing wired.
+  - **Investigated before implementing, per the phase's own
+    instruction:** read every control's exact CSS (switch pill/thumb
+    geometry and color transitions, slider gradient-fill + thumb,
+    segmented control's active-state colors, danger button's
+    `.confirming` state) and the mockup's own `handleForget()` JS for
+    the precise two-step state machine, rather than assuming standard
+    QQC2 styling would match. Confirmed the slider could reuse
+    `FullRepresentation.qml`'s already-solved custom `background`/
+    `handle` delegate pattern from the volume slider instead of
+    reinventing it. Went with the real `KnownAmps` D-Bus count (not a
+    placeholder) for "Forget All (N)", reusing the same
+    `Plasma.DBusProperties` mechanism already proven in
+    `FullRepresentation.qml`. Used one flat `ColumnLayout` (not
+    `Kirigami.FormLayout`, wrong shape for this custom row style),
+    matching the mockup's own flat DOM structure exactly — including
+    the "divider on every row except the literal last one" detail.
+  - **New reusable files** (`contents/config/`, 3 uses of the switch, 5
+    of the row wrapper, 4 of the section label — real duplication
+    otherwise): `SettingsSwitch.qml`, `SettingsRow.qml`,
+    `SectionLabel.qml`. Added `theme.dangerBright` (`#d17165`) to
+    `Theme.qml` for the confirm-state danger button, matching the
+    mockup's `--danger-bright`. No control turned out genuinely fiddly
+    - the slider reused an existing pattern, everything else was
+    straightforward Rectangle+state QML plus one `Timer` for the
+    confirm revert - so this stayed one combined task as scoped, no
+    splitting needed.
+  - **Two real bugs found and fixed live**, not scope creep - both
+    needed for the page to work at all:
+    1. `font.pixelSize` is an `int` in Qt, not a real number - I'd
+       carried the mockup's fractional CSS `px` values over literally
+       (`13.5`, `10.5`, `11.5`), which is a genuine QML type error
+       ("Invalid property assignment: int expected"), invisible to
+       `qmllint` (didn't catch it) and only surfaced as the same
+       misleading whole-page/whole-session `PageRow` failure from
+       Phase 4.4.0 (`SettingsRow` "unavailable"). Rounded all three to
+       integers.
+    2. `properties.KnownAmps` needed the same `{"value": [...]}`
+       unwrap treatment already established in
+       `FullRepresentation.qml` (Phase 2 finding) - skipping it meant
+       `.length` was read off the wrapper object, not the array,
+       silently coercing the `int` count property to 0. Fixed by
+       reusing the same `unwrap()` helper shape. (This turned out not
+       to be the cause of the "(0)" you first saw - that was the
+       button's own correct terminal "done" state from testing the
+       confirm flow twice - but it was still a real, worth-fixing bug:
+       confirmed live afterward that the count is genuinely accurate,
+       e.g. "Forget All (1)" with one real known amp.)
+  - Scope held: every control confirmed no-op - no KConfig writes, no
+    D-Bus calls beyond the read-only `KnownAmps` count. `config.qml`
+    and `metadata.json` untouched; the existing brand header's content
+    untouched, only wrapped in a new outer `ColumnLayout` (needed to
+    stack the new sections beneath it).
+  - **Verified live by you (2026-08-29):** full page screenshotted
+    side-by-side against the mockup - "genuinely extremely close /
+    identical in appearance." All four interactive checks confirmed:
+    switches flip on click, the transparency slider dims/disables
+    correctly when its toggle is off, the segmented control's active
+    option changes on click, and Forget All correctly reverts to the
+    real count after ~3s when not confirmed a second time.
+
 ## Up next
 
-- [ ] **Phase 4.4.1 — Settings page: full UI, all controls no-op.** Build
-      the entire General page's visual layout in one pass, matching
-      design/mockups/devialet_config_dialog_mockup_v3.html: brand
-      header; Appearance section (blur toggle, transparency toggle +
-      0-100% slider shown dimmed/disabled when the toggle is off);
-      Volume section (0.5/1/2 dB segmented control); Amplifiers section
-      (a "Forget All (N)" danger-styled button with the mockup's
-      two-step confirm interaction — click once shows "Click to
-      confirm" for ~3s and reverts if not confirmed, click again shows
-      the executed state); Startup section (launch at login toggle).
-      Deliberately combining all controls into one task rather than
-      splitting per-control, since nothing here has real logic yet —
-      every control is purely visual, flipping/dragging/clicking any of
-      them does nothing. This makes the whole page comparable against
-      the mockup in one screenshot rather than partial pages at each
-      step. If any individual control turns out to be genuinely fiddly
-      to get right, say so and propose splitting rather than pushing
-      through.
-  - For the "Forget All (N)" button's idle count: either a static
-    placeholder number or the real count from the existing `KnownAmps`
-    D-Bus property are both fine here — reading real state isn't
-    "wiring the action," just displaying something that already
-    exists. Use your judgment on which is simpler to wire up cleanly
-    now vs. revisiting in Phase 4.4.7.
-  - No wiring in this phase at all - not blur, not transparency, not
-    volume step, not launch-at-login, not forget-amps. Each gets its
-    own dedicated wiring phase below.
-  - Verify live: open the settings page, compare against the mockup
-    control-by-control; confirm every toggle/slider/button visually
-    responds to interaction (switches flip, slider drags, confirm-
-    button's two-step text/state changes) without actually doing
-    anything real yet.
 - [ ] **Phase 4.4.2 — Volume step size wiring.** Store the selection in
       `plasmoid.configuration` (KConfig) and make the existing +/-
       step buttons in the main view actually read it, replacing the

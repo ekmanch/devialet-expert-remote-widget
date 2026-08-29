@@ -41,6 +41,7 @@ QtObject {
     readonly property color textFaint: "#5c5c60"
     readonly property color divider: Qt.rgba(1, 1, 1, 0.08)
     readonly property color danger: "#b5544a"
+    readonly property color dangerBright: "#d17165"
     readonly property color success: "#5fa374"
     readonly property color successBright: "#7bc796"
     readonly property color warning: "#a3813a"
