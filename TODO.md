@@ -923,18 +923,54 @@ architecture decisions; this file is just sequencing and status.
     while the amp is on shows a red border, icon, and "Power Off"
     text, screenshot confirmed; off-state hover re-checked unchanged.
 
+- [x] **Phase 4.2.5 — Panel icon: switch to Glow Dot variant.** Replaced
+      the panel icon with
+      `design/icon/A - Glow Dot/devialet_icon_A_filled.svg` (copper dot
+      + translucent ring, `viewBox="0 0 34 34"`).
+  - **Investigated before implementing, per the phase's own
+    instruction:**
+    1. **Inset/margin** — computed (not eyeballed) the artwork's own
+       bounding box: outer ring extends to `r + stroke-width/2 = 12`
+       from center `(17,17)`, giving a `[5,29]` bbox inside the
+       `34×34` canvas — a 14.7% inset per side, already matching the
+       Breeze symbolic convention (~13-14%) measured during Phase
+       4.1's triangle-icon fix. No scale/margin correction needed,
+       unlike Phase 4.1's original icon.
+    2. **Color model** — the new SVG uses hardcoded hex fill/stroke
+       (`#e3a06a`), not `fill="currentColor"`, structurally matching
+       Phase 4.1's abandoned "Iteration 1" (`devialet_icon_filled.svg`)
+       rather than the `currentColor_tray.svg` that `isMask:true` +
+       `Kirigami.Theme.textColor` was built for. Flagged this as a
+       real behavior decision rather than a pure asset swap: keeping
+       `isMask:true` would flatten the copper color and the ring's
+       0.35-opacity glow into one flat theme-color mask, likely
+       defeating the point of this artwork. Asked and confirmed:
+       render the SVG's own colors as-is.
+  - **Fix:** added `plasmoid/contents/icons/devialet_icon_glow_dot.svg`
+    (verbatim copy, no changes needed). `main.qml`'s `Plasmoid.icon`
+    now points at it. `CompactRepresentation.qml`'s `Kirigami.Icon`
+    changed to `isMask: false` with the `color:
+    Kirigami.Theme.textColor` override removed, so the copper
+    fill/opacity renders as designed. Trade-off noted in-code: this
+    icon no longer adapts to a light panel theme — not yet verified
+    against one. `metadata.json`'s `KPlugin.Icon`, click behavior, and
+    the old unused icon files left untouched, per scope.
+  - **Verified quantitatively, not just visually** (same technique as
+    Phase 4.1): screenshotted the real panel (`spectacle`, native
+    3840×2160) and measured pixel bounding boxes by diffing against
+    background. New icon: 32×32px. Neighboring Breeze symbolic icons
+    in the same systray: volume/speaker 35×34px, screen-share 33×33px
+    — matches sibling icon sizing within measurement/glyph-shape
+    noise, no repeat of Phase 4.1's original oversized-icon bug. One
+    stray differing pixel above the icon was isolated and confirmed to
+    be a wallpaper star, not part of the icon render, before being
+    excluded from the measurement.
+  - **Verified live by you (2026-08-29):** screenshot confirmed clean
+    copper dot + glow ring at correct size next to sibling systray
+    icons.
+
 ## Up next
 
-- [ ] **Phase 4.2.5 — Panel icon: switch to Glow Dot variant.** Replace
-      the current panel icon with
-      design/icon/A - Glow Dot/devialet_icon_A_filled.svg. Scope: icon
-      asset swap only. Confirm sizing/margin convention still holds
-      (re-check against the Breeze-inset convention established during
-      Phase 4.1's icon work — don't assume the new artwork already has
-      equivalent padding) rather than assuming the old scale/inset
-      values carry over unchanged. Verify live: new icon renders
-      correctly-sized and correctly-positioned in the real panel,
-      matching sibling icons the way Phase 4.1's did.
 - [ ] **Phase 4.3 — Power-on "booting" intermediate state (daemon +
       widget).** The amp's UDP status only reports off/on — there's no
       distinct "booting" signal — and power-on is slow while power-off

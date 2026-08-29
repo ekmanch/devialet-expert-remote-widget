@@ -43,7 +43,17 @@ PlasmoidItem {
     // metadata.json's Icon is left as a real Breeze name (unchanged) so
     // the "Add Widgets" entry stays a valid, if generic, icon rather than
     // silently breaking.
-    Plasmoid.icon: Qt.resolvedUrl("../icons/devialet_icon_currentColor_tray.svg")
+    // Phase 4.2.5: switched to the "Glow Dot" variant
+    // (design/icon/A - Glow Dot/devialet_icon_A_filled.svg). Its artwork's
+    // own bounding box (outer ring at r=11, stroke-width=2, centered in a
+    // 34x34 viewBox) sits 5 units in from each edge - a 14.7% inset,
+    // matching the Breeze symbolic-icon convention (~13-14%) measured
+    // during Phase 4.1's triangle-icon fix, so no scale/margin correction
+    // was needed here. Unlike devialet_icon_currentColor_tray.svg, this
+    // artwork uses hardcoded copper fill/stroke (not currentColor) by
+    // design - see CompactRepresentation.qml for why isMask is off for
+    // this icon.
+    Plasmoid.icon: Qt.resolvedUrl("../icons/devialet_icon_glow_dot.svg")
 
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
