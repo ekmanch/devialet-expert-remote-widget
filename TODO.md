@@ -1442,6 +1442,38 @@ architecture decisions; this file is just sequencing and status.
     Reload (`kpackagetool6 --upgrade` + `plasmashell --replace`)
     confirmed the setting survives a full widget restart.
 
+- [x] **Phase 4.4.2.2 — Remove Blur background setting.** Per revised
+      design/mockups/devialet_config_dialog_mockup_v4.html: the
+      Appearance section now shows Transparency only, no Blur row.
+      Blur is dropped as a feature entirely - real desktop
+      transparency requires `Plasmoid.backgroundHints = NoBackground`
+      (Phase 4.4.X, next), which removes the same system frame that
+      provides KWin blur-behind eligibility, so a Blur toggle could
+      never do anything useful once transparency actually works. Pure
+      removal: Phase 4.4.2.1 had added Blur's row styling and its
+      dependent-disable-on-Transparency logic, but no `main.xml` entry
+      or `backgroundHints` wiring was ever added (Blur wiring was
+      never reached) - nothing else to unwire.
+  - **Investigated before implementing, per instruction:** confirmed
+    the Blur `SettingsRow` block (`ConfigGeneral.qml`) was the only
+    place referencing it - grepped the whole `plasmoid/` tree for
+    "blur"; the only other hits were the Transparency slider's own,
+    separate dependent-disable sub-row (unrelated, stays), and the
+    real KWin blur-behind backdrop effect in `FullRepresentation.qml`/
+    `Theme.qml` (a different, still-live feature, not the config-page
+    toggle). Confirmed `main.xml` had no `blur` `<entry>` to remove -
+    Blur wiring was never reached, exactly as expected.
+  - `ConfigGeneral.qml`: removed the Blur `SettingsRow` (name, desc,
+    `SettingsSwitch`) and its `opacity`/`enabled`/`Behavior on opacity`
+    dependent-disable bindings, in full. Transparency's own switch and
+    slider sub-row untouched.
+  - `main.xml`: trimmed the stray "blur" mention from the Phase 4.4.0
+    doc comment listing future `<entry>` elements (doc-only, no
+    functional change).
+  - **Verified live by you:** settings page's Appearance section shows
+    only Transparency with its slider, no Blur row, no leftover gap.
+    Matches the mockup exactly.
+
 ## Up next
 
 - [ ] **Phase 4.4.4 — Transparency level slider wiring.** Make the
@@ -1457,35 +1489,6 @@ architecture decisions; this file is just sequencing and status.
       each one, not just at the default; close and reopen the settings
       dialog (and separately, reload the widget) to confirm the last
       dragged value actually persists rather than resetting to default.
-- [ ] **Phase 4.4.5 — Blur background wiring (depends on Transparency).**
-      Wire the toggle to real behavior: store its value in
-      `plasmoid.configuration` (KConfig) so it persists across dialog
-      closes and widget reloads, and switch `Plasmoid.backgroundHints`
-      between the default (blur-behind + system shadow, Phase 4.0's
-      baseline) and `NoBackground`. Confirmed via KWin's own
-      documentation ("Blurs the background behind semi-transparent
-      windows") that blur is genuinely inert without transparency -
-      the row's disabled state (Phase 4.4.2.1) reflects a real
-      dependency, not a cosmetic one. `NoBackground` needs a
-      custom-drawn fallback panel (matching the widget's own copper/
-      graphite background at full opacity, not a mismatched or
-      translucent-looking one — this was a real bug on two separate
-      attempts now, verify the fix with a real measured pixel check
-      this time, not just a code read) so the flyout doesn't look
-      broken with blur off. Also decide and confirm: if a user turns
-      Transparency off while Blur was on, does Blur's stored KConfig
-      value stay `true` (silently resuming if Transparency is
-      re-enabled later) or reset to `false`? Leaning toward "leave the
-      stored value as-is, only the row's enabled state changes" to
-      match how the Transparency slider's own value already behaves
-      when disabled - confirm this explicitly rather than assuming.
-      Verify live: with Transparency on, toggle Blur in both
-      directions, confirm no dead space, clipping, or stray border
-      artifact is introduced; with Transparency off, confirm Blur's
-      row is disabled per Phase 4.4.2.1 and its stored value is
-      untouched by simply toggling Transparency; close and reopen the
-      settings dialog (and separately, reload the widget) to confirm
-      the choice actually persists rather than resetting to default.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
@@ -1574,6 +1577,7 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
+- [ ] **scroll over volume slider to adjust volume**
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced

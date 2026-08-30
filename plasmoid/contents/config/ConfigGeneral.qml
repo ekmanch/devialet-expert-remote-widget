@@ -221,19 +221,6 @@ KCM.SimpleKCM {
             }
         }
 
-        // Requires Transparency (KWin's Blur effect only blurs behind
-        // semi-transparent windows) - dimmed/inert when that switch is
-        // off, same opacity/enabled cascade as the sub-row above.
-        SettingsRow {
-            opacity: transSwitch.checked ? 1.0 : 0.35
-            enabled: transSwitch.checked
-            Behavior on opacity { NumberAnimation { duration: 150 } }
-
-            name: "Blur background"
-            desc: "Glassy vibrancy behind the flyout. Requires transparency to enable."
-            SettingsSwitch { id: blurSwitch; checked: true }
-        }
-
         // ---- Volume ----
         SectionLabel { text: "Volume" }
 

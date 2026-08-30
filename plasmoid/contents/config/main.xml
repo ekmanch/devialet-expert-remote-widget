@@ -5,7 +5,7 @@
   rather than deferred to Phase 4.4.1 because every config.qml-shipping
   applet found on this system (checked, not assumed - see config.qml's
   own doc comment) also ships a main.xml alongside it; Phase 4.4.1 will
-  add real <entry> elements here (blur, reduce-motion, scroll-step,
+  add real <entry> elements here (reduce-motion, scroll-step,
   launch-at-login display) per CLAUDE.md's Repository Layout.
 -->
 <kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
