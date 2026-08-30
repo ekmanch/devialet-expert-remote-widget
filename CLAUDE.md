@@ -564,3 +564,45 @@ against multiple Plasma themes, not just Darkly.
 Do not re-open this as a fresh bug investigation without reading this
 note first — it's been root-caused and the remaining artifact is an
 accepted trade-off, not an unexplained regression.
+
+***  real transparency was investigated and found infeasible from applet code (settled, do not re-attempt without new evidence) ***
+
+Investigated on the now-deleted `experiment/real-transparency` branch.
+Initial theory: this widget's popup uses Plasma's default background
+frame, which (for Darkly specifically) is hardcoded fully opaque -
+confirmed by reading Darkly's `dialogs/background.svg` and its active
+color scheme's alpha-less RGB values directly. The fix was assumed to
+be `Plasmoid.backgroundHints = NoBackground`.
+
+That assumption turned out to be built on the wrong class entirely.
+Runtime diagnostics (walking `root.Window.window` and logging the
+actual class) showed this widget's popup is a `PlasmaWindow`
+(`PlasmaQuick::AppletPopup` → `PopupPlasmaWindow` → `PlasmaWindow`, a
+newer, 2023-era class), not `PlasmaQuick::Dialog` as originally
+assumed - all of the initial investigation's C++ source reading was
+of the wrong header. `PlasmaWindow`'s real `BackgroundHints` enum
+(confirmed in its actual header) has only `StandardBackground` and
+`SolidBackground` - **no `NoBackground` value exists at all** for this
+window class, on this Plasma version. There is no applet-level API to
+remove the frame image entirely.
+
+Separately confirmed: visible transparency/blur seen under other
+Plasma themes (e.g. Ant-Dark) on other widgets (Kickoff, Digital
+Clock, weather widgets) is not those widgets doing anything special in
+code - it's the *theme's own* `dialogs/background.svg` frame asset
+having genuine partial opacity baked in by the theme author. Every
+applet using the default background picks this up automatically, with
+zero code, purely because the shared system frame image itself is
+translucent under that theme. An individual applet has no ability to
+choose or override which theme's frame asset the user has selected,
+and no ability to make a theme's opaque frame asset translucent from
+the outside.
+
+Conclusion: genuine, controllable desktop transparency is not
+achievable from applet-level QML on this Plasma version, regardless of
+theme. It is a property of the user's chosen Plasma theme's own frame
+asset, entirely outside this widget's control. Feature dropped
+entirely (see TODO.md). Do not re-attempt without first confirming a
+fundamentally different Plasma API is available (e.g. a future
+`PlasmaWindow::BackgroundHints` value, or migration back to a window
+class that does expose `NoBackground`).

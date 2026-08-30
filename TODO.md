@@ -1441,17 +1441,17 @@ architecture decisions; this file is just sequencing and status.
     a wallpaper, or once Phase 4.4.4's slider allows a lower alpha.
     Reload (`kpackagetool6 --upgrade` + `plasmashell --replace`)
     confirmed the setting survives a full widget restart.
-  - **Addendum — Transparency removed from main in `e084543`.** Covers
-    all of Transparency's
-    history above (Phase 4.4.1's Appearance-section scaffold, Phase
-    4.4.2.1's reorder/dependent-disable, and this phase's on/off
-    wiring): Transparency turned out to be capped by Plasma's own
-    opaque popup background - real desktop transparency is being
-    explored separately on the `experiment/real-transparency` branch,
-    not on main. If that branch succeeds, this feature returns via a
-    merge with its own full history documented there. If it doesn't
-    pan out, this annotation is as much detail as main's TODO.md will
-    carry - don't expand on it here.
+  - **Addendum — Transparency removed from main in `e084543`.** Real
+    desktop transparency was investigated on `experiment/real-
+    transparency` and found infeasible: the widget's actual popup
+    window class (`PlasmaWindow`, not `Dialog` as originally assumed)
+    has no background-removal option at all on this Plasma version,
+    and transparency visible under other themes (e.g. Ant-Dark) on
+    other widgets comes from that theme's own frame asset, not
+    anything an applet can control. See CLAUDE.md's Known Issues entry
+    for the full investigation. Branch deleted - this note plus
+    CLAUDE.md's entry is the complete record; there is no further
+    history to recover.
   - **Verified live by you:** with this removal in place, all
     appearance-based settings are now gone from the widget - Blur
     (Phase 4.4.2.2, already removed earlier) and Transparency (toggle
