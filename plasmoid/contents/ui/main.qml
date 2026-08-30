@@ -60,4 +60,21 @@ PlasmoidItem {
     }
 
     fullRepresentation: FullRepresentation {}
+
+    // Phase 4.5.0: custom hover content for the panel icon, shown by the
+    // shell's own native tooltip dialog (see VolumeHoverTooltip.qml's
+    // header comment). Reads live off compactRepresentationItem - the
+    // instance CompactRepresentation.qml above becomes once created -
+    // rather than FullRepresentation, since only the compact
+    // representation is guaranteed to exist when a hover can happen (see
+    // CompactRepresentation.qml's header comment on preload timing).
+    // Optional chaining here mirrors the real org.kde.plasma.volume
+    // applet's own `fullRepresentationItem?.microphoneTestPage` pattern
+    // for reaching into a dynamically-typed representation item.
+    toolTipItem: VolumeHoverTooltip {
+        iconSource: root.compactRepresentationItem?.iconSource ?? ""
+        ampName: root.compactRepresentationItem?.tooltipAmpName ?? ""
+        volumeDb: root.compactRepresentationItem?.volumeDb
+        hasAmp: (root.compactRepresentationItem?.ampIp ?? "") !== ""
+    }
 }

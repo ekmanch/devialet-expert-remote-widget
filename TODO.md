@@ -1567,7 +1567,7 @@ architecture decisions; this file is just sequencing and status.
       one connected and playing, confirm the connection is undisturbed
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
-- [ ] **Phase 4.5.0 - scroll-over-panel-icon volume control.** When the
+- [ ] **Phase 4.5.0 — scroll-over-panel-icon volume control.** When the
       mouse is hovering over the widget's panel icon, it should be
       possible to scroll using the mouse wheel to change the volume
       up/down depending on if the user is scrolling up or down. (Renamed
@@ -1580,6 +1580,100 @@ architecture decisions; this file is just sequencing and status.
     KConfig value and its own settings control, following the same
     pattern as 4.4.2, rather than compromising either interaction to
     fit a single shared setting.
+  - **On-screen volume indicator, matching the system tray's default
+    Audio Devices widget behavior (Plasma's own volume-slider hover/
+    scroll popup is the reference — not something to reinvent from
+    scratch):** hovering the mouse over the panel icon should show a
+    small popup displaying the amplifier's current volume (not the
+    OS/PC volume — this reads from the same D-Bus volume property the
+    flyout's slider already binds to). Two related but distinct
+    behaviors to implement, both amp-volume-driven:
+    1. A **hover indicator** tied to the panel icon itself — shown
+       for as long as the mouse remains hovering over the icon,
+       independent of whether the user scrolls. Needs its own
+       investigation into what this actually is on a real Plasma 6
+       panel applet (a tooltip? a small custom popup anchored to the
+       icon?) - don't assume a particular QML mechanism without
+       checking Plasma's own applet precedent first.
+    2. A **brief transient OSD-style popup** (appears briefly, ~1s,
+       then fades) triggered specifically by a scroll action,
+       reflecting the volume value immediately after each step -
+       matching the short auto-dismissing toast in the reference
+       screenshot, distinct from the persistent hover indicator above.
+  - Investigate before implementing: check whether Plasma exposes a
+    reusable OSD/toast component or convention already used by other
+    system applets (e.g. what the Audio Devices tray applet itself
+    uses) rather than hand-rolling a bespoke popup window - reuse over
+    reinvention if a suitable existing pattern exists.
+  - Verify live: hovering the panel icon (without scrolling) shows the
+    amp's current volume; scrolling while hovering updates that display
+    on the fly to match each new step; the transient toast appears and
+    auto-dismisses correctly on each scroll notch, without needing to
+    keep hovering for it to disappear.
+- [ ] **Phase 4.5.2 — Middle-click panel icon to mute.** Mirroring the
+      default Audio Devices system tray applet's own behavior:
+      middle-clicking the widget's panel icon should toggle mute,
+      alongside the existing left-click-to-toggle-flyout behavior.
+      Should call the same mute toggle path the flyout's Mute button
+      already uses (root's existing mute-toggle method + its debounce
+      window), not a separate implementation.
+  - Investigate before implementing: confirm whether
+    CompactRepresentation's existing MouseArea (or whatever currently
+    handles the icon's click) already distinguishes acceptedButtons,
+    and how to add Qt.MiddleButton handling without disturbing the
+    existing left-click behavior. Check the real Audio Devices
+    applet's own main.qml for its middle-click handling as precedent,
+    the same way 4.5.0's investigation already pulled its wheel/OSD
+    logic from that same source.
+  - Confirm whether middle-click should give any visual feedback
+    (e.g. trigger the same OSD/tooltip volume display from 4.5.0,
+    showing "Muted") or act silently — propose and confirm before
+    implementing.
+  - Verify live: middle-clicking the panel icon toggles mute correctly
+    against the real amp, in both directions, without affecting the
+    normal left-click flyout-toggle behavior.
+- [ ] **Phase 4.5.3 — Tooltip/OSD visual polish + positioning.** Phase
+      4.5.0 shipped fully functional: scroll-over-panel-icon volume
+      control, a live hover tooltip, and a scroll-triggered OSD toast,
+      all verified live. This phase is styling and positioning only —
+      no new interaction behavior.
+  - **Tooltip:** match devialet_tray_tooltip_mockup_v4.html exactly —
+      name row with status dot, a source/dB stat row sharing one
+      baseline (not source squeezed under the value), copper progress
+      bar, two hint lines (Scroll to adjust / Middle-click to mute,
+      no icon glyphs), everything left-aligned to one consistent edge.
+  - **OSD toast:** match devialet_volume_osd_mockup_v3.html exactly —
+      icon + amp name + dB value + copper progress bar + source line.
+      Unmuted state uses a plain/neutral icon (no copper tint) so
+      copper is reserved for "something's actually active." Muted
+      state uses copper border + icon glow (not amber — amber stays
+      reserved for the existing booting/"Powering on…" state only),
+      copper text for the word "Muted" itself (dropped to 12px/600
+      weight vs. the numeric dB reading's 15px/500, since a 5-letter
+      word and a 3-digit number don't read the same size even in a
+      monospace font), and the progress fill dims to the existing
+      faint/disabled tone rather than recoloring.
+  - **OSD position:** currently defaults to appearing near wherever it
+      was last anchored (screenshot showed top-left/top-right,
+      inconsistent, not centered). Investigate how Plasma's own native
+      Audio Devices OSD (org.kde.plasma.volume / the shared
+      org.kde.osdService-driven OSD) positions itself on screen -
+      check its real source/behavior rather than guessing - and
+      replicate that positioning logic exactly (screen selection,
+      centering, offset) for our own PlasmaCore.Dialog-based toast.
+  - **Volume icon thresholds:** the four SVGs (high/medium/low/mute)
+      need dB-range cutoffs to choose between them. Investigate what
+      thresholds the real Audio Devices applet/OSD actually uses for
+      its own icon-swapping logic and replicate the same breakpoints,
+      rather than inventing new ones - consistent with this project's
+      existing pattern of matching real KDE precedent over guessing.
+  - Verify live: hover tooltip and scroll toast visually match their
+      respective mockups pixel-for-pixel where feasible (font, sizing,
+      spacing, colors); OSD toast appears in the same screen position
+      the native Audio Devices OSD does; icon swaps between high/
+      medium/low/mute at the same dB thresholds the native OSD uses;
+      muted state renders copper, not amber, on both the OSD and (if
+      applicable) the flyout's own Mute button for consistency.
 - [ ] **Phase 4.6.0 — devialet-ctl build + PATH placement.** Decide the
       real install location for the `devialet-ctl` binary (system-wide
       `/usr/local/bin`, user `~/.local/bin` placed by the script rather
