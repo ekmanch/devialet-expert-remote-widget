@@ -44,6 +44,8 @@ MouseArea {
     property string deviceName: ""
     property var volumeDb: undefined
     property double lastIconStepAtMs: 0
+    property bool muted: false
+    property double lastMuteChangeAtMs: 0
 
     readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
     readonly property real volumeCeilingDb: -15.0
@@ -77,8 +79,33 @@ MouseArea {
         volumeToast.show(root.tooltipAmpName + ": " + clamped.toFixed(1) + " dB");
     }
 
+    // Phase 4.5.2: same mute-toggle logic as the flyout's own Mute button
+    // (FullRepresentation.qml's onClicked, ~line 1451) - not a shared call
+    // (that button's logic is inline, not an extracted function, and its
+    // `root` is a different file's root - see this file's header comment
+    // on why state here is an independent mirror, not shared, matching the
+    // same precedent stepVolume() above already established). Toast
+    // icon/styling here is a deliberate placeholder (plain pill, amp icon)
+    // - a real design is coming in Phase 4.5.3.
+    function toggleMute() {
+        if (root.ampIp === "") return;
+        const newMuted = !root.muted;
+        root.muted = newMuted;
+        root.lastMuteChangeAtMs = root.now();
+        exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute " + (newMuted ? "on" : "off"));
+        volumeToast.iconSource = root.iconSource;
+        volumeToast.show(root.tooltipAmpName + ": " + (newMuted ? "Muted" : "Unmuted"));
+    }
+
     hoverEnabled: true
-    onClicked: root.plasmoidItem.expanded = !root.plasmoidItem.expanded
+    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+    onClicked: mouse => {
+        if (mouse.button === Qt.LeftButton) {
+            root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
+        } else if (mouse.button === Qt.MiddleButton) {
+            root.toggleMute();
+        }
+    }
 
     property int wheelDelta: 0
     onWheel: wheel => {
@@ -145,6 +172,7 @@ MouseArea {
             root.ampIp = root.unwrap(properties.AmpIp, "");
             root.deviceName = root.unwrap(properties.DeviceName, "");
             root.volumeDb = root.unwrap(properties.VolumeDb, undefined);
+            root.muted = root.unwrap(properties.Muted, false);
         }
 
         onPropertiesChanged: (interfaceName, changed, invalidated) => {
@@ -153,6 +181,11 @@ MouseArea {
             if ("VolumeDb" in changed) {
                 if (!root.within(root.lastIconStepAtMs, root.debounceMs)) {
                     root.volumeDb = root.unwrap(changed.VolumeDb, root.volumeDb);
+                }
+            }
+            if ("Muted" in changed) {
+                if (!root.within(root.lastMuteChangeAtMs, root.debounceMs)) {
+                    root.muted = root.unwrap(changed.Muted, root.muted);
                 }
             }
         }

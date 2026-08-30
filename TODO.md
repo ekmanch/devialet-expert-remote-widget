@@ -1535,6 +1535,155 @@ architecture decisions; this file is just sequencing and status.
     directions, confirmed across multiple different configured step
     sizes; scrolling while dragging the thumb does nothing.
 
+- [x] **Phase 4.5.0 — Scroll over panel icon to adjust volume, with
+      on-screen volume indicator.** Renamed from "scroll-over-tray-icon"
+      (panel-pinned, not tray-hosted) — scope unchanged. Investigated
+      before implementing, per the phase's own instruction.
+  - **Real Volume applet precedent, pulled from `invent.kde.org`'s
+    `plasma-pa` source directly (not assumed):** its own custom
+    `compactRepresentation` `MouseArea` (`applet/main.qml:209-267`)
+    already does the identical 120-unit-notch wheel accumulation this
+    project's own 4.5.1 slider scroll uses. Its hover text is driven
+    entirely by `PlasmoidItem.toolTipMainText`/`toolTipSubText` — no
+    custom tooltip popup exists in its QML at all. Its transient toast
+    isn't custom either: `config.volumeOsd` is just a flag: the actual
+    OSD is a **shared system service**, `org.kde.plasmashell`'s
+    `/org/kde/osdService` (`org.kde.osdService`), reached via
+    `GlobalService::volumeUp()` → a `kglobalaccel` shortcut → a `kded`
+    module → that service (`src/qml/globalservice.cpp`).
+  - **Confirmed live, not just read:** called `org.kde.osdService`
+    directly over D-Bus and screenshotted the result — `showText(icon,
+    text)` accepts an arbitrary resolvable icon path (rendered this
+    project's own SVG correctly, not just icon-theme names) and gives
+    full text control, unlike `volumeChanged(percent, max)` which
+    renders the literal system-volume-style progress bar (ruled out —
+    risks being mistaken for real OS/PC volume, which the phase brief
+    explicitly warned against). Its real dismiss timeout is a fixed
+    **1800ms** (`OsdItem.qml:19`, confirmed on-disk on this system —
+    not the brief's own rough "~1s"). Its rapid-repeat behavior
+    (`plasma-workspace`'s `shell/osd.cpp`, `showOsd()`): every call
+    stops the pending dismiss timer, snaps content to the new value
+    instantly, restarts the same fixed timeout — reset-and-replace, no
+    queueing.
+  - **Architecture decision, confirmed with you before implementing:**
+    `CompactRepresentation.qml` gets its **own independent** D-Bus
+    mirror (`AmpIp`/`DeviceName`/`VolumeDb`) and its own `stepVolume()`,
+    not a refactor to share `FullRepresentation`'s much richer one.
+    Reason, confirmed by reading `libplasma`'s `appletquickitem.cpp`:
+    `fullRepresentationItem` is only *opportunistically* preloaded in
+    the background per an adaptive weight/policy (`AppletQuickItem::
+    init()`), not guaranteed to exist by the time a user first hovers
+    the icon. Real precedent for this split: the real Volume applet's
+    own compact `MouseArea` and its `VolumeSlider.qml` also implement
+    wheel-to-volume independently, sharing no function between them.
+  - **Hover indicator:** `main.qml`'s `PlasmoidItem.toolTipItem` (a
+    real, less-known property alongside `toolTipMainText`/`SubText` —
+    confirmed in `libplasma`'s `plasmoiditem.cpp`) set to a new custom
+    `VolumeHoverTooltip.qml`, chosen over plain text per your call for
+    a copper-styled indicator instead of generic tooltip text — still
+    rendered inside the shell's own native, already-solved tooltip
+    dialog, avoiding this project's past QQC2-popup-outside-a-genuine-
+    Window issues entirely.
+  - **Toast:** new `VolumeToast.qml`, a `PlasmaCore.Dialog` with `type:
+    OnScreenDisplay` — confirmed via `libplasma`'s `dialog.cpp` that on
+    Wayland this calls the *identical* `PlasmaShellWaylandIntegration::
+    setRole(role_onscreendisplay)` the real OSD's own window uses, and
+    that `Dialog` deliberately skips its own manual `setPosition()` call
+    for this type specifically (the compositor places it, matching the
+    real OSD exactly — not an icon-anchored popup like the flyout, a
+    faithful reskin means matching where the native OSD already
+    appears). `backgroundHints: NoBackground` made the fully custom
+    copper pill possible — confirmed this is a *different* class than
+    the "real transparency" investigation's dead end (that was
+    `PlasmaWindow`, the flyout's own window class, whose restricted
+    `BackgroundHints` enum has no such value; `PlasmaQuick::Dialog`,
+    built directly by this file, genuinely has one). 1800ms `Timer`,
+    `restart()` on every `show()` call — same stop/update/restart shape
+    as the real `showOsd()`.
+  - **Real bug found and fixed, via `journalctl` (not guessed):**
+    `PlasmaCore.Dialog`'s default property `mainItem` is a single
+    `QQuickItem*`, not a list — a bare `Timer` declared as a sibling of
+    the explicit `mainItem: Rectangle {...}` was *also* being implicitly
+    assigned to it, throwing `"Cannot assign object of type Timer to
+    property of type QQuickItem*"` and silently breaking the whole
+    applet's load (confirmed nothing rendered — `com.ekmanch.
+    devialetremote` was missing from the panel entirely; `journalctl`
+    showed the real error line). Fixed by nesting the `Timer` inside the
+    `Rectangle` instead.
+  - **Also fixed, found along the way:** `~/.local/bin/devialet-ctl`
+    was a stale symlink pointing at a pre-`own/`-subdirectory-move repo
+    path — broken regardless of this phase, silently blocking every
+    `devialet-ctl` invocation. Relinked to the real build output.
+  - **Verified myself:** applet reloads with no new QML load errors
+    (`journalctl`, before/after comparison); the panel icon still
+    renders at its correct position and color (pixel-scanned a live
+    `spectacle` screenshot for its distinctive copper RGB values rather
+    than eyeballing — same technique Phase 4.11 used).
+  - **Could not verify myself, confirmed by you instead:** the actual
+    hover/scroll/toast interaction. Tried synthesizing mouse input via
+    a virtual `uinput` device (absolute-positioning "tablet" device,
+    then a plain relative-motion "mouse" device) to test this without
+    you — unreliable on your live, shared desktop; synthetic cursor
+    positioning kept landing nowhere near the target, most likely real
+    concurrent mouse activity on your end interfering, confirmed via a
+    KWin script reading `workspace.cursorPos` mid-test. Abandoned rather
+    than keep burning time on it; you confirmed hover/scroll/toast/
+    click-regression all work live instead.
+  - **Incidental finding, not investigated further:** a screenshot taken
+    during verification happened to capture a separate, already-open
+    Claude conversation of yours with richer tooltip/OSD mockups
+    (`devialet_tray_tooltip_mockup_v4.html`, `devialet_volume_osd_
+    mockup_v3.html` — device name + dB + copper progress bar + hint
+    lines) — this directly matches Phase 4.5.3 below, which already
+    scopes exactly that redesign. Flagged to you rather than acted on.
+  - Toast/tooltip visuals shipped here are a deliberate placeholder
+    (plain copper pill, amp glow-dot icon, dB text) — Phase 4.5.3 below
+    already owns the real mockup-matched design.
+
+- [x] **Phase 4.5.2 — Middle-click panel icon to mute.** Investigated
+      before implementing, per the phase's own instruction.
+  - **Confirmed:** `CompactRepresentation`'s `MouseArea` had no
+    `acceptedButtons` override at all before this phase — defaulted to
+    `Qt.LeftButton` only, so middle-click previously did nothing, not
+    even firing an unhandled signal.
+  - **Real Volume applet precedent** (`applet/main.qml:209-233`, same
+    source pulled for 4.5.0): `acceptedButtons: Qt.LeftButton |
+    Qt.MiddleButton`, with middle-click-mute firing in `onPressed` (not
+    `onClicked`), and left-click using a capture-on-press/apply-on-
+    release (`wasExpanded`) dance specific to that applet's own hover-
+    preview complexity — which this project's simpler compact
+    representation doesn't have, so that dance wasn't ported. Confirmed
+    with you before implementing: kept everything in one `onClicked`
+    handler branching on `mouse.button`, for consistency with this
+    file's existing single-handler style, rather than splitting mute
+    into `onPressed`.
+  - **Confirmed there's no extracted method to "call the same one
+    as."** The flyout's own Mute button's toggle logic
+    (`FullRepresentation.qml`, `onClicked` ~line 1451) is inline, not a
+    named function, and uses that file's own `root` — unreachable from
+    `CompactRepresentation` for the same reason `stepVolume()` was
+    reimplemented independently in 4.5.0, not shared. Replicated the
+    identical logic and command shape (`devialet-ctl ... mute on|off`,
+    same 400ms debounce window) independently in
+    `CompactRepresentation`'s own mirror, extending its existing D-Bus
+    subscription with a `Muted` property the same way `VolumeDb`
+    already works.
+  - Toast on middle-click-mute: confirmed with you to show ("<amp>:
+    Muted"/"Unmuted"), reusing the exact same placeholder pill/icon
+    already shipped for volume-step toasts in 4.5.0 — no new visual
+    state, per your explicit call to leave real mute styling for
+    4.5.3's mockup-matched redesign.
+  - **Verified myself:** the exact command path `toggleMute()` invokes,
+    run directly against the real amp — `devialet-ctl --ip 192.168.0.22
+    mute on` flipped the real `Muted` D-Bus property to `true`; `mute
+    off` flipped it back to `false`; confirmed both directions via
+    `busctl`. No new QML load errors after reinstall; icon still
+    renders correctly (same regression check as 4.5.0).
+  - **Verified live by you:** middle-click toggles mute both directions
+    against the real amp; left-click flyout-toggle and 4.5.0's
+    scroll-to-volume both still work with no regression; the toast
+    shows correctly on middle-click.
+
 ## Up next
 
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
@@ -1567,71 +1716,6 @@ architecture decisions; this file is just sequencing and status.
       one connected and playing, confirm the connection is undisturbed
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
-- [ ] **Phase 4.5.0 — scroll-over-panel-icon volume control.** When the
-      mouse is hovering over the widget's panel icon, it should be
-      possible to scroll using the mouse wheel to change the volume
-      up/down depending on if the user is scrolling up or down. (Renamed
-      from "scroll-over-tray-icon" - this widget is panel-pinned, not
-      tray-hosted, see the architecture-change entry above. Scope itself
-      is unchanged, not started here.) Should read the same volume-step
-      KConfig value as Phase 4.4.2's buttons, not a separate setting.
-  - If scroll doesn't feel right at the same step size the +/- buttons
-    use, don't force a shared value - split into its own separate
-    KConfig value and its own settings control, following the same
-    pattern as 4.4.2, rather than compromising either interaction to
-    fit a single shared setting.
-  - **On-screen volume indicator, matching the system tray's default
-    Audio Devices widget behavior (Plasma's own volume-slider hover/
-    scroll popup is the reference — not something to reinvent from
-    scratch):** hovering the mouse over the panel icon should show a
-    small popup displaying the amplifier's current volume (not the
-    OS/PC volume — this reads from the same D-Bus volume property the
-    flyout's slider already binds to). Two related but distinct
-    behaviors to implement, both amp-volume-driven:
-    1. A **hover indicator** tied to the panel icon itself — shown
-       for as long as the mouse remains hovering over the icon,
-       independent of whether the user scrolls. Needs its own
-       investigation into what this actually is on a real Plasma 6
-       panel applet (a tooltip? a small custom popup anchored to the
-       icon?) - don't assume a particular QML mechanism without
-       checking Plasma's own applet precedent first.
-    2. A **brief transient OSD-style popup** (appears briefly, ~1s,
-       then fades) triggered specifically by a scroll action,
-       reflecting the volume value immediately after each step -
-       matching the short auto-dismissing toast in the reference
-       screenshot, distinct from the persistent hover indicator above.
-  - Investigate before implementing: check whether Plasma exposes a
-    reusable OSD/toast component or convention already used by other
-    system applets (e.g. what the Audio Devices tray applet itself
-    uses) rather than hand-rolling a bespoke popup window - reuse over
-    reinvention if a suitable existing pattern exists.
-  - Verify live: hovering the panel icon (without scrolling) shows the
-    amp's current volume; scrolling while hovering updates that display
-    on the fly to match each new step; the transient toast appears and
-    auto-dismisses correctly on each scroll notch, without needing to
-    keep hovering for it to disappear.
-- [ ] **Phase 4.5.2 — Middle-click panel icon to mute.** Mirroring the
-      default Audio Devices system tray applet's own behavior:
-      middle-clicking the widget's panel icon should toggle mute,
-      alongside the existing left-click-to-toggle-flyout behavior.
-      Should call the same mute toggle path the flyout's Mute button
-      already uses (root's existing mute-toggle method + its debounce
-      window), not a separate implementation.
-  - Investigate before implementing: confirm whether
-    CompactRepresentation's existing MouseArea (or whatever currently
-    handles the icon's click) already distinguishes acceptedButtons,
-    and how to add Qt.MiddleButton handling without disturbing the
-    existing left-click behavior. Check the real Audio Devices
-    applet's own main.qml for its middle-click handling as precedent,
-    the same way 4.5.0's investigation already pulled its wheel/OSD
-    logic from that same source.
-  - Confirm whether middle-click should give any visual feedback
-    (e.g. trigger the same OSD/tooltip volume display from 4.5.0,
-    showing "Muted") or act silently — propose and confirm before
-    implementing.
-  - Verify live: middle-clicking the panel icon toggles mute correctly
-    against the real amp, in both directions, without affecting the
-    normal left-click flyout-toggle behavior.
 - [ ] **Phase 4.5.3 — Tooltip/OSD visual polish + positioning.** Phase
       4.5.0 shipped fully functional: scroll-over-panel-icon volume
       control, a live hover tooltip, and a scroll-triggered OSD toast,
@@ -1719,6 +1803,38 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
+- [ ] **Bug: FullRepresentation lags behind CompactRepresentation on
+      amp-state changes triggered via the panel icon.** Observed while
+      the flyout was open at the same time as interacting with the
+      panel icon directly (Phase 4.5.0/4.5.2 scroll-to-volume and
+      middle-click-to-mute).
+  - Scrolling on the panel icon changes volume immediately (confirmed
+    against the real amp, and the OSD toast reflects it instantly),
+    but the flyout's own volume slider visibly lags before catching up
+    to the new value - a noticeable delay, not an instant reflection.
+  - Same pattern with mute: middle-clicking the panel icon toggles
+    mute immediately (OSD toast updates instantly), but the flyout's
+    Mute button state takes a visible moment before it shows the
+    correct on/off state.
+  - Not investigated yet. CompactRepresentation and FullRepresentation
+    each independently mirror the same D-Bus properties (deliberate
+    design from the 4.5.0 discussion - CompactRepresentation isn't
+    guaranteed loaded at the same time as FullRepresentation, so they
+    were built as two separate subscriptions rather than one shared
+    source). This bug's likely candidates - not yet confirmed, just
+    plausible starting points: FullRepresentation's own debounce/
+    volumeInteracting gating logic delaying acceptance of an
+    externally-originated PropertiesChanged signal; some difference in
+    how promptly the two representations process the same D-Bus signal;
+    or something specific to the daemon's emit path when the command
+    that triggered the change came from CompactRepresentation's own
+    devialet-ctl invocation rather than FullRepresentation's.
+  - Distinct from the existing parked bug above ("widget doesn't
+    reflect amp-initiated volume changes it didn't itself send") - that
+    one describes a divergence that persists indefinitely until
+    touched; this one is a delay that does eventually resolve on its
+    own. Worth confirming whether they're actually related once
+    investigated, but don't assume they're the same bug.
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced
