@@ -1441,6 +1441,23 @@ architecture decisions; this file is just sequencing and status.
     a wallpaper, or once Phase 4.4.4's slider allows a lower alpha.
     Reload (`kpackagetool6 --upgrade` + `plasmashell --replace`)
     confirmed the setting survives a full widget restart.
+  - **Addendum — Transparency removed from main in `8c284af`.** Covers
+    all of Transparency's
+    history above (Phase 4.4.1's Appearance-section scaffold, Phase
+    4.4.2.1's reorder/dependent-disable, and this phase's on/off
+    wiring): Transparency turned out to be capped by Plasma's own
+    opaque popup background - real desktop transparency is being
+    explored separately on the `experiment/real-transparency` branch,
+    not on main. If that branch succeeds, this feature returns via a
+    merge with its own full history documented there. If it doesn't
+    pan out, this annotation is as much detail as main's TODO.md will
+    carry - don't expand on it here.
+  - **Verified live by you:** with this removal in place, all
+    appearance-based settings are now gone from the widget - Blur
+    (Phase 4.4.2.2, already removed earlier) and Transparency (toggle
+    + slider, this removal) alike. Settings dialog's General page goes
+    straight from the brand header to the Volume section, no Appearance
+    label, no orphaned gap.
 
 - [x] **Phase 4.4.2.2 — Remove Blur background setting.** Per revised
       design/mockups/devialet_config_dialog_mockup_v4.html: the
@@ -1476,19 +1493,6 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 4.4.4 — Transparency level slider wiring.** Make the
-      slider's value actually drive the panel's alpha in real time.
-      This is the control that got stuck at a fixed value and never
-      responded to drag input last attempt — confirm the Slider is
-      genuinely receiving pointer/drag events (check for a binding loop
-      between the slider's `value` and the KConfig property it both
-      reads from and writes to, since "frozen, can't drag at all" was
-      the actual symptom last time, not "drags but doesn't visually
-      update"). Verify live: drag to several different positions,
-      confirm the panel's visible transparency changes accordingly at
-      each one, not just at the default; close and reopen the settings
-      dialog (and separately, reload the widget) to confirm the last
-      dragged value actually persists rather than resetting to default.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it

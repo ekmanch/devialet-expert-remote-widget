@@ -54,11 +54,6 @@ KCM.SimpleKCM {
     property real cfg_volumeStepDb: 1.0
     readonly property var stepValues: [0.5, 1, 2]
 
-    // Phase 4.4.3: same cfg_ convention as cfg_volumeStepDb above - the
-    // shell pushes the live KConfig value in here on dialog open and reads
-    // it back only on Apply/OK.
-    property bool cfg_transparencyEnabled: true
-
     // Read-only live count for the "Forget All (N)" button's idle label -
     // explicitly sanctioned by this phase's scope (display only, not
     // wiring the forget action itself). Deliberately simpler than
@@ -142,90 +137,11 @@ KCM.SimpleKCM {
             Item { Layout.fillWidth: true }
         }
 
-        // ---- Appearance ----
-        SectionLabel { text: "Appearance"; first: true }
-
-        SettingsRow {
-            name: "Transparency"
-            desc: "Let the desktop show through the panel"
-
-            // Phase 4.4.3: checked mirrors cfg_transparencyEnabled; clicking
-            // writes back via onCheckedChanged since SettingsSwitch owns its
-            // own toggle internally (self-assigns `checked` on click, which
-            // severs this binding for the rest of the dialog session - see
-            // ConfigGeneral's own Phase 4.4.3 investigation notes - but
-            // onCheckedChanged keeps cfg_transparencyEnabled in sync from
-            // then on regardless, and a dialog reopen creates a fresh
-            // instance with a fresh, unbroken binding).
-            SettingsSwitch {
-                id: transSwitch
-                checked: root.cfg_transparencyEnabled
-                onCheckedChanged: root.cfg_transparencyEnabled = checked
-            }
-        }
-
-        // Mockup's .kcm-sub-row: not a SettingsRow (no name/desc/divider of
-        // its own) - just the slider, indented under the Transparency row
-        // it belongs to, dimmed/inert when that switch is off.
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.topMargin: 8
-            Layout.bottomMargin: 4
-            opacity: transSwitch.checked ? 1.0 : 0.35
-            enabled: transSwitch.checked
-            Behavior on opacity { NumberAnimation { duration: 150 } }
-            spacing: 10
-
-            Slider {
-                id: transSlider
-                Layout.fillWidth: true
-                implicitHeight: 21
-                from: 0
-                to: 100
-                stepSize: 1
-                value: 72
-
-                background: Rectangle {
-                    x: transSlider.leftPadding
-                    y: transSlider.topPadding + transSlider.availableHeight / 2 - height / 2
-                    width: transSlider.availableWidth
-                    height: 4
-                    radius: 999
-                    color: root.theme.surface3
-
-                    Rectangle {
-                        width: transSlider.visualPosition * parent.width
-                        height: parent.height
-                        radius: 999
-                        color: root.theme.copper
-                    }
-                }
-
-                handle: Rectangle {
-                    x: transSlider.leftPadding + transSlider.visualPosition * (transSlider.availableWidth - width)
-                    y: transSlider.topPadding + transSlider.availableHeight / 2 - height / 2
-                    width: 15
-                    height: 15
-                    radius: 999
-                    color: root.theme.copperBright
-                }
-            }
-
-            Label {
-                text: Math.round(transSlider.value) + "%"
-                font.family: root.theme.fontMono
-                font.pixelSize: 11
-                color: root.theme.copperBright
-                Layout.preferredWidth: 34
-                horizontalAlignment: Text.AlignRight
-            }
-        }
-
         // ---- Volume ----
-        SectionLabel { text: "Volume" }
+        SectionLabel { text: "Volume"; first: true }
 
         SettingsRow {
-            name: "Step per scroll notch"
+            name: "Volume step size"
             desc: "Applies to scroll-over-icon and +/- buttons"
 
             Rectangle {
