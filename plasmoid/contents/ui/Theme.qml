@@ -54,6 +54,45 @@ QtObject {
     readonly property color panelGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.82)
     readonly property color panelGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.82)
 
+    // Phase 4.5.0/4.5.3: translucent graphite gradient shared by the OSD
+    // toast (VolumeToast.qml) and the hover tooltip (VolumeHoverTooltip.
+    // qml) - a distinct, slightly more opaque pair from panelGradientTop/
+    // Bottom above (0.94 vs 0.82), since neither of those two windows
+    // gets the flyout's own genuine KWin blur-behind to soften a lower
+    // alpha the way the flyout's tint does. Centralized here (Phase 4.5.3
+    // item 2) so both files reference one definition instead of repeating
+    // the same rgba literals.
+    readonly property color osdGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.94)
+    readonly property color osdGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.94)
+
+    // ---- Volume-level icon selection (Phase 4.5.3 Part D) ----
+    // Breakpoints matched against the real Audio Devices applet's own
+    // AudioIcon::forVolume() (plasma-pa's src/audioicon.cpp/.h): muted or
+    // percent<=0 -> mute, <=25 -> low, <=75 -> medium, <=100 -> high (its
+    // further 101-125/>125 "warning"/"danger" tiers have no equivalent
+    // icon here and no meaning for us - volumeFraction is hard-clamped to
+    // 0..1 with no overdrive-past-ceiling concept, unlike PulseAudio's
+    // boostable volume). Used by VolumeToast.qml's icon box only - a
+    // similar icon was briefly added to VolumeHoverTooltip.qml too but
+    // reverted (Phase 4.5.3 follow-up item 1 - the approved mockup only
+    // ever used a status dot there, not a full icon). Kept centralized
+    // here regardless, since it's still shared infrastructure in the
+    // sense that any future consumer should reuse these thresholds
+    // rather than re-deriving them.
+    readonly property var volumeIconSources: ({
+        high: Qt.resolvedUrl("../icons/audio_volume_icons/volume-high.svg"),
+        medium: Qt.resolvedUrl("../icons/audio_volume_icons/volume-medium.svg"),
+        low: Qt.resolvedUrl("../icons/audio_volume_icons/volume-low.svg"),
+        mute: Qt.resolvedUrl("../icons/audio_volume_icons/volume-mute.svg")
+    })
+    function volumeIconKindForFraction(fraction) {
+        const percent = fraction * 100;
+        if (percent <= 0) return "mute";
+        if (percent <= 25) return "low";
+        if (percent <= 75) return "medium";
+        return "high";
+    }
+
     // ---- Fonts ----
     // One FontLoader per weight actually used in the mockup - matches the
     // exact weight set Google Fonts is asked for there (Space Grotesk

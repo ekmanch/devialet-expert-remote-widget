@@ -61,20 +61,29 @@ PlasmoidItem {
 
     fullRepresentation: FullRepresentation {}
 
-    // Phase 4.5.0: custom hover content for the panel icon, shown by the
-    // shell's own native tooltip dialog (see VolumeHoverTooltip.qml's
-    // header comment). Reads live off compactRepresentationItem - the
-    // instance CompactRepresentation.qml above becomes once created -
-    // rather than FullRepresentation, since only the compact
-    // representation is guaranteed to exist when a hover can happen (see
-    // CompactRepresentation.qml's header comment on preload timing).
-    // Optional chaining here mirrors the real org.kde.plasma.volume
-    // applet's own `fullRepresentationItem?.microphoneTestPage` pattern
-    // for reaching into a dynamically-typed representation item.
-    toolTipItem: VolumeHoverTooltip {
-        iconSource: root.compactRepresentationItem?.iconSource ?? ""
-        ampName: root.compactRepresentationItem?.tooltipAmpName ?? ""
-        volumeDb: root.compactRepresentationItem?.volumeDb
-        hasAmp: (root.compactRepresentationItem?.ampIp ?? "") !== ""
-    }
+    // No toolTipItem binding here (Phase 4.5.3 Bug 3 fix, later revision):
+    // CompactRepresentation.qml now owns its own hover-triggered
+    // PlasmaCore.Dialog (VolumeHoverTooltip.qml) directly, instead of
+    // handing content to the shell's own ToolTipDialog - see that file's
+    // header comment for why.
+    //
+    // Phase 4.5.3 item 1 fix: merely leaving toolTipMainText/
+    // toolTipSubText *unset* was NOT enough to make ToolTipArea::isValid()
+    // return false - the native tooltip kept appearing alongside ours,
+    // showing metadata.json's Name/Comment ("Devialet Remote" / "Control a
+    // Devialet Expert Pro amplifier..."). Root-caused by reading
+    // libplasma's plasmoiditem.cpp: PlasmoidItem::toolTipMainText()/
+    // toolTipSubText() fall back to `applet()->title()`/`pluginMetaData().
+    // description()` whenever the backing string is *null* - which is the
+    // default, unset state - not merely empty. The setter's own comment
+    // spells out the fix: "we are abusing the difference between a null
+    // and an empty string... the first time it gets set, an empty
+    // non-null one is set, and won't fall back anymore." Explicitly
+    // assigning "" here (not omitting the binding) runs that setter once,
+    // making the getter return "" instead of the metadata fallback - only
+    // then does ToolTipArea::isValid() (`m_mainItem ||
+    // !mainText().isEmpty() || !subText().isEmpty()`) genuinely evaluate
+    // to false, letting the shell's default tooltip cleanly no-op.
+    toolTipMainText: ""
+    toolTipSubText: ""
 }

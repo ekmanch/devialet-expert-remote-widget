@@ -1684,6 +1684,234 @@ architecture decisions; this file is just sequencing and status.
     scroll-to-volume both still work with no regression; the toast
     shows correctly on middle-click.
 
+- [x] **Phase 4.5.3 — Tooltip/OSD visual polish + positioning.** Landed
+      over several rounds - the initial mockup-matching pass, then a
+      series of real bugs found via direct live measurement rather than
+      assumed fixed. Final state: tooltip and OSD both mockup-matched,
+      icon thresholds sourced from the real Audio Devices applet, OSD
+      positioning fixed, and four real tooltip bugs found and fixed
+      (one of which explains a second, separately-reported bug as a
+      side effect).
+  - **Parts A/B (styling, direct mockup match, no open questions):**
+    `VolumeToast.qml` restyled to `devialet_volume_osd_mockup_v3.html`
+    (icon + name/value row + copper bar + source line, copper
+    border/glow + dimmed fill for muted, word-sized copper text for
+    "Muted"); `VolumeHoverTooltip.qml` restyled to
+    `devialet_tray_tooltip_mockup_v4.html` (dot + name row, source/dB
+    stat row, copper bar, plain-text hints).
+  - **Part C (OSD positioning) root-caused, not guessed:** the toast's
+    own `flags: Qt.ToolTip` (added in 4.5.0 without strong
+    justification) was fighting `Dialog`'s `OnScreenDisplay` handling -
+    confirmed in `libplasma`'s `dialog.cpp`: `applyType()` gates several
+    behaviors on `!flags().testFlag(Qt::ToolTip)`, with a comment
+    stating "an OSD can't be a Dialog, as qt xcb would attempt to set a
+    transient parent for it" - `Qt::ToolTip` is the same transient-
+    parent-seeking category of flag. The real `OsdWindow`
+    (`plasma-workspace`'s `shell/osdwindow.cpp`) sets only
+    `Qt::WindowDoesNotAcceptFocus` + `Qt::WindowTransparentForInput`, no
+    `Qt::ToolTip` at all. Matched those flags exactly (`outputOnly: true`
+    for the second one, since `Dialog`'s own code ties that flag to
+    `outputOnly` specifically for `OnScreenDisplay`). Confirmed live:
+    the toast now lands in the same screen position (same horizontal
+    center, same vertical band) as the real native OSD, tested by
+    triggering both and comparing pixel positions directly.
+  - **Part D (icon thresholds), matched to real precedent:** found
+    `AudioIcon::forVolume()` in `plasma-pa`'s `src/audioicon.cpp/.h` -
+    muted or ≤0% → mute, ≤25% → low, ≤75% → medium, ≤100% → high (its
+    further 101–125%/>125% "warning"/"danger" tiers have no equivalent
+    icon and no meaning here, since `volumeFraction` is hard-clamped to
+    0..1 with no PulseAudio-style overdrive concept). Centralized as
+    `Theme.qml`'s `volumeIconSources`/`volumeIconKindForFraction`, used
+    by `VolumeToast.qml`'s icon box.
+  - **Bug found and fixed: OSD volume icon never rendered.** Root cause:
+    the four `design/icons/audio_volume_icons/*.svg` files were never
+    copied into `plasmoid/contents/icons/` - `design/` is a source-only
+    location outside the KPackage payload (same rule as Phase 4.0's
+    fonts/Phase 4.11's icons), so the resolved URL pointed at a
+    nonexistent file. Fixed by bundling the SVGs properly; the
+    `Kirigami.Icon` + `isMask: true` + `color` approach itself was
+    already correct (proven elsewhere in this codebase for other
+    `currentColor` SVGs).
+  - **Bug found and fixed: OSD layout shifted between muted/unmuted.**
+    Root cause: the icon+body `RowLayout` used `anchors.centerIn: parent`
+    inside a card whose `implicitWidth` floors at `Math.max(340,
+    row.implicitWidth + 36)` - a short "Muted" value made `row` narrower
+    than 340, centering it inside the wider card and shifting everything
+    inward; a wide numeric dB reading kept `row` close to 340, looking
+    flush by comparison. Fixed with fixed left/right anchors margins
+    (16/20, matching the mockup's own `padding` values) instead of
+    centering - matches the mockup's actual flexbox model, where the
+    icon is fixed-size and the body is `flex:1`, not centered content.
+  - **Bug investigated, real limitation confirmed (not fixed, since it
+    can't be): tooltip's own background had a visible double border.**
+    `PlasmoidItem.toolTipItem` hands content to the shell's own
+    `ToolTipDialog` (`PopupPlasmaWindow → PlasmaWindow`), whose
+    `BackgroundHints` enum (confirmed in `libplasma`'s `plasmawindow.h`)
+    has no `NoBackground` value at all - the same limitation CLAUDE.md's
+    own real-transparency investigation already found for the flyout's
+    popup. Mitigated short-term by dropping the tooltip's own competing
+    border (a second, differently-colored stroke was what turned an
+    otherwise-faint, unavoidable edge into a visible double border) -
+    later fully superseded (see below) by rebuilding the tooltip as our
+    own Dialog entirely, which sidesteps the limitation instead of just
+    softening it.
+  - **Follow-up round 1 - real bug: the shell's native tooltip kept
+    appearing alongside the custom one**, showing `metadata.json`'s
+    Name/Comment. Root-caused via `libplasma`'s `plasmoiditem.cpp`:
+    `toolTipMainText()`/`toolTipSubText()` fall back to `applet()->
+    title()`/`pluginMetaData().description()` whenever the backing
+    string is *null* (the default) - merely leaving the binding unset
+    never clears that, only an explicit empty-string assignment does
+    (the setter's own comment explains the null-vs-empty distinction is
+    intentional). Fixed in `main.qml` with explicit `toolTipMainText: ""`
+    / `toolTipSubText: ""`.
+  - **Follow-up round 1 - architecture change: rebuilt the tooltip as
+    its own `PlasmaCore.Dialog`** (`type: Tooltip`, matching the real
+    `role_tooltip` Wayland role, `backgroundHints: NoBackground`,
+    `location: Plasmoid.location` for automatic `visualParent`-relative
+    placement via `Dialog::popupPosition()`) instead of going through
+    `PlasmoidItem.toolTipItem` at all - this is what actually solves the
+    double-border limitation above for real, the same way `VolumeToast.
+    qml` already solves it for the OSD (`PlasmaQuick::Dialog`'s
+    `BackgroundHints` enum, confirmed in `libplasma`'s `dialog.h`, does
+    include a real `NoBackground`, unlike the shell's fixed
+    `PlasmaWindow`-based `ToolTipDialog`). Show/hide timing replicates
+    `ToolTipArea`/`ToolTipDialog`'s own real behavior, read from source
+    rather than invented: `Kirigami.Units.toolTipDelay` (700ms) before
+    first showing, a 200ms grace period before hiding (matching
+    `ToolTipDialog::dismiss()`'s own hardcoded value) - both timers now
+    live in `CompactRepresentation.qml`'s hover handlers.
+  - **Follow-up round 1 - bug found and fixed: tooltip didn't reflect
+    Muted state**, showing a stale dB reading instead of "Muted" the way
+    `VolumeToast.qml` already did. Root cause: the `muted` property was
+    simply never wired into the new tooltip at all. Fixed by adding the
+    binding, sourced from the same `Muted` D-Bus mirror
+    `CompactRepresentation` already had for other purposes - confirmed
+    live it updates instantly even while already hovering, no need to
+    re-trigger.
+  - **Follow-up round 1 - bug found and fixed: tooltip stayed open over
+    an already-opened flyout** if the mouse was still hovering when it
+    opened. Fixed with a `Connections` block watching `expanded` and
+    force-hiding the tooltip - target had to be `root.plasmoidItem`
+    directly, not the `Plasmoid` attached property, since the latter
+    produced the exact same "no signal matches" warning already present
+    (and never fixed) at `FullRepresentation.qml:216` - fixed that
+    warning here rather than reproducing it.
+  - **Follow-up round 2 - bug found and fixed: tooltip could still
+    re-appear over an open flyout.** The round-1 fix only reacted to the
+    `expanded` *transition*; leaving and re-entering the icon while
+    already expanded restarted the show timer with nothing to stop it.
+    Fixed by checking `root.plasmoidItem.expanded` at both trigger
+    points - `onEntered` (before starting the show timer) and the
+    timer's own `onTriggered` (in case `expanded` flips true during the
+    pending delay) - not just once on the open transition. Verified live
+    across 4 leave/re-enter cycles with the flyout open: tooltip never
+    reappeared.
+  - **Follow-up round 2 - investigated, no bug found: tooltip/OSD
+    background opacity "mismatch."** Measured by you at ~(24,22,23) vs.
+    ~(31,24,24), a real, consistent, larger-than-noise difference.
+    Confirmed via `libplasma`'s `dialog.cpp` that `backgroundHints:
+    NoBackground` explicitly disables `KWindowEffects::enableBlurBehind`/
+    `enableBackgroundContrast` for *both* windows identically; confirmed
+    KWin's Translucency effect (which does have per-window-type opacity)
+    isn't even loaded on this system; confirmed `diminactive`'s own
+    source treats `Tooltip`/`OnScreenDisplay` identically (neither
+    qualifies for dimming). Settled empirically: opened both windows
+    over a reversed-brightness backdrop (dark tab bar vs. white page)
+    and the relative brightness relationship flipped, with both
+    windows' fill pixels matching their shared `Theme.qml` gradient
+    values almost exactly - the original measurement was a real but
+    backdrop-position artifact of comparing two windows at different
+    screen locations over a non-uniform wallpaper, not a rendering
+    discrepancy. No code changed.
+  - **Follow-up round 2 - reverted a mistake: OSD-style volume icon
+    added to the tooltip.** The approved v4 mockup only ever used a
+    small status dot next to the amp name, never a full icon box -
+    adding one was a misreading of an earlier instruction, not something
+    the approved design called for. Reverted to the dot in both normal
+    and muted states; kept the "Muted" text-swap (that part was
+    correct) and the OSD-matched background/radius/border.
+  - **Follow-up round 3 - real bug found and fixed: "Optical 1" and the
+    dB value/"Muted" weren't sharing a baseline.** Reported as "Optical
+    1 sitting over the volume number"; confirmed live via screenshot.
+    Root cause: the value+unit pair was nested inside its own
+    `RowLayout`, and `Qt.AlignBaseline` doesn't work on a *nested*
+    layout - a generic layout container has no real font-metric
+    `baselineOffset` the way a `Label` does, so the outer `statRow` was
+    baseline-aligning "Optical 1" to a real text baseline while aligning
+    the wrapped value+unit pair to effectively nothing. Fixed by
+    flattening the source/value/unit labels into direct siblings of
+    `statRow`, each individually baseline-aligned. This same bug is also
+    what explained the separately-reported "Optical 1's height shifts
+    between muted and unmuted" report below.
+  - **Follow-up round 3 - resolved with direct evidence: "Optical 1"
+    vertical position reportedly shifting between muted/unmuted.**
+    Requested controlled before/after screenshots rather than leaving it
+    as an unconfirmed report. Root cause was the same nested-`RowLayout`
+    baseline bug above - hiding the "dB" unit label in the muted state
+    changed the inner (fake-baseline) container's own content, plausibly
+    shifting its computed position between states. Captured muted vs.
+    unmuted screenshots this session and diffed row band positions
+    directly: after the baseline fix, positions match within ~2px
+    (consistent with antialiasing noise) across every row. Resolved as a
+    side effect of the round-3 structural fix, not a separate change.
+  - **Follow-up round 3 - row-rhythm investigation: literal mockup CSS
+    values don't reproduce the mockup's own rendering.** Requested to
+    pull `.tt4-name-row`/`.tt4-stat-row` `margin-bottom` (5px/6px) 1:1 -
+    confirmed those were already applied verbatim, yet rendered nearly
+    equal gaps rather than the mockup's own ~65:100 (stat-row hugging
+    the bar) rhythm. Rendered the actual mockup file in a real browser
+    and measured its pixel gaps directly (~34px/24px, matching the
+    reported ~64:100 ratio) - confirmed the mockup's own numbers don't
+    mechanically produce its own rendered ratio either, most likely
+    because its Google Fonts links don't resolve from a bare `file://`
+    page, so its real rendering runs on fallback-font line-height
+    metrics the declared px values don't capture (QML doesn't share this
+    accidental effect, since it correctly loads the real bundled fonts).
+    Tuned `nameRow`/`statRow` margins empirically instead (7/4),
+    verified by the same pixel-band measurement technique, converging on
+    a measured 65:100 gap ratio.
+  - **Follow-up round 4 - real bug found and fixed: amp name row
+      ("Devialet Expert 140 Pro") shifted vertically between muted/
+      unmuted states.** Reported with two same-position screenshots;
+      diffed them directly (row-band pixel counts, not eyeballing) and
+      confirmed a real, exact +2px shift, not noise - the two states'
+      row profiles matched pixel-for-pixel once offset by 2. Initial
+      hypothesis (same nested-RowLayout baseline bug as statRow) didn't
+      hold up on inspection - `nameRow` has no nested layout and no
+      `Qt.AlignBaseline` at all, just a dot `Rectangle` and one `Label`
+      as direct siblings. Root-caused instead with live
+      `onYChanged`/`onHeightChanged` logging (via `journalctl`, values
+      confirmed in logical px: `nameRow.y` measured 0 unmuted vs. 1
+      muted, exactly matching the reported +2 physical-px shift at this
+      system's 2x scale) - it wasn't `nameRow` itself: `statRow`'s own
+      `implicitHeight` differs by 2px between states (16 muted / 18
+      unmuted), because its "dB" unit `Label` is excluded from layout
+      entirely via `visible: false` when muted (QtQuick Layouts drops
+      invisible children from sizing, not just rendering) - and that
+      swing was perturbing `ColumnLayout`'s positioning of `nameRow`,
+      which comes *before* `statRow`, a QtQuick Layouts stacking
+      artifact rather than a bug in nameRow's own structure. Fixed by
+      pinning `statRow.Layout.preferredHeight: 18` (the taller,
+      unmuted, natural height) so its contribution to the column can no
+      longer fluctuate - removes the trigger at its source rather than
+      patching nameRow for a problem that wasn't really there. Verified
+      exactly like the statRow fix: controlled before/after screenshots
+      at the same cursor position, row-band pixel-count diff - nameRow
+      now matches pixel-for-pixel (0px difference) between states,
+      confirmed by a whole-image diff showing zero remaining deviation
+      outside the statRow/bar region where content is expected to
+      legitimately differ.
+  - **Verification methodology note:** this phase is also where a
+    session-long testing blocker got root-caused - this system runs at
+    2x display scale (logical 1920×1080, physical 3840×2160
+    screenshots), which had been silently sending every synthetic
+    hover/scroll/click coordinate to roughly double the correct
+    position across every phase back through 4.5.0. Once corrected,
+    synthetic `uinput`-driven mouse testing (hover, scroll, middle-click,
+    multi-cycle re-entry) became reliable enough to verify all of the
+    above directly rather than relying on you for every check.
+
 ## Up next
 
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
@@ -1716,48 +1944,7 @@ architecture decisions; this file is just sequencing and status.
       one connected and playing, confirm the connection is undisturbed
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
-- [ ] **Phase 4.5.3 — Tooltip/OSD visual polish + positioning.** Phase
-      4.5.0 shipped fully functional: scroll-over-panel-icon volume
-      control, a live hover tooltip, and a scroll-triggered OSD toast,
-      all verified live. This phase is styling and positioning only —
-      no new interaction behavior.
-  - **Tooltip:** match devialet_tray_tooltip_mockup_v4.html exactly —
-      name row with status dot, a source/dB stat row sharing one
-      baseline (not source squeezed under the value), copper progress
-      bar, two hint lines (Scroll to adjust / Middle-click to mute,
-      no icon glyphs), everything left-aligned to one consistent edge.
-  - **OSD toast:** match devialet_volume_osd_mockup_v3.html exactly —
-      icon + amp name + dB value + copper progress bar + source line.
-      Unmuted state uses a plain/neutral icon (no copper tint) so
-      copper is reserved for "something's actually active." Muted
-      state uses copper border + icon glow (not amber — amber stays
-      reserved for the existing booting/"Powering on…" state only),
-      copper text for the word "Muted" itself (dropped to 12px/600
-      weight vs. the numeric dB reading's 15px/500, since a 5-letter
-      word and a 3-digit number don't read the same size even in a
-      monospace font), and the progress fill dims to the existing
-      faint/disabled tone rather than recoloring.
-  - **OSD position:** currently defaults to appearing near wherever it
-      was last anchored (screenshot showed top-left/top-right,
-      inconsistent, not centered). Investigate how Plasma's own native
-      Audio Devices OSD (org.kde.plasma.volume / the shared
-      org.kde.osdService-driven OSD) positions itself on screen -
-      check its real source/behavior rather than guessing - and
-      replicate that positioning logic exactly (screen selection,
-      centering, offset) for our own PlasmaCore.Dialog-based toast.
-  - **Volume icon thresholds:** the four SVGs (high/medium/low/mute)
-      need dB-range cutoffs to choose between them. Investigate what
-      thresholds the real Audio Devices applet/OSD actually uses for
-      its own icon-swapping logic and replicate the same breakpoints,
-      rather than inventing new ones - consistent with this project's
-      existing pattern of matching real KDE precedent over guessing.
-  - Verify live: hover tooltip and scroll toast visually match their
-      respective mockups pixel-for-pixel where feasible (font, sizing,
-      spacing, colors); OSD toast appears in the same screen position
-      the native Audio Devices OSD does; icon swaps between high/
-      medium/low/mute at the same dB thresholds the native OSD uses;
-      muted state renders copper, not amber, on both the OSD and (if
-      applicable) the flyout's own Mute button for consistency.
+- [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
 - [ ] **Phase 4.6.0 — devialet-ctl build + PATH placement.** Decide the
       real install location for the `devialet-ctl` binary (system-wide
       `/usr/local/bin`, user `~/.local/bin` placed by the script rather
@@ -1801,7 +1988,46 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-## Not yet scoped / parked
+## Bugs
+
+- [ ] **Bug: "Optical 1" shifts vertically between muted/unmuted
+      states in VolumeHoverTooltip.qml.** Discovered after fixing the
+      nameRow shift (Phase 4.5.3 follow-up round 4) - nameRow and the
+      progress bar now hold perfectly steady between states, but
+      "Optical 1" itself now visibly moves a few pixels vertically
+      depending on mute state, confirmed via side-by-side gridded
+      screenshot comparison. This is now the third instance of this
+      exact symptom class in this same tooltip (statRow's own baseline
+      bug, nameRow's ColumnLayout-positioning bug, now this) - each
+      previous fix has only addressed the specific element that was
+      visibly wrong at the time, not the underlying pattern.
+  - When scoping the fix: don't just diagnose and fix "Optical 1" in
+    isolation. Have Claude Code check EVERY element in the tooltip
+    (dot, name, "Optical 1", dB/Muted value, progress bar, both hint
+    lines) for any vertical position change between muted and unmuted
+    states in one pass, using the same before/after screenshot-diff
+    method already established, so this doesn't come back a fourth
+    time as some other row.
+  - Do not start on this until Phase 4.5.3 is committed - it's
+    scoped as separate follow-up work, not part of that commit.
+
+- [ ] **Bug: hover tooltip defaults to "Muted" on initial load, even
+      when the amp isn't muted.** Observed right after
+      plasmashell/widget reload: the tooltip shows "Muted" on first
+      hover, while the OSD toast (reading the same underlying Muted
+      D-Bus property) correctly shows the real unmuted state and
+      current dB value at the same time. Suggests the tooltip's own
+      Muted property mirror in CompactRepresentation.qml starts from
+      an incorrect default (e.g. true, or uninitialized) and doesn't
+      get corrected until an actual mute-state-changing event occurs,
+      rather than being populated from a real Get call against the
+      Muted D-Bus property on first load/first hover - the same
+      "explicit Get on every property, don't trust an assumed default"
+      principle already applied elsewhere in this project's D-Bus
+      handling. Investigate CompactRepresentation's Muted mirror
+      initialization specifically and fix so the tooltip's first-ever
+      hover after a reload reflects the amp's actual real-time mute
+      state, not a hardcoded/stale default.
 
 - [ ] **Bug: FullRepresentation lags behind CompactRepresentation on
       amp-state changes triggered via the panel icon.** Observed while
@@ -1860,6 +2086,39 @@ architecture decisions; this file is just sequencing and status.
     the widget (not reacting to a D-Bus property it does receive).
     Likely also affects volume changes from the amp's own front panel
     or another remote, not just power-cycling - worth confirming.
+
+## Not yet scoped / parked
+
+- [ ] **Settings: OSD/tooltip background opacity slider.** Add a
+      shared KConfig value (e.g. osdOpacity) controlling both
+      VolumeToast.qml's and VolumeHoverTooltip.qml's background
+      opacity, exposed as a slider in ConfigDialog's General section,
+      following the same pattern as volumeStepDb (Phase 4.4.2). A
+      touch more transparency than the current fixed value would look
+      better by default, but making it a setting means it doesn't need
+      to be re-litigated - the person can just tune it. Low priority,
+      not blocking any current phase.
+- [ ] **Future investigation: rebuild the flyout as a custom
+      PlasmaCore.Dialog instead of the shell's managed
+      expanded-representation popup.** Same underlying idea that
+      solved the tooltip's double-border problem (Phase 4.5.3) - the
+      flyout's current popup is backed by PlasmaWindow, which has no
+      NoBackground option, the same root constraint. Building it as
+      our own Dialog (like VolumeToast.qml/VolumeHoverTooltip.qml)
+      would open up real background/transparency control on the
+      flyout too.
+  - Substantially higher risk than the OSD/tooltip work: FullRepresentation.qml
+    is by far the largest, most heavily-tested surface in this
+    codebase, with a draggable slider, buttons, expandable amp/source
+    lists, and carefully-tuned drag-vs-scroll interaction rules
+    (Phase 4.5.1's volumeInteracting gating). A hand-built Dialog needs
+    to correctly reimplement dismiss-on-click-outside, focus handling,
+    and screen-edge-aware positioning that currently come for free
+    from being the shell's managed popup.
+  - Requires its own dedicated investigation phase and a dedicated
+    branch before any implementation, per this project's usual
+    practice for risky/uncertain work - not something to attempt as
+    part of routine OSD/tooltip polish.
 
 ## Tasks to complete outside repo
 

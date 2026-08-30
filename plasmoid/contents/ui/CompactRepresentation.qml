@@ -46,6 +46,13 @@ MouseArea {
     property double lastIconStepAtMs: 0
     property bool muted: false
     property double lastMuteChangeAtMs: 0
+    // Phase 4.5.3: source name for the tooltip/toast mockups' stat/source
+    // rows - a plain string scalar like AmpIp/DeviceName (no unwrap
+    // ambiguity, confirmed the same way in FullRepresentation.qml's own
+    // header comment: "DeviceName/AmpIp/ActiveSourceName are s"), so no
+    // debounce guard is needed - matches deviceName/ampIp above, which
+    // don't have one either.
+    property string activeSourceName: ""
 
     readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
     readonly property real volumeCeilingDb: -15.0
@@ -53,10 +60,18 @@ MouseArea {
     readonly property int debounceMs: 400
     readonly property string devialetCtlCommand: "devialet-ctl"
 
-    // Exposed for main.qml's toolTipItem binding (see main.qml).
+    // Exposed for hoverTooltip's bindings below.
     readonly property string ampDisplayName: root.deviceName !== "" ? root.deviceName : "Devialet"
     readonly property string tooltipAmpName: root.ampIp === "" ? "No Amplifier" : root.ampDisplayName
     readonly property string iconSource: Plasmoid.icon
+
+    // Phase 4.5.3: normalized 0..1 position between the same floor/ceiling
+    // FullRepresentation's own volumeSlider uses (from/to), for the
+    // tooltip/toast progress bars - matches that slider's own math
+    // ((value - from) / (to - from)) rather than inventing new bounds.
+    readonly property real volumeFraction: root.volumeDb !== undefined
+        ? Math.min(1, Math.max(0, (root.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
+        : 0
 
     function now() { return Date.now(); }
     function within(lastMs, windowMs) { return (root.now() - lastMs) < windowMs; }
@@ -75,8 +90,7 @@ MouseArea {
         root.volumeDb = clamped;
         root.lastIconStepAtMs = root.now();
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
-        volumeToast.iconSource = root.iconSource;
-        volumeToast.show(root.tooltipAmpName + ": " + clamped.toFixed(1) + " dB");
+        volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction);
     }
 
     // Phase 4.5.2: same mute-toggle logic as the flyout's own Mute button
@@ -84,17 +98,14 @@ MouseArea {
     // (that button's logic is inline, not an extracted function, and its
     // `root` is a different file's root - see this file's header comment
     // on why state here is an independent mirror, not shared, matching the
-    // same precedent stepVolume() above already established). Toast
-    // icon/styling here is a deliberate placeholder (plain pill, amp icon)
-    // - a real design is coming in Phase 4.5.3.
+    // same precedent stepVolume() above already established).
     function toggleMute() {
         if (root.ampIp === "") return;
         const newMuted = !root.muted;
         root.muted = newMuted;
         root.lastMuteChangeAtMs = root.now();
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute " + (newMuted ? "on" : "off"));
-        volumeToast.iconSource = root.iconSource;
-        volumeToast.show(root.tooltipAmpName + ": " + (newMuted ? "Muted" : "Unmuted"));
+        volumeToast.showMute(root.tooltipAmpName, root.activeSourceName, newMuted, root.volumeFraction);
     }
 
     hoverEnabled: true
@@ -104,6 +115,106 @@ MouseArea {
             root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
         } else if (mouse.button === Qt.MiddleButton) {
             root.toggleMute();
+        }
+    }
+
+    // Hover show/hide timing replicates libplasma's own ToolTipArea/
+    // ToolTipDialog exactly (read their source, not guessed - see
+    // VolumeHoverTooltip.qml's header comment for the full citation):
+    // ToolTipArea::hoverEnterEvent starts a single-shot show timer
+    // (m_showTimer.start(m_interval)) rather than showing immediately;
+    // ToolTipDialog::dismiss() starts a 200ms hide timer rather than
+    // hiding immediately. hoverEnterEvent's "already visible -> show
+    // immediately, no delay" branch (avoids flicker when quickly moving
+    // between tooltip areas) has no equivalent here since there's only
+    // one hover target - re-entering before hoverHideTimer fires just
+    // cancels it below, which is the same practical effect for a single
+    // icon.
+    //
+    // Phase 4.5.3 item 2 fix (follow-up round): the earlier fix only
+    // reacted to the expanded->true *transition* (the Connections block
+    // below), which left a gap - leaving and re-entering the icon while
+    // already expanded restarted hoverShowTimer with nothing to stop it,
+    // so the tooltip could reappear on top of an already-open flyout.
+    // Guarding the trigger itself (both here and in hoverShowTimer's own
+    // onTriggered, in case expanded flips true during the pending delay)
+    // means it never shows at all while expanded, regardless of how many
+    // times the mouse re-enters - not just once at the moment it opens.
+    onEntered: {
+        hoverHideTimer.stop();
+        if (!hoverTooltip.visible && !root.plasmoidItem.expanded) {
+            hoverShowTimer.restart();
+        }
+    }
+    onExited: {
+        hoverShowTimer.stop();
+        if (hoverTooltip.visible) {
+            hoverHideTimer.restart();
+        }
+    }
+
+    Timer {
+        id: hoverShowTimer
+        // Kirigami.Units.toolTipDelay - the same QML-exposed value real
+        // KDE apps bind QQC2 ToolTip.delay to, itself backed by the
+        // global "PlasmaToolTips/Delay" KConfig entry ToolTipArea reads
+        // directly (tooltiparea.cpp: cfg.readEntry("Delay", 700)) - using
+        // the Kirigami property rather than reading that KConfig group
+        // ourselves, since it's the standard path to the same value.
+        interval: Kirigami.Units.toolTipDelay
+        // Re-checked here too, not just in onEntered - expanded could
+        // flip true during the pending delay itself (flyout opened via
+        // some other path while the timer was already running).
+        onTriggered: {
+            if (!root.plasmoidItem.expanded) {
+                hoverTooltip.visible = true;
+            }
+        }
+    }
+    Timer {
+        id: hoverHideTimer
+        interval: 200
+        onTriggered: hoverTooltip.visible = false
+    }
+
+    VolumeHoverTooltip {
+        id: hoverTooltip
+        visualParent: root
+        ampName: root.tooltipAmpName
+        sourceName: root.activeSourceName
+        volumeDb: root.volumeDb
+        volumeFraction: root.volumeFraction
+        hasAmp: root.ampIp !== ""
+        // Phase 4.5.3 item 3 fix: was missing entirely, so the tooltip
+        // kept showing the last dB reading instead of "Muted" - the same
+        // Muted D-Bus mirror VolumeToast.showMute() already reacts to
+        // (see the Dbus.Properties block below), just never wired here.
+        muted: root.muted
+    }
+
+    // Phase 4.5.3 item 4 fix: the tooltip stayed open over the flyout if
+    // the mouse was still hovering the icon when it opened, since nothing
+    // ever told it to hide on expand - only real mouse-leave (onExited)
+    // did. Target is root.plasmoidItem (a direct PlasmoidItem reference),
+    // not the `Plasmoid` attached property - tried that first, matching
+    // FullRepresentation.qml's own existing `Connections { target:
+    // Plasmoid; function onExpandedChanged() {...} }`, but that produced
+    // the exact same "no signal of the target matches the name" warning
+    // already present (and apparently never fixed) at FullRepresentation.
+    // qml:216 - the attached-property wrapper doesn't forward
+    // expandedChanged the same way the real PlasmoidItem instance does.
+    // root.plasmoidItem is that real instance (already used directly for
+    // reads/writes elsewhere in this file, e.g. onClicked's
+    // `root.plasmoidItem.expanded = ...`), and connecting to it directly
+    // resolves the signal correctly - confirmed live, no warning.
+    Connections {
+        target: root.plasmoidItem
+        function onExpandedChanged() {
+            if (root.plasmoidItem.expanded) {
+                hoverShowTimer.stop();
+                hoverHideTimer.stop();
+                hoverTooltip.visible = false;
+            }
         }
     }
 
@@ -173,6 +284,7 @@ MouseArea {
             root.deviceName = root.unwrap(properties.DeviceName, "");
             root.volumeDb = root.unwrap(properties.VolumeDb, undefined);
             root.muted = root.unwrap(properties.Muted, false);
+            root.activeSourceName = root.unwrap(properties.ActiveSourceName, "");
         }
 
         onPropertiesChanged: (interfaceName, changed, invalidated) => {
@@ -188,6 +300,7 @@ MouseArea {
                     root.muted = root.unwrap(changed.Muted, root.muted);
                 }
             }
+            if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
         }
     }
 }
