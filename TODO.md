@@ -1491,6 +1491,50 @@ architecture decisions; this file is just sequencing and status.
     only Transparency with its slider, no Blur row, no leftover gap.
     Matches the mockup exactly.
 
+- [x] **Phase 4.5.1 — Scroll over volume slider to adjust volume.**
+      Investigated before implementing, per the phase's own instruction.
+  - **QQC2 wheel handling, investigated rather than assumed:** the real
+    QQC2 style for `Slider` on this system, `org.kde.desktop`'s
+    `Slider.qml`, does ship built-in wheel handling — but it lives
+    inside a `MouseArea` nested in the style's own `background:`
+    delegate, and `volumeSlider` (`FullRepresentation.qml`) already
+    replaces `background:` entirely with a custom copper-track
+    `Rectangle` (Phase 4.0), which discards that `MouseArea` along with
+    everything else the style put there. The style's handler also only
+    calls `controlRoot.increase()`/`decrease()` (moves the Slider's own
+    `value`), not this app's actual commit path — so it couldn't have
+    been reused as-is even if `background:` were untouched. Confirmed
+    via `grep` that no `onWheel`/`WheelHandler` existed anywhere in
+    `FullRepresentation.qml` before this phase.
+  - **Direction confirmed** against the style's own convention:
+    `wheel.angleDelta.y` positive (scroll up) = volume up, using
+    `wheel.inverted` to auto-correct for the user's OS-level "natural
+    scrolling" setting rather than special-casing it.
+  - **Drag-interaction behavior, proposed and confirmed before
+    implementing:** scroll is blocked entirely while
+    `volumeSlider.pressed` is true. Reasoning: the Slider's `value`
+    binding is suppressed while pressed and release unconditionally
+    overwrites `root.volumeDb` with the drag position, so a wheel step
+    applied mid-drag would be sent to the amp and then silently
+    clobbered the moment the drag ends — blocking during drag avoids
+    that race, consistent with how `root.volumeInteracting` already
+    treats an active drag as an exclusive-input state elsewhere in this
+    file.
+  - **Implementation:** added a `MouseArea` (`acceptedButtons:
+    Qt.NoButton`, so press/drag still passes through to the Slider
+    untouched — the same technique the style's own handler uses)
+    inside `volumeSlider`, accumulating `angleDelta` into 120-unit
+    notches (matching `org.kde.desktop`'s own convention, since
+    trackpads/high-resolution wheels send many small-delta events per
+    gesture) and calling `root.stepVolume(1)`/`root.stepVolume(-1)` per
+    notch — reusing the exact same commit path (optimistic update,
+    debounce timestamp, `devialet-ctl` invocation) the +/- buttons
+    already use, rather than a new parallel code path.
+  - **Verified live by you:** scrolling over the slider changes the
+    volume by exactly one `volumeStepDb` step per notch in both
+    directions, confirmed across multiple different configured step
+    sizes; scrolling while dragging the thumb does nothing.
+
 ## Up next
 
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
@@ -1581,7 +1625,6 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
-- [ ] **scroll over volume slider to adjust volume**
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced

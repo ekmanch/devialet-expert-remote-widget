@@ -1337,6 +1337,51 @@ Item {
                         radius: 999
                         color: root.theme.copperBright
                     }
+
+                    // Phase 4.5.1: scroll-to-adjust-volume. Overriding
+                    // `background` above already discarded the
+                    // org.kde.desktop QQC2 style's own wheel-handling
+                    // MouseArea (it lives inside the style's default
+                    // `background` delegate), so it has to be reimplemented
+                    // here. acceptedButtons: Qt.NoButton mirrors the style's
+                    // own technique - it lets press/drag events pass through
+                    // to the Slider underneath untouched, while wheel events
+                    // are still delivered.
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.NoButton
+
+                        // Accumulates sub-notch wheel deltas (trackpads and
+                        // high-resolution mice send many small events per
+                        // gesture) into whole 120-unit "notches" before
+                        // stepping, matching org.kde.desktop's own
+                        // Slider.qml convention - one stepVolume() call per
+                        // physical notch, not per wheel event.
+                        property int wheelDelta: 0
+
+                        onWheel: (wheel) => {
+                            // Blocked while actively dragging: the Slider's
+                            // `value` binding above is suppressed until
+                            // release (`when: !volumeSlider.pressed`), and
+                            // release unconditionally overwrites
+                            // root.volumeDb with the drag position - so a
+                            // wheel step applied mid-drag would be sent to
+                            // the amp and then silently clobbered the moment
+                            // the drag ends.
+                            if (volumeSlider.pressed) return;
+
+                            const delta = (wheel.angleDelta.y || -wheel.angleDelta.x) * (wheel.inverted ? -1 : 1);
+                            wheelDelta += delta;
+                            while (wheelDelta >= 120) {
+                                wheelDelta -= 120;
+                                root.stepVolume(1);
+                            }
+                            while (wheelDelta <= -120) {
+                                wheelDelta += 120;
+                                root.stepVolume(-1);
+                            }
+                        }
+                    }
                 }
 
                 Button {
