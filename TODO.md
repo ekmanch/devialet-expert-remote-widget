@@ -1441,7 +1441,7 @@ architecture decisions; this file is just sequencing and status.
     a wallpaper, or once Phase 4.4.4's slider allows a lower alpha.
     Reload (`kpackagetool6 --upgrade` + `plasmashell --replace`)
     confirmed the setting survives a full widget restart.
-  - **Addendum — Transparency removed from main in `8c284af`.** Covers
+  - **Addendum — Transparency removed from main in `e084543`.** Covers
     all of Transparency's
     history above (Phase 4.4.1's Appearance-section scaffold, Phase
     4.4.2.1's reorder/dependent-disable, and this phase's on/off
