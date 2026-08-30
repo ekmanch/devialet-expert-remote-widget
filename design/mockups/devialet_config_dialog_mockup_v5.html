@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet ConfigDialog — Mockup v3</title>
+<title>Devialet ConfigDialog — Mockup v5</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -263,7 +263,7 @@
 </head>
 <body>
 
-<div class="mockup-tag">MOCKUP · CONFIGDIALOG v3 — larger default window size, click sidebar items, try "Forget"</div>
+<div class="mockup-tag">MOCKUP · CONFIGDIALOG v5 — appearance section removed, click sidebar items, try "Forget"</div>
 
 <div style="display:flex; flex-direction:column; align-items:center;">
   <div class="kcm-window">
@@ -317,32 +317,10 @@
             </div>
           </div>
 
-          <p class="kcm-section-label first">Appearance</p>
+          <p class="kcm-section-label first">Volume</p>
           <div class="kcm-row">
             <div class="kcm-row-text">
-              <span class="kcm-row-name">Transparency</span>
-              <span class="kcm-row-desc">Let the desktop show through the panel</span>
-            </div>
-            <div class="kcm-switch on" id="transSwitch" onclick="toggleSwitch(this); toggleTransSub();"></div>
-          </div>
-          <div class="kcm-sub-row" id="transSub">
-            <div class="kcm-slider-row">
-              <input type="range" class="kcm-slider" min="0" max="100" value="72" style="--fill:72%" oninput="onTransInput(this.value)">
-              <span class="kcm-slider-value" id="transValue">72%</span>
-            </div>
-          </div>
-          <div class="kcm-row" id="blurRow">
-            <div class="kcm-row-text">
-              <span class="kcm-row-name">Blur background</span>
-              <span class="kcm-row-desc">Glassy vibrancy behind the flyout. Requires transparency to enable.</span>
-            </div>
-            <div class="kcm-switch on" id="blurSwitch" onclick="toggleSwitch(this)"></div>
-          </div>
-
-          <p class="kcm-section-label">Volume</p>
-          <div class="kcm-row">
-            <div class="kcm-row-text">
-              <span class="kcm-row-name">Step per scroll notch</span>
+              <span class="kcm-row-name">Volume step size</span>
               <span class="kcm-row-desc">Applies to scroll-over-icon and +/- buttons</span>
             </div>
             <div class="kcm-segmented">
@@ -417,15 +395,6 @@
     el.classList.add('selected');
   }
   function toggleSwitch(el){ el.classList.toggle('on'); }
-  function toggleTransSub(){
-    const on = document.getElementById('transSwitch').classList.contains('on');
-    document.getElementById('transSub').classList.toggle('disabled', !on);
-    document.getElementById('blurRow').classList.toggle('disabled', !on);
-  }
-  function onTransInput(v){
-    document.getElementById('transValue').textContent = v + '%';
-    document.querySelector('#transSub .kcm-slider').style.setProperty('--fill', v + '%');
-  }
   function setStep(el){
     el.parentElement.querySelectorAll('.kcm-seg-btn').forEach(b => b.classList.remove('active'));
     el.classList.add('active');
