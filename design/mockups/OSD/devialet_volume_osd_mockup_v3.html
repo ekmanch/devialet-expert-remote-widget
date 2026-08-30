@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Devialet Volume OSD — Mockup v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e0e10;
+    --surface:#1a1a1d;
+    --surface-2:#222225;
+    --surface-3:#2a2a2e;
+    --copper:#c17f4e;
+    --copper-bright:#e3a06a;
+    --copper-dim:#8a5c39;
+    --text:#f2f0ec;
+    --text-dim:#9a9a9f;
+    --text-faint:#5c5c60;
+    --divider:rgba(255,255,255,0.08);
+    --font-display:'Space Grotesk',sans-serif;
+    --font-mono:'JetBrains Mono',monospace;
+    --font-body:'Inter',sans-serif;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:var(--font-body);
+    color:var(--text);
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(193,127,78,0.06), transparent 60%),
+      repeating-linear-gradient(90deg, #0a0a0c 0 40px, #0b0b0d 40px 80px),
+      #0a0a0c;
+    min-height:100vh;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .mockup-tag{
+    position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:60;
+    font-family:var(--font-mono); font-size:10px; letter-spacing:0.06em;
+    color:var(--text-faint); background:rgba(0,0,0,0.5); padding:3px 7px; border-radius:6px;
+    border:1px solid var(--divider); pointer-events:none; text-align:center; white-space:nowrap;
+  }
+
+  .desktop-panel{
+    position:fixed; top:0; left:0; right:0; height:34px;
+    background:rgba(20,20,22,0.92);
+    border-bottom:1px solid var(--divider);
+    display:flex; align-items:center; justify-content:flex-end;
+    padding:0 14px; gap:14px;
+    z-index:5;
+  }
+  .panel-icon{width:16px; height:16px; border-radius:4px; opacity:0.55; background:var(--text-faint);}
+  .panel-icon.devialet{ background:transparent; opacity:1; display:flex; align-items:center; justify-content:center; color:var(--copper-bright); font-size:13px; }
+  .panel-clock{font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); letter-spacing:0.02em;}
+
+  /* ============ the OSD toast ============ */
+  .osd{
+    display:flex; align-items:center; gap:14px;
+    padding:14px 20px 14px 16px;
+    background:linear-gradient(180deg, rgba(23,23,26,0.94) 0%, rgba(18,18,20,0.94) 100%);
+    border:1px solid rgba(255,255,255,0.08);
+    border-radius:16px;
+    box-shadow:0 24px 60px -12px rgba(0,0,0,0.65), 0 0 0 1px rgba(0,0,0,0.4);
+    backdrop-filter:blur(18px) saturate(140%);
+    animation:pop .16s cubic-bezier(.2,.9,.3,1);
+    min-width:340px;
+  }
+  @keyframes pop{from{opacity:0; transform:translateY(6px) scale(0.97);} to{opacity:1; transform:translateY(0) scale(1);}}
+
+  /* unmuted: plain white/neutral icon — same neutral treatment the
+     flyout gives its own Mute/Power buttons when not in an active state */
+  .osd-icon{
+    width:34px; height:34px; border-radius:10px; flex-shrink:0;
+    background:var(--surface); border:1px solid var(--divider);
+    display:flex; align-items:center; justify-content:center;
+    color:var(--text);
+  }
+  .osd-icon svg{ width:17px; height:17px; }
+
+  /* muted: border + icon light up copper, background stays the same
+     dark surface — same treatment v1 used for its normal state, just
+     reserved for the muted state now instead of always-on */
+  .osd-icon.muted{
+    color:var(--copper-bright); border-color:var(--copper-dim);
+    box-shadow:0 0 12px -2px rgba(227,160,106,0.25);
+  }
+
+  .osd-body{ flex:1; min-width:0; }
+  .osd-top-row{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:7px; }
+  .osd-name{
+    font-family:var(--font-display); font-weight:600; font-size:12.5px; color:var(--text);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;
+  }
+  .osd-value{
+    font-family:var(--font-mono); font-size:15px; font-weight:500; color:var(--copper-bright);
+    font-variant-numeric:tabular-nums; flex-shrink:0;
+  }
+  .osd-value .unit{ font-size:10px; color:var(--text-dim); font-weight:400; margin-left:2px; }
+  /* numeric dB readings are short and tabular, so 15px reads fine —
+     but a whole word like "Muted" at the same size looks oversized,
+     so word-length values drop down a size */
+  .osd-value.word{ font-size:12px; font-weight:600; letter-spacing:0.01em; }
+
+  .osd-track{
+    height:4px; border-radius:999px; background:var(--surface-3); overflow:hidden;
+  }
+  .osd-fill{
+    height:100%; border-radius:999px; background:var(--copper); width:77.8%;
+    transition:width .1s linear;
+  }
+  /* dimmed rather than re-colored — the amp isn't producing sound, so
+     the fill drops to the same faint tone used for disabled/off states
+     elsewhere, while the icon carries the copper "you're muted" signal */
+  .osd-fill.muted{ background:var(--text-faint); }
+
+  .osd-source{
+    font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint);
+    margin-top:6px; letter-spacing:0.02em;
+  }
+
+  .variant-label{
+    position:absolute; top:-22px; left:0;
+    font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); letter-spacing:0.06em;
+  }
+  .stack{ display:flex; flex-direction:column; gap:64px; position:relative; }
+  .item{ position:relative; }
+
+  .legend{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    max-width:680px;
+    font-family:var(--font-mono); font-size:10px; color:var(--text-faint); line-height:1.7;
+    text-align:center;
+  }
+  .legend b{ color:var(--copper-bright); font-weight:600; }
+</style>
+</head>
+<body>
+
+<div class="mockup-tag">MOCKUP · CENTER-SCREEN VOLUME OSD — V3</div>
+
+<div class="desktop-panel">
+  <div class="panel-icon"></div>
+  <div class="panel-icon"></div>
+  <div class="panel-icon devialet">◉</div>
+  <div class="panel-icon"></div>
+  <div class="panel-clock">15:58</div>
+</div>
+
+<div class="stack">
+
+  <div class="item">
+    <div class="variant-label">NORMAL</div>
+    <div class="osd">
+      <div class="osd-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      </div>
+      <div class="osd-body">
+        <div class="osd-top-row">
+          <span class="osd-name">Expert 140 Pro</span>
+          <span class="osd-value">−22.0<span class="unit">dB</span></span>
+        </div>
+        <div class="osd-track"><div class="osd-fill" style="width:79.4%"></div></div>
+        <div class="osd-source">Optical 1</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="variant-label">MUTED</div>
+    <div class="osd">
+      <div class="osd-icon muted">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M23 9l-6 6M17 9l6 6"/></svg>
+      </div>
+      <div class="osd-body">
+        <div class="osd-top-row">
+          <span class="osd-name">Expert 140 Pro</span>
+          <span class="osd-value word" style="color:var(--copper-bright);">Muted</span>
+        </div>
+        <div class="osd-track"><div class="osd-fill muted" style="width:79.4%"></div></div>
+        <div class="osd-source">Optical 1</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  Sorry about that — amber was the wrong call. Muted now uses the same <b>copper border + icon glow</b> your
+  v1 normal state had (no filled background tint), reserved for the muted state instead of being always-on.
+  Unmuted stays plain white/neutral, so copper only ever lights up when something's actually active — muted,
+  or reading out the dB level. "Muted" also dropped a size (15px → 12px, bolder) — a 3-digit number and a
+  5-letter word don't read the same size even in a monospace font, since the word carries more visual weight.
+</div>
+
+</body>
+</html>
