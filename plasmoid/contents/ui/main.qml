@@ -55,11 +55,28 @@ PlasmoidItem {
     // this icon.
     Plasmoid.icon: Qt.resolvedUrl("../icons/devialet_icon_glow_dot.svg")
 
-    compactRepresentation: CompactRepresentation {
-        plasmoidItem: root
+    // Phase 5.0.1: single shared, root-anchored consumer of the daemon's
+    // resolved VolumeDb/Muted - see PendingAmpState.qml's own header
+    // comment for the full reasoning. Anchored here (main.qml's root
+    // PlasmoidItem) rather than inside either representation because
+    // root is what creates/loads both of them and so strictly outlives
+    // either - CompactRepresentation and FullRepresentation are not
+    // guaranteed co-resident (see CompactRepresentation.qml's own header
+    // comment), so anything meant to be shared between them can't live
+    // inside either one.
+    PendingAmpState {
+        id: pendingAmpState
     }
 
-    fullRepresentation: FullRepresentation {}
+    compactRepresentation: CompactRepresentation {
+        plasmoidItem: root
+        pendingAmpState: pendingAmpState
+    }
+
+    fullRepresentation: FullRepresentation {
+        plasmoidItem: root
+        pendingAmpState: pendingAmpState
+    }
 
     // No toolTipItem binding here (Phase 4.5.3 Bug 3 fix, later revision):
     // CompactRepresentation.qml now owns its own hover-triggered

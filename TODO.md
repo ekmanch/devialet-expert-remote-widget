@@ -2122,9 +2122,7 @@ architecture decisions; this file is just sequencing and status.
       `VolumeDb`/`AmpIp` - confirmed no-op, not silently erroring or
       creating a phantom tracked amp.
 
-## Up next
-
-- [ ] **Phase 5.0.1 — Shared, root-anchored QML consumer for VolumeDb/
+- [x] **Phase 5.0.1 — Shared, root-anchored QML consumer for VolumeDb/
       Muted.** Depends on 5.0.0 being merged.
   - New QML object (e.g. `PendingAmpState.qml`), instantiated once in
     `main.qml` and handed to **both** representations via the same
@@ -2166,6 +2164,72 @@ architecture decisions; this file is just sequencing and status.
     3. Close the flyout (`FullRepresentation` unloaded again) and
        confirm `CompactRepresentation`'s reference keeps working
        completely unaffected.
+  - **Implemented on `feature/daemon-pending-state`.** New
+    `plasmoid/contents/ui/PendingAmpState.qml` (plain `QtObject`, same
+    "not `pragma Singleton`" precedent as `Theme.qml` - confirmed no
+    qmldir exists in this KPackage). One correction from the original
+    design sketch, caught during design review before implementing, not
+    after: a bare `Dbus.Properties { ... }` child does not work directly
+    under a `QtObject` root - `QtObject` has no `data` default property
+    in Qt6 (that's an `Item`/`QQuickItem` thing, confirmed against this
+    machine's actual installed `qmltypes`; the two existing bare-child
+    precedents in this codebase, `CompactRepresentation`/
+    `FullRepresentation`, are both `Item`-derived roots). Fixed by
+    assigning it via a named property instead
+    (`readonly property Dbus.Properties ampProps: Dbus.Properties
+    {...}`), the same pattern `Theme.qml` already uses for its own
+    `QObject`-derived `FontLoader` children under a `QtObject` root - no
+    need to switch `PendingAmpState`'s root type to `Item`.
+    `main.qml` instantiates it once (`PendingAmpState { id:
+    pendingAmpState }`) and hands it to both representations via a new
+    `required property PendingAmpState pendingAmpState` on each
+    (`required property`, not an alias through `plasmoidItem` - matches
+    the only existing precedent for this kind of handoff and fails
+    loudly at load time if ever left unwired, worth more than saved
+    boilerplate given this project has zero QML test infrastructure).
+    `FullRepresentation` also gained `required property PlasmoidItem
+    plasmoidItem` alongside it (no new import needed, `org.kde.plasma.
+    plasmoid` already present) - unused by anything else this phase,
+    added purely for consistency with `CompactRepresentation`'s existing
+    wiring. Neither representation's existing `volumeDb`/`muted`
+    handling, debounce timestamps, or `onPropertiesChanged` branches
+    were touched - both files gained only the one new required-property
+    line (two for `FullRepresentation`), confirmed via `git status`
+    showing no other changes to either file.
+  - **Verified live, real amp (`192.168.0.22`, real daemon rebuilt with
+    Phase 5.0.0 already on this branch)**, via a temporary
+    `debugLogging` flag on the new object (flipped back to `false`
+    before finishing) logged through `journalctl _COMM=plasmashell`,
+    plus the same synthetic-scroll tooling used for the Phase 4.5.0
+    FullRepresentation-lag investigation:
+    - **Panel icon only, flyout never opened**: exactly one
+      `onRefreshed` fired at startup with the real values
+      (`192.168.0.22 -42 false`, matching a direct `busctl
+      get-property` check at the same moment); a real scroll produced
+      an `onPropertiesChanged` with the updated confirmed value
+      (`-42` → `-41`).
+    - **Flyout opened** (both representations now loaded): **zero**
+      log lines fired around the open event itself - no
+      re-initialization, proving a single shared instance, not a
+      second one spun up for `FullRepresentation`. A further scroll
+      with the flyout open still updated correctly (`-41` → `-40`),
+      confirmed visually too (flyout screenshotted mid-test, showing
+      the matching `-41.0dB`).
+    - **Flyout closed again**: a further scroll still updated
+      correctly (`-40` → `-39`), proving `CompactRepresentation`'s
+      reference keeps working completely unaffected by
+      `FullRepresentation`'s unload.
+    - Across the entire session (startup through open/close/multiple
+      scrolls), **`onRefreshed` fired exactly once, total** - every
+      subsequent update arrived via `onPropertiesChanged` on the same
+      live subscription, the direct evidence for lifecycle
+      independence this chunk exists to establish.
+    - Amp volume restored to `-42.0dB` (its value before this
+      verification pass) afterward; `cargo test --workspace` (76/76)
+      and `cargo clippy --workspace --all-targets` (zero warnings)
+      reconfirmed unaffected, since this chunk is QML-only.
+
+## Up next
 
 - [ ] **Phase 5.0.2 — Migration: cut over, then delete what's
       redundant.** Depends on 5.0.1 being verified solid. Two
@@ -2336,12 +2400,13 @@ architecture decisions; this file is just sequencing and status.
     same class of thing `BeginPowerOnBoot`/`boot_deadline` (Phase
     4.3.0) already solves for `Power` - just not yet extended to
     `VolumeDb`/`Muted`, and not yet shared by both representations. See
-    **Phase 5.0.0 (Done) and 5.0.1-5.0.3 (Up next)** for the scoped fix
-    (daemon-owned pending-command state, consumed by both
-    representations via one new shared object) - daemon side landed
-    and live-verified (5.0.0), the QML consumer doesn't exist yet
-    (5.0.1-5.0.3), dedicated branch. Do not close this bug until
-    5.0.3's live verification confirms it end to end.
+    **Phase 5.0.0-5.0.1 (Done) and 5.0.2-5.0.3 (Up next)** for the
+    scoped fix (daemon-owned pending-command state, consumed by both
+    representations via one new shared object) - daemon side (5.0.0)
+    and the shared QML consumer object (5.0.1) both landed and
+    live-verified, but neither representation actually reads from that
+    object yet (that's 5.0.2's cutover), dedicated branch. Do not close
+    this bug until 5.0.3's live verification confirms it end to end.
   - Distinct from the existing parked bug above ("widget doesn't
     reflect amp-initiated volume changes it didn't itself send") - that
     one describes a divergence that persists indefinitely until

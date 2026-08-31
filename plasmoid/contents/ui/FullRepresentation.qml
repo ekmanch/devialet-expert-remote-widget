@@ -162,6 +162,16 @@ Item {
     implicitWidth: theme.panelWidth
     implicitHeight: mainColumn.implicitHeight
 
+    // Phase 5.0.1: real PlasmoidItem instance reference, same pattern
+    // CompactRepresentation.qml has always used (main.qml hands it down
+    // as `plasmoidItem: root`) - added here alongside pendingAmpState
+    // below for consistency; nothing in this file reads it yet.
+    required property PlasmoidItem plasmoidItem
+    // Phase 5.0.1: shared, root-anchored VolumeDb/Muted consumer - not
+    // used by anything in this file yet (additive-only this phase, see
+    // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
+    required property PendingAmpState pendingAmpState
+
     readonly property Theme theme: Theme {}
 
     // Public KSvg API (not the private org.kde.plasma.extras/private

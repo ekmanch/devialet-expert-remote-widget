@@ -37,6 +37,10 @@ MouseArea {
     id: root
 
     required property PlasmoidItem plasmoidItem
+    // Phase 5.0.1: shared, root-anchored VolumeDb/Muted consumer - not
+    // used by anything in this file yet (additive-only this phase, see
+    // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
+    required property PendingAmpState pendingAmpState
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
