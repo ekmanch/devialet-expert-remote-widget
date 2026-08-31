@@ -202,13 +202,32 @@ PlasmaCore.Dialog {
                 // constant removes the trigger at its source rather than
                 // trying to patch nameRow for a problem that isn't really
                 // there. 18 matches the taller (unmuted, numeric+"dB")
-                // natural height; Qt.AlignBaseline on statRow's own
-                // children still centers them correctly within this fixed
-                // allocation regardless of which is taller.
+                // natural height.
+                //
+                // Round 5: pinning this height did NOT fully fix
+                // mute-dependent shifting - "Optical 1" (a direct sibling
+                // here) kept moving a couple px between states even after
+                // this pin and the flattening above. Root cause: this row's
+                // children used Qt.AlignBaseline, which computes a shared
+                // baseline offset *within* this fixed height from the font
+                // metrics of whichever children currently participate - and
+                // that set/those metrics still varied by mute state (the
+                // value Label swaps font.family/pixelSize/weight between
+                // the numeric and "Muted" forms; the "dB" Label drops out of
+                // the row's sizing/baseline computation entirely via
+                // visible:false when muted). So even with a pinned outer
+                // height and flat siblings, every AlignBaseline child -
+                // including "Optical 1", whose own font never changes - got
+                // repositioned along with the shifting computed baseline.
+                // Fixed by switching every child below to Qt.AlignVCenter:
+                // centering is computed from each Label's own height only,
+                // with no dependency on sibling content/fonts/visibility, so
+                // no element's position can be perturbed by another
+                // element's mute-driven content change again.
                 Layout.preferredHeight: 18
 
                 Label {
-                    Layout.alignment: Qt.AlignBaseline
+                    Layout.alignment: Qt.AlignVCenter
                     text: tooltip.hasAmp && tooltip.sourceName !== "" ? tooltip.sourceName : "—"
                     font.family: tooltip.theme.fontMono
                     font.pixelSize: 10
@@ -218,7 +237,7 @@ PlasmaCore.Dialog {
                 Item { Layout.fillWidth: true }
 
                 Label {
-                    Layout.alignment: Qt.AlignBaseline
+                    Layout.alignment: Qt.AlignVCenter
                     text: {
                         if (!tooltip.hasAmp) return "—";
                         if (tooltip.muted) return "Muted";
@@ -230,7 +249,7 @@ PlasmaCore.Dialog {
                     color: tooltip.theme.copperBright
                 }
                 Label {
-                    Layout.alignment: Qt.AlignBaseline
+                    Layout.alignment: Qt.AlignVCenter
                     visible: !tooltip.isWordValue
                     text: "dB"
                     font.pixelSize: 9

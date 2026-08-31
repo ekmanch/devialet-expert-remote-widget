@@ -1912,6 +1912,69 @@ architecture decisions; this file is just sequencing and status.
     multi-cycle re-entry) became reliable enough to verify all of the
     above directly rather than relying on you for every check.
 
+- [x] **Bug fix — "Optical 1" shifts vertically between muted/unmuted
+      states in VolumeHoverTooltip.qml (Phase 4.5.3 follow-up round
+      5).** Discovered after fixing the nameRow shift (round 4) -
+      nameRow and the progress bar held perfectly steady between
+      states, but "Optical 1" itself still visibly moved a few pixels
+      vertically depending on mute state, confirmed via side-by-side
+      gridded screenshot comparison. Third instance of this exact
+      symptom class in this same tooltip (statRow's own baseline bug,
+      nameRow's ColumnLayout-positioning bug, now this) - each previous
+      fix had only addressed the specific element that was visibly
+      wrong at the time, not the underlying pattern. Scoped explicitly
+      to check every element in the tooltip in one pass, not just
+      "Optical 1" in isolation, so it wouldn't come back a fourth time
+      as some other row.
+  - **Actual root cause: `Qt.AlignBaseline` itself, not any remaining
+    container-sizing leak.** Prior rounds 3/4 fixed a nested-layout
+    baseline bug and an outer-height leak, but left `statRow`'s three
+    children (`sourceName`, the value Label, the "dB" unit Label) on
+    `Qt.AlignBaseline`. That alignment computes one shared baseline
+    offset *within* the row from the font metrics of whichever children
+    currently participate - and that still varied by mute state even
+    with a pinned row height: the value Label swaps
+    `font.family`/`pixelSize`/`weight` between the numeric and "Muted"
+    forms (different glyph ascent), and the "dB" Label drops out of the
+    row's sizing/baseline computation entirely via `visible: false`
+    when muted. So every baseline-aligned sibling - including
+    `sourceName` ("Optical 1"), whose own font never changes - got
+    repositioned along with the shifting computed baseline. Fixed by
+    switching all three to `Qt.AlignVCenter`, which positions each
+    Label from its own height only, with no dependency on sibling
+    content/fonts/visibility - the actual pattern behind all three
+    rounds (round 3, round 4, and this one) is "don't let one element's
+    position be computed from another element's current content";
+    `Qt.AlignVCenter` in a pinned-height row satisfies that
+    unconditionally, `Qt.AlignBaseline` never did.
+  - **Verified exhaustively, every element, not just "Optical 1"** -
+    real amp, hover via synthetic uinput mouse (calibrated against
+    `workspace.cursorPos` through a KWin script, since this system's 2x
+    scale plus this device's pointer-acceleration curve otherwise
+    overshoots), middle-click to toggle mute, `spectacle -f` captures
+    at each state, restored to unmuted afterward (confirmed via
+    `busctl get-property … Muted` → `false`).
+    - Control capture (same state, re-shot): **0 differing pixels**
+      across the full card - rules out screenshot/render noise before
+      trusting any other measurement.
+    - Unmuted vs. muted, whole-card pixel diff: differences confined to
+      a single bbox, x[184,486] y[133,174] in the capture's own
+      coordinates - exactly the value/unit text glyphs (legitimately
+      different content) and the volume-bar fill color (legitimately
+      mute-indicating). Zero differing pixels anywhere outside that
+      box.
+    - Row-band detection (per-row pixel std-dev across the card's full
+      interior width, independent of the diff above) found 8 bands and
+      every single one landed at the **identical y-range in both
+      states**: card top edge (40-52), status dot (64-72), amp name
+      text (88-107), statRow text row (128-153), progress bar
+      (170-174), hint line 1 "Scroll to adjust" (194-211), hint line 2
+      "Middle-click to mute" (222-236), card bottom edge (252-259).
+      0px shift, not "within noise" - exact.
+    - Conclusion: no element in the tooltip moves between mute states,
+      confirmed quantitatively for every row, not assumed from
+      "Optical 1" alone.
+
 ## Up next
 
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
@@ -1974,6 +2037,14 @@ architecture decisions; this file is just sequencing and status.
       (don't leave the system in a half-installed state silently).
   - Verify: a clean clone → run script → fully working widget + daemon
     + CLI, end to end, no manual steps outside the script.
+  - Note for packaging/install script phase: both the devialet-ctl
+      symlink and the devialet-remote-daemon systemd unit's ExecStart
+      have independently gone stale against pre-own/-move paths on
+      this machine. The install script should generate/verify these
+      paths against wherever the repo actually lives at install time,
+      rather than leaving them as manually sed-substituted
+      placeholders per the current README instructions - this class of
+      bug will keep recurring otherwise.
 - [ ] **Phase 4.6.4 — Uninstall script (decide scope first).** Decide
       deliberately whether an uninstall script is in scope for v1.0.0
       or explicitly deferred — don't let it default to "skipped"
@@ -1990,26 +2061,8 @@ architecture decisions; this file is just sequencing and status.
 
 ## Bugs
 
-- [ ] **Bug: "Optical 1" shifts vertically between muted/unmuted
-      states in VolumeHoverTooltip.qml.** Discovered after fixing the
-      nameRow shift (Phase 4.5.3 follow-up round 4) - nameRow and the
-      progress bar now hold perfectly steady between states, but
-      "Optical 1" itself now visibly moves a few pixels vertically
-      depending on mute state, confirmed via side-by-side gridded
-      screenshot comparison. This is now the third instance of this
-      exact symptom class in this same tooltip (statRow's own baseline
-      bug, nameRow's ColumnLayout-positioning bug, now this) - each
-      previous fix has only addressed the specific element that was
-      visibly wrong at the time, not the underlying pattern.
-  - When scoping the fix: don't just diagnose and fix "Optical 1" in
-    isolation. Have Claude Code check EVERY element in the tooltip
-    (dot, name, "Optical 1", dB/Muted value, progress bar, both hint
-    lines) for any vertical position change between muted and unmuted
-    states in one pass, using the same before/after screenshot-diff
-    method already established, so this doesn't come back a fourth
-    time as some other row.
-  - Do not start on this until Phase 4.5.3 is committed - it's
-    scoped as separate follow-up work, not part of that commit.
+- [ ] **Bug: volume icon on flyout mute button does not update
+      depending on mute/unmute state**
 
 - [ ] **Bug: hover tooltip defaults to "Muted" on initial load, even
       when the amp isn't muted.** Observed right after
@@ -2119,6 +2172,44 @@ architecture decisions; this file is just sequencing and status.
     branch before any implementation, per this project's usual
     practice for risky/uncertain work - not something to attempt as
     part of routine OSD/tooltip polish.
+  - **Scoping note carried over from VolumeHoverTooltip.qml's
+    "Optical 1" bug (Phase 4.5.3 round 5, see Done) - watch for this
+    pattern proactively here, don't rediscover it the same way.**
+    That tooltip went through three separate rounds of the same
+    underlying bug class before it was closed out: an element's screen
+    position silently depending on a sibling's current content/
+    visibility, rather than being fixed. `Qt.AlignBaseline` was the
+    repeat offender - it computes a shared row-internal baseline
+    offset from the font metrics of whichever children currently
+    participate, so changing a sibling's font, text length, or
+    visibility (e.g. a "Muted" label swapping font weight/size, a unit
+    label toggling `visible: false`) silently repositioned OTHER
+    elements in the same row that never themselves changed. Each round
+    only fixed the specific element that happened to be visibly wrong
+    at the time, not the underlying mechanism, which is why it kept
+    resurfacing as a different element each round. The flyout is a
+    much larger surface with far more dynamic content (amp list,
+    source list, volume slider, multiple button states), so this is
+    more likely to bite here, not less:
+    - Be wary of `Qt.AlignBaseline` specifically, and generally of any
+      Layout behavior (implicit sizing, baseline computation) that
+      depends on which children currently exist/are visible/have which
+      content, when that content is dynamic (mute state, amp name
+      length, connection status, etc.).
+    - Prefer fixed heights/widths and explicit anchors for rows
+      containing dynamic text, rather than letting the layout
+      auto-compute from current content - so a value changing never has
+      a side effect on an unrelated sibling's position.
+    - When something in the flyout is reported as "jumping" or
+      "shifting" between states, check for this pattern specifically (a
+      sibling's content-dependent layout property) before assuming it's
+      a margin/padding/anchor value that just needs tuning - tuning
+      margins was a dead end in all three rounds on this tooltip, since
+      the real problem wasn't spacing, it was a computed value silently
+      changing.
+    - Not a strict rule to avoid `AlignBaseline`/Layouts entirely - just
+      a known failure mode worth checking for early given how much more
+      dynamic content the flyout has compared to this tooltip.
 
 ## Tasks to complete outside repo
 
