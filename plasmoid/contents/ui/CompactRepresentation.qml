@@ -73,8 +73,15 @@ MouseArea {
     // FullRepresentation's own volumeSlider uses (from/to), for the
     // tooltip/toast progress bars - matches that slider's own math
     // ((value - from) / (to - from)) rather than inventing new bounds.
-    readonly property real volumeFraction: root.volumeDb !== undefined
-        ? Math.min(1, Math.max(0, (root.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
+    // Phase 5.0.2 Step A: rebased on pendingAmpState.volumeDb (the shared,
+    // daemon-resolved value) instead of this file's own local optimistic
+    // root.volumeDb - see PendingAmpState.qml/TODO.md for why. No
+    // suppress/reactivate mechanic reads this (unlike FullRepresentation's
+    // slider Binding), so the only visible effect is the intended one: the
+    // toast/tooltip progress bar now catches up via the shared object like
+    // everything else, instead of via this file's own local optimism.
+    readonly property real volumeFraction: root.pendingAmpState.volumeDb !== undefined
+        ? Math.min(1, Math.max(0, (root.pendingAmpState.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
         : 0
 
     function now() { return Date.now(); }
@@ -94,6 +101,12 @@ MouseArea {
         root.volumeDb = clamped;
         root.lastIconStepAtMs = root.now();
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
+        // Phase 5.0.2 Step A: also tell the daemon directly, so
+        // FullRepresentation (and anything else reading pendingAmpState)
+        // sees this as authoritative without waiting for the real amp
+        // broadcast - see PendingAmpState.qml/TODO.md. Additive only:
+        // the local optimistic assignment above is unchanged this step.
+        root.pendingAmpState.notifyVolume(clamped);
         volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction);
     }
 
@@ -109,6 +122,8 @@ MouseArea {
         root.muted = newMuted;
         root.lastMuteChangeAtMs = root.now();
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute " + (newMuted ? "on" : "off"));
+        // Phase 5.0.2 Step A: see the matching comment in stepVolume().
+        root.pendingAmpState.notifyMute(newMuted);
         volumeToast.showMute(root.tooltipAmpName, root.activeSourceName, newMuted, root.volumeFraction);
     }
 
@@ -186,14 +201,20 @@ MouseArea {
         visualParent: root
         ampName: root.tooltipAmpName
         sourceName: root.activeSourceName
-        volumeDb: root.volumeDb
+        // Phase 5.0.2 Step A: sourced from the shared pendingAmpState
+        // object rather than this file's own local root.volumeDb/muted -
+        // see PendingAmpState.qml/TODO.md. Safe here (unlike
+        // FullRepresentation's slider): the tooltip has no suppress/
+        // reactivate binding mechanic, so this is a plain, always-correct
+        // reactive read with no glitch risk.
+        volumeDb: root.pendingAmpState.volumeDb
         volumeFraction: root.volumeFraction
         hasAmp: root.ampIp !== ""
         // Phase 4.5.3 item 3 fix: was missing entirely, so the tooltip
         // kept showing the last dB reading instead of "Muted" - the same
         // Muted D-Bus mirror VolumeToast.showMute() already reacts to
         // (see the Dbus.Properties block below), just never wired here.
-        muted: root.muted
+        muted: root.pendingAmpState.muted
     }
 
     // Phase 4.5.3 item 4 fix: the tooltip stayed open over the flyout if

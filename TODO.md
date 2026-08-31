@@ -2260,6 +2260,83 @@ architecture decisions; this file is just sequencing and status.
     own live position). That's pure local UI feedback during an active
     drag with no cross-representation consistency concern at all, and
     stays exactly as it is today.
+  - **Step A implemented on `feature/daemon-pending-state`.** Both
+    files gained a `notifyVolume()`/`notifyMute()` call immediately
+    after their existing UDP dispatch, in every handler named above.
+  - **One deliberate deviation from the literal "switch every display"
+    instruction, found during design review before writing any code -
+    a real regression risk, not a style choice:**
+    `FullRepresentation`'s slider `Binding.value:` (and its paired dB
+    label's `!== undefined` gate) were **kept on `root.volumeDb`**,
+    not switched to `pendingAmpState.volumeDb`. On release,
+    `root.volumeDb = volumeSlider.value` is set synchronously in the
+    same tick the `Binding`'s `when: !volumeSlider.pressed` re-arms -
+    today that re-application is a no-op. `pendingAmpState.volumeDb`
+    only updates via `notifyVolume()`'s real (if fast) D-Bus round
+    trip, so at that exact instant it still holds the pre-drag value -
+    switching the Binding's source would have made the handle snap
+    back to the stale position, then snap forward again once the round
+    trip resolved. Every *other* switched binding in this phase
+    degrades to "a bit more latency" (the intended, accepted
+    trade-off, matching Phase 5.0.3's own "no perceptible lag"
+    framing); this one alone would have degraded to a visible
+    *reversal* instead, for zero benefit (`root.volumeDb` was already
+    correct and synchronous for this file's own release). Cost of
+    holding out is zero right now since `root.volumeDb =` stays alive
+    regardless. Revisit in Step B once `root.volumeDb` itself is
+    deleted - the likely real fix then is `PendingAmpState.
+    notifyVolume()`/`notifyMute()` themselves writing an optimistic
+    same-tick value before firing the async call, not something to
+    design now. Comments explaining this holdout are left at both
+    sites in `FullRepresentation.qml`.
+  - **Switched to `pendingAmpState` (safe, no suppress/reactivate
+    mechanic, single monotonic transition at worst):**
+    `CompactRepresentation`'s `volumeFraction` (feeds both the tooltip
+    and toast progress bars) and its `VolumeHoverTooltip`'s
+    `volumeDb`/`muted` bindings; `FullRepresentation`'s 5 mute-button
+    display bindings (background/border/icon/label text/label color).
+    Accepted, not engineered around: `CompactRepresentation`'s toast
+    progress-bar fraction can now show a brief catch-up transition
+    (the toast's headline number is unaffected, fed the local
+    `clamped`/`newMuted` value directly) - real but minor and cosmetic,
+    not a functional bug.
+  - **Untouched, correctly out of scope:** every `root.ampIp !== ""`
+    gate in both files - `AmpIp` has no debounce/pending concept, it's
+    a plain identity mirror, not part of the optimistic-command
+    problem this phase addresses.
+  - **Verified live, real amp (`192.168.0.22`)**, `busctl monitor`
+    running throughout to confirm actual `NotifyVolumeCommand`/
+    `NotifyMuteCommand` traffic (not just inferred from UI behavior),
+    journalctl checked for `[WARN]` logs from either method the whole
+    session (none appeared):
+    - **The actual bug this phase exists to fix, confirmed working**:
+      with the flyout open, middle-clicked the panel icon to mute -
+      the flyout's Mute button flipped to "Unmute" (copper highlight)
+      within the ~0.3s measurement window, a real `NotifyMuteCommand`
+      call confirmed in the `busctl monitor` log at the same moment.
+      Un-muted the same way, confirmed clean.
+    - **The specific risk this plan was built around**: dragged the
+      flyout's volume slider for real (synthetic press-move-release,
+      calibrated cursor position via `workspace.cursorPos`) from
+      -25.0dB to the floor (-60.0dB, drag exceeded track width and
+      correctly clamped). Screenshotted after release: number, handle
+      position, and fill all consistent and correct, matching the
+      held-out binding's expected behavior (no async dependency at the
+      moment of release, so no reversal is structurally possible here,
+      not just "didn't happen to observe one"). A real
+      `NotifyVolumeCommand` call confirmed in the `busctl monitor` log
+      for this release.
+    - **Reverse direction (Full → Compact)**: after the slider drag
+      above, closed the flyout and hovered the panel icon - the
+      tooltip correctly showed the dragged value (-60.0dB), confirming
+      `pendingAmpState` is the shared, consistent source in both
+      directions, not just Compact → Full.
+    - Amp restored to -25.0dB/unmuted afterward, matching its state
+      before this verification pass. `cargo test --workspace` (76/76)
+      and `cargo clippy --workspace --all-targets` (zero warnings)
+      reconfirmed unaffected, since this step is QML-only.
+  - **Step B not started.** Old debounce/optimism code in both files
+    is untouched and still fully active, per this step's own scope.
 
 - [ ] **Phase 5.0.3 — Live verification across every consumer.**
       Depends on 5.0.2. Real amp, every item below individually
