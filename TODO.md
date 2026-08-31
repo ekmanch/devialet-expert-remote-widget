@@ -1977,38 +1977,226 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
-      displayed state must query actual systemd state
-      (`systemctl --user is-enabled`), not a stored bool; toggling it
-      calls `systemctl --user enable`/`disable` directly. Investigate
-      the correct way to shell out to systemd from QML (likely the same
-      `Plasma5Support.DataSource` executable-engine pattern already
-      used for `devialet-ctl` invocations) and handle query/toggle
-      failure explicitly rather than assuming success. Verify live:
-      toggle it, confirm via `systemctl --user is-enabled` independently
-      that it actually changed, not just that the UI shows a different
-      state; restart the widget and confirm the toggle reflects real
-      systemd state on load, not a remembered UI value.
-- [ ] **Phase 4.4.7 — Forget remembered amps wiring.** Per the mockup:
-      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
-      and explicitly does **not** disconnect or forget the currently
-      active/selected amp. Investigate before implementing: known amps
-      are daemon-owned persisted state (Phase 4.2's architecture), so
-      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
-      — there is no existing way to clear this from outside the daemon
-      today. Confirm exactly what "does not disconnect the active amp"
-      means in terms of daemon state: does the active amp get
-      re-added to `KnownAmps` immediately (since it's still
-      broadcasting), or does it stay disconnected-but-not-forgotten
-      until its next broadcast is naturally re-ingested? Decide and
-      implement the button's real confirm-click behavior (currently
-      just a visual mock from Phase 4.4.1) to actually call the new
-      method on the second click. Verify live: forget all amps with
-      one connected and playing, confirm the connection is undisturbed
-      (volume/mute/source controls keep working) while the amp list
-      empties out and repopulates only as amps re-broadcast.
-- [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
-- [ ] **Phase 4.6.0 — devialet-ctl build + PATH placement.** Decide the
+- [ ] **Phase 5.0.1 — Daemon-owned pending-command state: VolumeDb/
+      Muted.** First chunk of a 4-chunk phase fixing the "Bug:
+      FullRepresentation lags behind CompactRepresentation" entry
+      above (see that entry for the investigated root cause). Branch:
+      **a dedicated branch off main, not bundled with any other
+      in-flight work** — do not implement any part of Phase 5.0
+      directly on main.
+  - **Architecture decision, arrived at after evaluating alternatives
+    (not defaulted to):** "the PC just issued a command and its value
+    is authoritative until the amp confirms it or a timeout elapses"
+    becomes daemon-owned state, mirroring `BeginPowerOnBoot`/
+    `boot_deadline`'s already-proven shape exactly, rather than being
+    reimplemented independently inside each QML representation (today's
+    bug) or as a QML-only shared object. Rejected alternatives:
+    - A QML-only shared singleton/object holding the pending value
+      (no daemon changes) - technically viable (a root-anchored shared
+      object, see Phase 5.0.2, IS part of this design) but rejected as
+      the place for the *resolution logic itself* specifically because
+      this project has zero QML test infrastructure - the
+      confirmed-vs-expired logic would be untestable JS, whereas the
+      identically-shaped `BeginPowerOnBoot` logic already has direct
+      `cargo test` coverage this can copy the pattern of.
+    - `pragma Singleton` for the shared object - investigated and
+      rejected: this KPackage has no qmldir/module registration set up
+      (confirmed - see `Theme.qml`'s own header comment, which already
+      made this exact call for the same reason), and a true QML
+      singleton is scoped to the `QQmlEngine`, which Plasma very likely
+      shares across the whole shell process (not independently
+      confirmed by reading libplasma source, flagged honestly) - risking
+      state leaking between two instances of this widget if ever added
+      to two panels at once. Root-anchored state (Phase 5.0.2) doesn't
+      have this risk: it's naturally per-applet-instance.
+    - Full consolidation of every mirrored D-Bus property (Sources,
+      KnownAmps, Online, DeviceName, etc.) into one shared subscription
+      - genuinely lifecycle-safe once anchored to root (confirmed: root
+      is what *creates* both representations, so it strictly outlives
+      either), and a legitimate future destination, but explicitly
+      **out of scope for this phase** - larger blast radius than the
+      reported bug, touches already-subtle logic (`Sources`/
+      `KnownAmps`'s "delta payload isn't trustworthy, re-fetch instead"
+      workaround) unrelated to it. This phase's new shared object
+      (5.0.2) is sized to exactly `AmpIp`/`VolumeDb`/`Muted` and is a
+      compatible first step toward that fuller consolidation later, not
+      a competing direction - nothing built here would need reworking
+      if that's ever separately decided.
+  - **This chunk's scope, Rust only, no QML changes yet:**
+    - `TrackedAmp` gains `pending_volume_db: Option<(f64, Instant)>`
+      and `pending_muted: Option<(bool, Instant)>`, alongside the
+      existing `boot_deadline` field.
+    - New `resolve_pending_commands()`, called from `recompute()`
+      alongside the existing `resolve_boot_deadlines()` - reuses the
+      exact same trigger path (every real UDP packet via
+      `ingest_status`, plus the 1s `POLL_TICK` fallback via
+      `recompute_staleness`) with no new timer/task, exactly like
+      `boot_deadline` today.
+    - `recompute()`'s `Some(amp)` branch prefers the pending value over
+      `amp.status.*` while it's live (not yet confirmed or expired).
+    - Two new D-Bus methods, shaped exactly like `begin_power_on_boot`:
+      `NotifyVolumeCommand(ip: String, db: f64)` and
+      `NotifyMuteCommand(ip: String, muted: bool)` - no-op on an
+      unknown `ip` (same guard style), otherwise set the pending
+      field + deadline, `recompute()`, `emit_all()` if
+      `!states_equal(before, self)`.
+    - **Expiry window: 400ms.** Settled input, not re-derived here -
+      already proven across three independent client implementations
+      (Kotlin Android app, Flutter port, this widget's own existing
+      `debounceMs`) as the window that prevents a stale in-flight
+      broadcast from contradicting a command the PC just sent. Reuse
+      it as-is for `resolve_pending_commands()`'s deadline.
+    - Confirmation matching is exact, no epsilon: `Status::volume_db()`
+      is `(volume_raw - 195) / 2.0`, an exact linear integer→0.5dB-step
+      formula, so compare the expected `volume_raw` byte (or the
+      pending dB value directly, always an exact 0.5dB step) for an
+      exact match; `Muted` is a plain bool.
+    - Note for later chunks, not this one: outbound command *pacing*
+      during a continuous drag/scroll/held-button gesture (roughly
+      100-200ms, a genuinely different concern from the 400ms trust
+      window above) already exists client-side today (the `±` buttons'
+      `autoRepeatInterval: 100`, the wheel's 120-unit notch
+      accumulation, the slider's send-only-on-release) and needs no
+      new constant here - each paced tick just becomes one more
+      `NotifyVolumeCommand` call that replaces the prior pending value
+      and re-arms its 400ms deadline, which is also why
+      `volumeInteracting` becomes redundant later (Phase 5.0.3): a
+      sustained gesture keeps re-arming the window continuously, so
+      there's never a gap for a stale broadcast to land in.
+  - **Test coverage, mirroring `BeginPowerOnBoot`'s existing test
+    shape** (`power_state_is_booting_while_a_deadline_is_pending`,
+    `..._resolves_to_on_once_a_real_broadcast_confirms`,
+    `..._falls_back_to_off_once_the_deadline_elapses`) - at minimum:
+    - Pending value is reported (not the amp's last real value) while
+      not yet confirmed or expired.
+    - A real broadcast whose `volume_raw`/`muted` matches the pending
+      value clears it (confirmed path) and `states_equal` correctly
+      reflects the field settling.
+    - The deadline elapsing with no confirmation clears it and falls
+      back to the amp's real last-known value (timeout path) - the
+      `BeginPowerOnBoot`-equivalent of the boot-timeout-fallback test.
+    - A second `Notify*` call before the first's deadline replaces the
+      pending value *and* resets the deadline - covers rapid
+      multi-step scrolling correctly superseding itself (matches what
+      was actually observed live during this bug's investigation: a
+      5-step rapid scroll settled on the latest value, skipping
+      already-superseded intermediate ones).
+    - Unknown `ip` is a no-op (matches `begin_power_on_boot`'s existing
+      unknown-ip guard test).
+  - **Independently mergeable** - no QML consumer exists yet. Verify
+    via `cargo test` plus manual `busctl call` against the real running
+    daemon (`NotifyVolumeCommand`/`NotifyMuteCommand`, then
+    `busctl get-property … VolumeDb`/`Muted` before/after the 400ms
+    window) before moving to 5.0.2.
+
+- [ ] **Phase 5.0.2 — Shared, root-anchored QML consumer for VolumeDb/
+      Muted.** Depends on 5.0.1 being merged.
+  - New QML object (e.g. `PendingAmpState.qml`), instantiated once in
+    `main.qml` and handed to **both** representations via the same
+    `plasmoidItem: root` handoff `CompactRepresentation` already uses
+    today - added identically to `FullRepresentation`, which has no
+    such reference currently (`fullRepresentation: FullRepresentation
+    {}` takes no property today; becomes
+    `FullRepresentation { plasmoidItem: root }`, matching
+    `CompactRepresentation`'s existing wiring exactly).
+  - Owns its own `Dbus.Properties` subscription to the daemon
+    interface. Because that subscription is interface-level, not
+    per-property, it will unavoidably also receive `Online`/
+    `DeviceName`/`Sources`/etc. - **explicitly ignore every key except
+    `AmpIp`/`VolumeDb`/`Muted`.** Do not process or expose anything
+    else here - that boundary is what keeps this chunk out of
+    full-mirror-consolidation territory (see 5.0.1's rejected-
+    alternatives note).
+  - Exposes the resolved `volumeDb`/`muted` as plain properties
+    (already reflecting whatever the daemon currently reports, pending
+    or confirmed - no client-side re-implementation of the
+    confirmed-vs-expired logic, that stays in the daemon per 5.0.1),
+    plus `notifyVolume(db)`/`notifyMute(muted)` methods wrapping the
+    two new D-Bus calls.
+  - Wire this into `FullRepresentation` **only as a new, additional
+    capability at this stage** - expose it for comparison/testing
+    alongside `FullRepresentation`'s existing `volumeDb`/`muted`
+    handling, but do not remove or rewire anything yet.
+    `CompactRepresentation` similarly gets a reference but isn't cut
+    over yet either. The goal of this chunk is proving the shared
+    object itself behaves correctly under both representations'
+    independent lifecycles before either one actually depends on it.
+  - **Verify, proving lifecycle independence rather than assuming it
+    from the design:**
+    1. With only the panel icon present (flyout never opened),
+       confirm the shared object initializes and updates correctly
+       from real D-Bus signals.
+    2. Open the flyout (both representations now loaded) and confirm
+       the shared object reports consistently to both.
+    3. Close the flyout (`FullRepresentation` unloaded again) and
+       confirm `CompactRepresentation`'s reference keeps working
+       completely unaffected.
+
+- [ ] **Phase 5.0.3 — Migration: cut over, then delete what's
+      redundant.** Depends on 5.0.2 being verified solid. Two
+      sequenced steps, not simultaneous - each its own commit.
+  - **Step A - cut over.** Change
+    `CompactRepresentation.stepVolume()`/`toggleMute()` and
+    `FullRepresentation`'s volume-slider-release/button-step/mute-
+    button click handlers to also call the shared object's
+    `notifyVolume()`/`notifyMute()` (alongside their existing
+    `runCtl()`/`exec.connectSource()` UDP dispatch, unchanged), and
+    switch each representation's *displayed* `volumeDb`/`muted` to
+    read from the shared object instead of their own local optimistic
+    copies. Leave the old local debounce/optimistic code in place but
+    unused at this step - don't delete yet, so this diff stays
+    reviewable and revertible in isolation from Step B.
+  - **Step B - delete redundant code, only once Step A is verified
+    live and solid.** `CompactRepresentation`'s `lastIconStepAtMs`,
+    `lastMuteChangeAtMs`, and the local `root.volumeDb =`/
+    `root.muted =` assignments; `FullRepresentation`'s
+    `lastVolumeButtonStepAtMs`, `lastVolumeSliderReleaseAtMs`,
+    `lastMuteChangeAtMs`, and the `volumeInteracting` gating in
+    `onPropertiesChanged`'s `VolumeDb`/`Muted` branches (see 5.0.1's
+    pacing note for why continuous re-notification during a held
+    interaction already subsumes `volumeInteracting`'s job).
+  - **Explicitly do not touch:** `FullRepresentation`'s slider
+    drag-in-progress local visual feedback (the `Binding`'s
+    `when: !volumeSlider.pressed` suppression, and the drag handle's
+    own live position). That's pure local UI feedback during an active
+    drag with no cross-representation consistency concern at all, and
+    stays exactly as it is today.
+
+- [ ] **Phase 5.0.4 — Live verification across every consumer.**
+      Depends on 5.0.3. Real amp, every item below individually
+      confirmed and reported - not a pass/fail summary:
+  1. Scroll the panel icon with the flyout open - the flyout's slider
+     updates with **no perceptible lag**, not just "faster than
+     before." Compare directly against the OSD toast's own timing.
+  2. Middle-click to mute/unmute with the flyout open - the Mute
+     button's state updates with no perceptible lag.
+  3. Trigger changes from the flyout's own controls (slider release,
+     Mute button) and confirm the tooltip/OSD toast
+     (`CompactRepresentation`-driven) reflect them correctly too - the
+     fix must be symmetric (Full→Compact), not just the originally-
+     reported Compact→Full direction.
+  4. **Actually drag the flyout's own volume slider - don't assume
+     from the design.** Confirm no regression: the live drag position
+     is never perturbed by an incoming signal mid-drag, and the
+     released value sticks correctly, now that `volumeInteracting`'s
+     guard is gone and the daemon's own re-armed pending-deadline is
+     what protects this window instead.
+  5. Rapid multi-step scroll (several quick notches in succession) -
+     confirm the daemon-reported value settles on the *last* value
+     sent, not a superseded intermediate one (matches what this bug's
+     investigation already observed live).
+  6. Check the parked "hover tooltip defaults to Muted on initial
+     load" bug (see Bugs section) as a side observation only.
+     **Do not mark it fixed based on this phase's architecture alone**
+     - it has never been root-caused, and this design is a plausible
+     structural prevention for that whole *class* of bug (one
+     synchronously-initialized shared object can't race two
+     independent initializations against each other), not a confirmed
+     fix for that specific ticket. If it genuinely no longer reproduces
+     during this pass, say so explicitly with what was observed, and
+     only then consider closing it on that evidence - not preemptively.
+
+- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
       real install location for the `devialet-ctl` binary (system-wide
       `/usr/local/bin`, user `~/.local/bin` placed by the script rather
       than the current manual symlink, or `cargo install` into
@@ -2017,19 +2205,19 @@ architecture decisions; this file is just sequencing and status.
       dev, not a real install path.
   - Verify: `devialet-ctl` is invocable from a fresh shell with no
     manual step, on a machine that hasn't had it built/placed before.
-- [ ] **Phase 4.6.1 — Plasmoid install step.** Wrap the `kpackagetool6`
+- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
       install/upgrade logic the script needs — including handling the
       "already installed, needs upgrade not install" case cleanly when
       the script is re-run on a system that already has the widget.
   - Verify: widget installs cleanly on a fresh system; re-running the
     script on an already-installed system upgrades cleanly with no
     `kpackagetool6` errors.
-- [ ] **Phase 4.6.2 — Systemd user unit install.** Copy the Phase 3.6
+- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
       systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
       `enable --now` as part of the script.
   - Verify: `systemctl --user status` shows the daemon running
     immediately after install; survives a logout/login.
-- [ ] **Phase 4.6.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
+- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
       into one script a user runs after cloning the repo. Must be
       idempotent — safe to re-run on an already-installed system
       without duplicating units, breaking an existing install, or
@@ -2045,7 +2233,7 @@ architecture decisions; this file is just sequencing and status.
       rather than leaving them as manually sed-substituted
       placeholders per the current README instructions - this class of
       bug will keep recurring otherwise.
-- [ ] **Phase 4.6.4 — Uninstall script (decide scope first).** Decide
+- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
       deliberately whether an uninstall script is in scope for v1.0.0
       or explicitly deferred — don't let it default to "skipped"
       silently. If in scope: reverse of 4.6.3 (disable/remove the
@@ -2053,7 +2241,7 @@ architecture decisions; this file is just sequencing and status.
       remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
   - Verify (if implemented): a full uninstall leaves no systemd unit,
     no installed plasmoid, and no leftover binary.
-- [ ] **Phase 4.6.5 — README install instructions.** Replace the
+- [ ] **Phase 6.0.5 — README install instructions.** Replace the
       current manual multi-step install instructions with "clone the
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
@@ -2095,25 +2283,36 @@ architecture decisions; this file is just sequencing and status.
     mute immediately (OSD toast updates instantly), but the flyout's
     Mute button state takes a visible moment before it shows the
     correct on/off state.
-  - Not investigated yet. CompactRepresentation and FullRepresentation
-    each independently mirror the same D-Bus properties (deliberate
-    design from the 4.5.0 discussion - CompactRepresentation isn't
-    guaranteed loaded at the same time as FullRepresentation, so they
-    were built as two separate subscriptions rather than one shared
-    source). This bug's likely candidates - not yet confirmed, just
-    plausible starting points: FullRepresentation's own debounce/
-    volumeInteracting gating logic delaying acceptance of an
-    externally-originated PropertiesChanged signal; some difference in
-    how promptly the two representations process the same D-Bus signal;
-    or something specific to the daemon's emit path when the command
-    that triggered the change came from CompactRepresentation's own
-    devialet-ctl invocation rather than FullRepresentation's.
+  - **Investigated (live, real amp): root-caused, not fixed yet.**
+    None of the originally-listed candidates panned out -
+    `FullRepresentation`'s `blocked` gating only ever checks its OWN
+    timestamps (never touched by `CompactRepresentation`, confirmed via
+    live logging: `blocked=false` on every observed signal), and its
+    QML-side signal consumption is essentially instantaneous
+    (sub-millisecond after the D-Bus signal's own timestamp). The
+    actual cause: the amp only confirms a command via its own next
+    periodic status broadcast (measured live at roughly 60-200ms+ per
+    step, occasionally more), and `CompactRepresentation`'s OSD toast
+    "looks instant" only because it echoes its OWN local optimistic
+    value synchronously, with zero D-Bus wait - it isn't reading
+    confirmed state at all. `FullRepresentation` has no such optimistic
+    echo for a change it didn't itself originate, so it must wait for
+    the real (broadcast-latency-bound) signal. This is exactly the
+    same class of thing `BeginPowerOnBoot`/`boot_deadline` (Phase
+    4.3.0) already solves for `Power` - just not yet extended to
+    `VolumeDb`/`Muted`, and not yet shared by both representations. See
+    **Phase 5.0.1-5.0.4 in "Up next"** for the scoped fix (daemon-owned
+    pending-command state, consumed by both representations via one
+    new shared object) - not implemented yet, dedicated branch, do not
+    close this bug until that phase's live verification confirms it.
   - Distinct from the existing parked bug above ("widget doesn't
     reflect amp-initiated volume changes it didn't itself send") - that
     one describes a divergence that persists indefinitely until
     touched; this one is a delay that does eventually resolve on its
-    own. Worth confirming whether they're actually related once
-    investigated, but don't assume they're the same bug.
+    own. Confirmed genuinely distinct, not the same root cause - the
+    live investigation above is fully explained by amp-broadcast
+    latency plus asymmetric optimism, with no connection found to the
+    amp-initiated-change bug's mechanism.
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced
@@ -2210,6 +2409,37 @@ architecture decisions; this file is just sequencing and status.
     - Not a strict rule to avoid `AlignBaseline`/Layouts entirely - just
       a known failure mode worth checking for early given how much more
       dynamic content the flyout has compared to this tooltip.
+- [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
+      displayed state must query actual systemd state
+      (`systemctl --user is-enabled`), not a stored bool; toggling it
+      calls `systemctl --user enable`/`disable` directly. Investigate
+      the correct way to shell out to systemd from QML (likely the same
+      `Plasma5Support.DataSource` executable-engine pattern already
+      used for `devialet-ctl` invocations) and handle query/toggle
+      failure explicitly rather than assuming success. Verify live:
+      toggle it, confirm via `systemctl --user is-enabled` independently
+      that it actually changed, not just that the UI shows a different
+      state; restart the widget and confirm the toggle reflects real
+      systemd state on load, not a remembered UI value.
+- [ ] **Phase 4.4.7 — Forget remembered amps wiring.** Per the mockup:
+      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
+      and explicitly does **not** disconnect or forget the currently
+      active/selected amp. Investigate before implementing: known amps
+      are daemon-owned persisted state (Phase 4.2's architecture), so
+      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
+      — there is no existing way to clear this from outside the daemon
+      today. Confirm exactly what "does not disconnect the active amp"
+      means in terms of daemon state: does the active amp get
+      re-added to `KnownAmps` immediately (since it's still
+      broadcasting), or does it stay disconnected-but-not-forgotten
+      until its next broadcast is naturally re-ingested? Decide and
+      implement the button's real confirm-click behavior (currently
+      just a visual mock from Phase 4.4.1) to actually call the new
+      method on the second click. Verify live: forget all amps with
+      one connected and playing, confirm the connection is undisturbed
+      (volume/mute/source controls keep working) while the amp list
+      empties out and repopulates only as amps re-broadcast.
+- [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
 
 ## Tasks to complete outside repo
 
