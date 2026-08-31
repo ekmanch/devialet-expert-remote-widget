@@ -1977,7 +1977,7 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 5.0.1 — Daemon-owned pending-command state: VolumeDb/
+- [ ] **Phase 5.0.0 — Daemon-owned pending-command state: VolumeDb/
       Muted.** First chunk of a 4-chunk phase fixing the "Bug:
       FullRepresentation lags behind CompactRepresentation" entry
       above (see that entry for the investigated root cause). Branch:
@@ -2087,10 +2087,10 @@ architecture decisions; this file is just sequencing and status.
     via `cargo test` plus manual `busctl call` against the real running
     daemon (`NotifyVolumeCommand`/`NotifyMuteCommand`, then
     `busctl get-property … VolumeDb`/`Muted` before/after the 400ms
-    window) before moving to 5.0.2.
+    window) before moving to 5.0.1.
 
-- [ ] **Phase 5.0.2 — Shared, root-anchored QML consumer for VolumeDb/
-      Muted.** Depends on 5.0.1 being merged.
+- [ ] **Phase 5.0.1 — Shared, root-anchored QML consumer for VolumeDb/
+      Muted.** Depends on 5.0.0 being merged.
   - New QML object (e.g. `PendingAmpState.qml`), instantiated once in
     `main.qml` and handed to **both** representations via the same
     `plasmoidItem: root` handoff `CompactRepresentation` already uses
@@ -2105,7 +2105,7 @@ architecture decisions; this file is just sequencing and status.
     `DeviceName`/`Sources`/etc. - **explicitly ignore every key except
     `AmpIp`/`VolumeDb`/`Muted`.** Do not process or expose anything
     else here - that boundary is what keeps this chunk out of
-    full-mirror-consolidation territory (see 5.0.1's rejected-
+    full-mirror-consolidation territory (see 5.0.0's rejected-
     alternatives note).
   - Exposes the resolved `volumeDb`/`muted` as plain properties
     (already reflecting whatever the daemon currently reports, pending
@@ -2132,8 +2132,8 @@ architecture decisions; this file is just sequencing and status.
        confirm `CompactRepresentation`'s reference keeps working
        completely unaffected.
 
-- [ ] **Phase 5.0.3 — Migration: cut over, then delete what's
-      redundant.** Depends on 5.0.2 being verified solid. Two
+- [ ] **Phase 5.0.2 — Migration: cut over, then delete what's
+      redundant.** Depends on 5.0.1 being verified solid. Two
       sequenced steps, not simultaneous - each its own commit.
   - **Step A - cut over.** Change
     `CompactRepresentation.stepVolume()`/`toggleMute()` and
@@ -2162,8 +2162,8 @@ architecture decisions; this file is just sequencing and status.
     drag with no cross-representation consistency concern at all, and
     stays exactly as it is today.
 
-- [ ] **Phase 5.0.4 — Live verification across every consumer.**
-      Depends on 5.0.3. Real amp, every item below individually
+- [ ] **Phase 5.0.3 — Live verification across every consumer.**
+      Depends on 5.0.2. Real amp, every item below individually
       confirmed and reported - not a pass/fail summary:
   1. Scroll the panel icon with the flyout open - the flyout's slider
      updates with **no perceptible lag**, not just "faster than
