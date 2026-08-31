@@ -61,8 +61,30 @@ QtObject {
         return prop;
     }
 
+    // Phase 5.0.2 Step B: both functions below now write volumeDb/muted
+    // synchronously, before firing the async D-Bus call - this is what
+    // lets CompactRepresentation.qml's stepVolume()/toggleMute() safely
+    // use these properties as their own rapid-repeat accumulation base
+    // (reading "the value I just set" needs that value to exist in the
+    // same tick, not after a D-Bus round trip). Also what finally makes
+    // the FullRepresentation.qml slider holdout liftable in a future
+    // step (not done here - the Binding itself still needs switching and
+    // re-verifying for the snap-back risk separately).
+    //
+    // Rollback on failure: verified safe via the actual KDE source
+    // (plasma-workspace's components/dbus/dbusconnection.cpp) that the
+    // resolve/reject callbacks below are mutually exclusive AND
+    // single-shot (Qt::SingleShotConnection guarding a reply->isValid()
+    // if/else) - together, at most one of the two ever fires, so a
+    // rollback here can't double-fire or race a late success. Without
+    // this, a failed call (e.g. daemon down/restarting) would leave an
+    // unconfirmed optimistic value asserted indefinitely, correctable
+    // only by luck (some unrelated future onRefreshed/onPropertiesChanged
+    // happening to overwrite it) rather than promptly and deliberately.
     function notifyVolume(db) {
         if (root.ampIp === "") return;
+        const previous = root.volumeDb;
+        root.volumeDb = db;
         Dbus.SessionBus.asyncCall(
             new Dbus.dbusMessage({
                 service: root.serviceName,
@@ -73,10 +95,12 @@ QtObject {
             }),
             function (reply) {
                 if (reply.isError) {
+                    root.volumeDb = previous;
                     console.log("[WARN] NotifyVolumeCommand call returned a D-Bus error:", JSON.stringify(reply.error));
                 }
             },
             function (reply) {
+                root.volumeDb = previous;
                 console.log("[WARN] NotifyVolumeCommand call failed:", JSON.stringify(reply.error));
             }
         );
@@ -84,6 +108,8 @@ QtObject {
 
     function notifyMute(muted) {
         if (root.ampIp === "") return;
+        const previous = root.muted;
+        root.muted = muted;
         Dbus.SessionBus.asyncCall(
             new Dbus.dbusMessage({
                 service: root.serviceName,
@@ -94,10 +120,12 @@ QtObject {
             }),
             function (reply) {
                 if (reply.isError) {
+                    root.muted = previous;
                     console.log("[WARN] NotifyMuteCommand call returned a D-Bus error:", JSON.stringify(reply.error));
                 }
             },
             function (reply) {
+                root.muted = previous;
                 console.log("[WARN] NotifyMuteCommand call failed:", JSON.stringify(reply.error));
             }
         );

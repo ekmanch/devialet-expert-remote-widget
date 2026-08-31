@@ -2229,9 +2229,7 @@ architecture decisions; this file is just sequencing and status.
       and `cargo clippy --workspace --all-targets` (zero warnings)
       reconfirmed unaffected, since this chunk is QML-only.
 
-## Up next
-
-- [ ] **Phase 5.0.2 — Migration: cut over, then delete what's
+- [x] **Phase 5.0.2 — Migration: cut over, then delete what's
       redundant.** Depends on 5.0.1 being verified solid. Two
       sequenced steps, not simultaneous - each its own commit.
   - **Step A - cut over.** Change
@@ -2335,8 +2333,94 @@ architecture decisions; this file is just sequencing and status.
       before this verification pass. `cargo test --workspace` (76/76)
       and `cargo clippy --workspace --all-targets` (zero warnings)
       reconfirmed unaffected, since this step is QML-only.
-  - **Step B not started.** Old debounce/optimism code in both files
-    is untouched and still fully active, per this step's own scope.
+  - **Step B: scope corrected during investigation, before writing any
+    code - a real regression risk in the originally-stated scope, not
+    just a style choice.** `root.volumeDb`/`root.muted` in both files
+    turned out to serve two separate jobs, only one of which Step A
+    addressed: display (already redirected to `pendingAmpState`) and
+    each mutator's own rapid-repeat *accumulation base*
+    (`stepVolume()`'s `base = root.volumeDb ...`, the mute handlers'
+    `newMuted = !root.muted`), which depends on that value being set
+    **synchronously** so a fast second click/drag reads the value just
+    set, not something stale. `PendingAmpState.notifyVolume()`/
+    `notifyMute()` had no synchronous write of their own (confirmed by
+    reading the actual file) - so deleting the local optimistic writes
+    as literally scoped would have broken rapid-repeat correctness
+    (three quick `+1dB` clicks netting +1dB instead of +3dB; two fast
+    mute clicks both sending "mute on"), reproducing the exact
+    known-gotchas.md bug #1 class from local-IPC latency instead of
+    amp-broadcast latency. Confirmed by an independent review pass, not
+    just one read.
+    - **Prerequisite added, one file beyond the original two-file
+      scope**: `PendingAmpState.qml`'s `notifyVolume()`/`notifyMute()`
+      now write `root.volumeDb`/`root.muted` synchronously before
+      firing the async D-Bus call - exactly the fix `FullRepresentation`'s
+      own Step A holdout comment had already named as the eventual
+      answer, just not yet built. Also added a failure-path rollback
+      (capture the prior value, restore it if the call errors or
+      fails) - examined as a real, if narrow, gap (a failed call used
+      to leave the UI merely stale; with a synchronous write and no
+      rollback it would instead assert an unconfirmed value
+      indefinitely) and fixed since the cost was a few lines. Verified
+      safe against the actual KDE source
+      (`plasma-workspace/components/dbus/dbusconnection.cpp`): the
+      `resolve`/`reject` callbacks are `Qt::SingleShotConnection`-guarded
+      and mutually exclusive, so they fire at most once combined -
+      no double-restore, no race with a late success. Also confirmed
+      (by reading the whole file) no feedback loop: nothing in
+      `PendingAmpState.qml` reacts to `volumeDb`/`muted` changing, so
+      the real-confirmation path can never re-trigger a notify call.
+    - **`CompactRepresentation.qml` - full cleanup, safe with the
+      prerequisite**: `stepVolume()`/`toggleMute()` now read
+      `pendingAmpState.volumeDb`/`.muted` as their accumulation base;
+      the local `root.volumeDb =`/`root.muted =` writes,
+      `lastIconStepAtMs`, `lastMuteChangeAtMs`, `debounceMs`, `now()`,
+      `within()` are all deleted (the last three were fully orphaned
+      once the fields were gone). Went one step further than the
+      literal wording: the `root.volumeDb`/`root.muted` *properties*
+      themselves and their `onRefreshed`/`onPropertiesChanged`
+      mirror-writes are also removed, since nothing read them for
+      anything anymore - leaving two fully-unread properties behind
+      would itself have been redundant code.
+    - **`FullRepresentation.qml` - narrower than originally scoped,
+      deliberately**: only `lastMuteChangeAtMs` (field, the `onClicked`
+      write, and its `onPropertiesChanged` guard) is deleted, collapsing
+      that branch to an unconditional one-liner. `root.muted = newMuted`
+      itself stays - no display depends on it anymore, but it still
+      protects a rapid double-click's own read-before-write, and a
+      synchronous write costs nothing to keep. **`lastVolumeButtonStepAtMs`,
+      `lastVolumeSliderReleaseAtMs`, and `volumeInteracting` are
+      explicitly NOT deleted**, contradicting the phase's original
+      scope for this file - confirmed by two independent passes that
+      all three protect `root.volumeDb`'s role as the display source
+      for the slider Step A deliberately held out; `stepVolume()` still
+      writes `root.volumeDb = clamped` (unchanged, still needed for the
+      slider to move instantly on a button click), and removing their
+      guards would let a stale/out-of-order update visibly perturb that
+      held-out display - the exact thing the holdout exists to prevent.
+      Follow-up, not this step's job: lifting the slider holdout itself
+      (now that the prerequisite exists) is a separate future decision.
+    - **Verified live, real amp (`192.168.0.22`)**:
+      - **Rapid-repeat stress test (the specific regression this
+        correction prevents)**: 5 scroll notches at 10ms spacing (far
+        faster than any D-Bus round trip) via the panel icon -
+        VolumeDb moved the full +5dB (`-25` → `-20`), not a partial
+        amount.
+      - **Rapid mute double-click**: two middle-clicks ~20ms apart -
+        ended back at `Muted = false`, not stuck "on" from two
+        "mute on" commands landing back to back.
+      - **Cross-representation consistency re-confirmed**: with the
+        flyout open, middle-clicked the panel icon - the flyout's Mute
+        button updated promptly; volume number displayed correctly
+        (`-20.0dB`, matching the stress test above).
+      - **Held-out slider path re-confirmed unaffected**: dragged the
+        flyout's slider to the ceiling (`-15.0dB`) - number, handle,
+        and fill all correct and consistent, no glitch.
+      - Amp restored to `-25.0dB`/unmuted afterward. `cargo test
+        --workspace` (76/76) and `cargo clippy --workspace --all-targets`
+        (zero warnings) reconfirmed unaffected.
+
+## Up next
 
 - [ ] **Phase 5.0.3 — Live verification across every consumer.**
       Depends on 5.0.2. Real amp, every item below individually

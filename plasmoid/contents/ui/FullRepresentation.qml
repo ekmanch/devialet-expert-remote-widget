@@ -252,7 +252,6 @@ Item {
     property bool volumeInteracting: false
 
     property bool muted: false
-    property double lastMuteChangeAtMs: 0
 
     property bool power: false
     // Phase 4.3.1: three-state mirror of the daemon's PowerState
@@ -586,11 +585,11 @@ Item {
                     || root.within(root.lastVolumeSliderReleaseAtMs, root.debounceMs);
                 if (!blocked) root.volumeDb = root.unwrap(changed.VolumeDb, root.volumeDb);
             }
-            if ("Muted" in changed) {
-                if (!root.within(root.lastMuteChangeAtMs, root.debounceMs)) {
-                    root.muted = root.unwrap(changed.Muted, root.muted);
-                }
-            }
+            // Phase 5.0.2 Step B: no debounce guard here anymore - mute
+            // display has no holdout in this file (unlike VolumeDb above,
+            // which still protects the held-out slider), so nothing needs
+            // protecting from an incoming real broadcast.
+            if ("Muted" in changed) root.muted = root.unwrap(changed.Muted, root.muted);
             if ("Power" in changed) {
                 if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
                     root.power = root.unwrap(changed.Power, root.power);
@@ -1501,8 +1500,16 @@ Item {
                 enabled: root.ampIp !== ""
                 onClicked: {
                     const newMuted = !root.muted;
+                    // Phase 5.0.2 Step B: root.muted = newMuted below is
+                    // kept (still protects this rapid-double-click's own
+                    // read-before-write from a stale value) even though
+                    // lastMuteChangeAtMs/its debounce guard are gone -
+                    // this write has no display dependency left (Step A
+                    // cut mute display over to pendingAmpState.muted
+                    // fully, no holdout here unlike the volume slider),
+                    // so nothing needs protecting it from an incoming
+                    // real broadcast anymore.
                     root.muted = newMuted;
-                    root.lastMuteChangeAtMs = root.now();
                     root.runCtl("mute " + (newMuted ? "on" : "off"));
                     // Phase 5.0.2 Step A: see stepVolume()'s matching
                     // comment.
