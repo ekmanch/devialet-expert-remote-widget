@@ -25,6 +25,17 @@ pub const INTERFACE_NAME: &str = "com.ekmanch.DevialetRemote.Amp1";
 /// on "On". 20s gives ~4s of headroom above that one real sample.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Phase 5.0.0: how long a `NotifyVolumeCommand`/`NotifyMuteCommand`
+/// optimistic value is trusted before falling back to the amp's real
+/// last-known status, absent a confirming broadcast - see
+/// `AmpState::resolve_pending_commands`. Settled input, not re-derived here:
+/// 400ms is already proven across three independent client implementations
+/// (the Kotlin Android app, the Flutter port, and this widget's own
+/// existing QML `debounceMs`) as the window that prevents a stale in-flight
+/// broadcast from contradicting a command the PC just sent - see TODO.md's
+/// Phase 5.0.0 entry.
+const PENDING_COMMAND_TIMEOUT: Duration = Duration::from_millis(400);
+
 /// One amp's last-known status broadcast, keyed by IP in `AmpState::amps`.
 /// Never evicted once seen - matches the Kotlin app's `discoveredAmps`
 /// (`LinkedHashMap`, entries linger forever, staleness is only checked at
@@ -52,6 +63,23 @@ struct TrackedAmp {
     /// above - a naive overwrite would wipe it on the very next ~1s status
     /// broadcast.
     boot_deadline: Option<Instant>,
+    /// Phase 5.0.0: set by `NotifyVolumeCommand` to
+    /// `Some((requested_db, deadline))`, cleared back to `None` by
+    /// `resolve_pending_commands` once a real broadcast confirms
+    /// `status.volume_db() == requested_db` or `PENDING_COMMAND_TIMEOUT`
+    /// elapses - same shape as `boot_deadline` above, generalized from a
+    /// single boolean condition to an arbitrary value + deadline pair.
+    /// `Some` is what makes the exposed `VolumeDb` property report the PC's
+    /// just-issued value instead of the amp's last-known one. Carried
+    /// forward across re-ingestion in `ingest_status`, same reasoning as
+    /// `boot_deadline` - a naive overwrite would wipe it on the very next
+    /// status broadcast, before it's ever had a chance to be compared
+    /// against for confirmation.
+    pending_volume_db: Option<(f64, Instant)>,
+    /// Phase 5.0.0: `NotifyMuteCommand`'s equivalent of `pending_volume_db`
+    /// above - same shape, same carry-forward reasoning, confirmed against
+    /// `status.muted` instead of `status.volume_db()`.
+    pending_muted: Option<(bool, Instant)>,
 }
 
 /// D-Bus-exposed state, covering both the Phase 1-3 "primary amp" surface
@@ -323,6 +351,73 @@ impl AmpState {
         }
         Ok(())
     }
+
+    /// Phase 5.0.0: tells the daemon "the PC just sent `ip` a volume
+    /// command for `db`, treat it as authoritative until you see the amp
+    /// confirm it or `PENDING_COMMAND_TIMEOUT` passes" - the daemon-owned
+    /// equivalent of what each QML representation previously tracked
+    /// independently and locally (see TODO.md's Phase 5.0.0 entry for the
+    /// full architecture decision). Called directly from QML, side by side
+    /// with the actual `devialet-ctl` invocation that sends the real UDP
+    /// command - mirrors `BeginPowerOnBoot`'s own integration point
+    /// exactly, not routed through `devialet-ctl` itself (which stays
+    /// daemon-unaware, per CLAUDE.md's settled "No daemon involvement"
+    /// architecture note for that CLI).
+    ///
+    /// No-ops (no state change, no signal) only when `ip` has no
+    /// `TrackedAmp` entry yet (never heard broadcasting) - mirrors
+    /// `resolve_model_name`'s and `begin_power_on_boot`'s existing
+    /// "unknown ip" guard. Unlike `begin_power_on_boot`, a repeated call
+    /// is NOT a no-op while a previous pending command is still live -
+    /// every call unconditionally replaces the pending value and resets
+    /// its deadline, which is exactly what correctly collapses a rapid
+    /// sequence of commands (e.g. fast scrolling) onto whichever one was
+    /// sent most recently, rather than getting stuck reporting the first
+    /// of several superseded values.
+    #[zbus(name = "NotifyVolumeCommand")]
+    async fn notify_volume_command(
+        &mut self,
+        ip: String,
+        db: f64,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let before = self.clone();
+        let Some(amp) = self.amps.get_mut(&ip) else {
+            return Ok(()); // unknown ip - no-op, mirrors begin_power_on_boot
+        };
+        amp.pending_volume_db = Some((db, Instant::now() + PENDING_COMMAND_TIMEOUT));
+        self.recompute();
+        if !states_equal(&before, self) {
+            emit_all(self, &emitter)
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Phase 5.0.0: `NotifyVolumeCommand`'s equivalent for mute - see its
+    /// doc comment for the full reasoning, identical here with `Muted`/
+    /// `pending_muted` in place of `VolumeDb`/`pending_volume_db`.
+    #[zbus(name = "NotifyMuteCommand")]
+    async fn notify_mute_command(
+        &mut self,
+        ip: String,
+        muted: bool,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let before = self.clone();
+        let Some(amp) = self.amps.get_mut(&ip) else {
+            return Ok(()); // unknown ip - no-op, mirrors begin_power_on_boot
+        };
+        amp.pending_muted = Some((muted, Instant::now() + PENDING_COMMAND_TIMEOUT));
+        self.recompute();
+        if !states_equal(&before, self) {
+            emit_all(self, &emitter)
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
 impl AmpState {
@@ -339,7 +434,18 @@ impl AmpState {
         // not be wiped by the very next status broadcast that arrives
         // while still mid-boot (the amp can broadcast up to ~5Hz).
         let boot_deadline = self.amps.get(&ip).and_then(|amp| amp.boot_deadline);
-        self.amps.insert(ip, TrackedAmp { status, last_seen: Instant::now(), model_name, boot_deadline });
+        // Phase 5.0.0: same reasoning again - an in-progress pending
+        // command must survive this re-insertion so `resolve_pending_
+        // commands` (called from `recompute` below) can actually compare
+        // the freshly-ingested `status` against it, rather than the
+        // pending value being silently wiped before it ever gets a chance
+        // to be confirmed.
+        let pending_volume_db = self.amps.get(&ip).and_then(|amp| amp.pending_volume_db);
+        let pending_muted = self.amps.get(&ip).and_then(|amp| amp.pending_muted);
+        self.amps.insert(
+            ip,
+            TrackedAmp { status, last_seen: Instant::now(), model_name, boot_deadline, pending_volume_db, pending_muted },
+        );
         self.recompute();
     }
 
@@ -448,8 +554,41 @@ impl AmpState {
         }
     }
 
+    /// Clears `pending_volume_db`/`pending_muted` for every tracked amp
+    /// whose pending command has resolved one way or the other (either a
+    /// real broadcast confirms it, or `PENDING_COMMAND_TIMEOUT` has
+    /// elapsed with no confirmation). Same shape as `resolve_boot_deadlines`
+    /// above, generalized to an arbitrary value-equality check instead of a
+    /// single boolean condition. Runs for every tracked amp, not just the
+    /// effective/primary one, matching `resolve_boot_deadlines`'s own
+    /// reasoning (a non-primary amp's pending command should still resolve
+    /// correctly even without a picker UI reading it yet).
+    ///
+    /// Confirmation is exact equality, no epsilon: `Status::volume_db()` is
+    /// `(volume_raw - 195) / 2.0`, an exact linear integer/2 formula, and
+    /// every value this daemon is ever asked to treat as pending is itself
+    /// an exact 0.5dB step (QML's `volumeStepDb` only ever offers 0.5/1/2),
+    /// so both sides of the comparison are exact multiples of 0.5, safely
+    /// comparable with `==`.
+    fn resolve_pending_commands(&mut self) {
+        let now = Instant::now();
+        for amp in self.amps.values_mut() {
+            if let Some((pending_db, deadline)) = amp.pending_volume_db {
+                if amp.status.volume_db() == pending_db || now >= deadline {
+                    amp.pending_volume_db = None;
+                }
+            }
+            if let Some((pending_muted, deadline)) = amp.pending_muted {
+                if amp.status.muted == pending_muted || now >= deadline {
+                    amp.pending_muted = None;
+                }
+            }
+        }
+    }
+
     fn recompute(&mut self) {
         self.resolve_boot_deadlines();
+        self.resolve_pending_commands();
 
         let mut known_amps: Vec<(String, String, bool, String)> = self
             .amps
@@ -501,9 +640,18 @@ impl AmpState {
                     "Off"
                 }
                 .to_string();
-                self.muted = amp.status.muted;
+                // Phase 5.0.0: prefer a still-live pending command over the
+                // amp's last-known real status - see `pending_muted`/
+                // `pending_volume_db`'s own doc comments and
+                // `resolve_pending_commands` above. `VolumeRaw` deliberately
+                // stays a pure, unfiltered reflection of the amp's real
+                // status byte even while a pending VolumeDb is active - it's
+                // documented as a debug/manual-verification aid independent
+                // of the dB formula, not something QML's UI reads, so there
+                // is no matching "pending" concept for it to prefer.
+                self.muted = amp.pending_muted.map(|(v, _)| v).unwrap_or(amp.status.muted);
                 self.volume_raw = amp.status.volume_raw;
-                self.volume_db = amp.status.volume_db();
+                self.volume_db = amp.pending_volume_db.map(|(v, _)| v).unwrap_or_else(|| amp.status.volume_db());
                 self.active_source_index = amp.status.source_index;
                 self.active_source_name = amp.status.current_source_name().unwrap_or("").to_string();
                 self.sources = amp
@@ -1034,6 +1182,156 @@ mod tests {
         assert!(
             state.amps.get("192.168.1.51").unwrap().boot_deadline.is_none(),
             "the non-primary amp's expired deadline must still be cleared"
+        );
+    }
+
+    // ---- Phase 5.0.0: daemon-owned pending-command state (VolumeDb/
+    // Muted) ----
+    //
+    // `notify_volume_command`/`notify_mute_command` themselves have no
+    // unit test here, same constraint as `select_amp`/`begin_power_on_boot`
+    // above: they're async zbus methods requiring a live interface context
+    // this test module doesn't set up - including their unknown-ip no-op
+    // guard, which (like `begin_power_on_boot`'s own already-booting guard)
+    // is confirmed live instead (see this phase's own TODO.md entry:
+    // `busctl call` against the real daemon). These tests instead poke
+    // `pending_volume_db`/`pending_muted` directly (same "manipulate the
+    // private field, matching what the real method would have set" pattern
+    // already used for `boot_deadline` above) to cover the actual
+    // resolution mechanics in `resolve_pending_commands`/`recompute`.
+
+    #[test]
+    fn pending_volume_is_reported_instead_of_the_amps_last_real_value_while_live() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+        assert_eq!(state.volume_db, 0.0, "fixture's real volume_raw=195 decodes to 0.0dB");
+
+        state.amps.get_mut("192.168.1.50").unwrap().pending_volume_db = Some((-24.0, Instant::now() + Duration::from_millis(400)));
+        state.recompute();
+
+        assert_eq!(state.volume_db, -24.0, "a live pending value must override the amp's last real status");
+    }
+
+    #[test]
+    fn pending_muted_is_reported_instead_of_the_amps_last_real_value_while_live() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp"));
+        assert!(!state.muted, "fixture's real status.muted defaults to false");
+
+        state.amps.get_mut("192.168.1.50").unwrap().pending_muted = Some((true, Instant::now() + Duration::from_millis(400)));
+        state.recompute();
+
+        assert!(state.muted, "a live pending value must override the amp's last real status");
+    }
+
+    #[test]
+    fn pending_volume_clears_once_a_real_broadcast_confirms_it() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp")); // volume_raw 195 -> 0.0dB
+        state.amps.get_mut("192.168.1.50").unwrap().pending_volume_db = Some((-24.0, Instant::now() + Duration::from_secs(10)));
+        state.recompute();
+        assert_eq!(state.volume_db, -24.0, "pending value should show before any confirmation arrives");
+
+        // Real amp confirms: volume_raw=147 decodes to (147-195)/2 = -24.0,
+        // an exact match with no epsilon needed (see resolve_pending_
+        // commands' own doc comment).
+        let confirming = StatusFixtureBuilder::new()
+            .device_name("Living Room Amp")
+            .source(0, "Optical 1", true)
+            .active_source_index(0)
+            .power(true)
+            .volume_raw(147)
+            .build();
+        state.ingest_status("192.168.1.50".to_string(), proto::parse_status(&confirming).unwrap());
+
+        assert_eq!(state.volume_db, -24.0, "the now-real value should still read -24.0");
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().pending_volume_db.is_none(),
+            "a confirmed pending command must be cleared, not left dangling"
+        );
+    }
+
+    #[test]
+    fn pending_muted_clears_once_a_real_broadcast_confirms_it() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp")); // muted=false
+        state.amps.get_mut("192.168.1.50").unwrap().pending_muted = Some((true, Instant::now() + Duration::from_secs(10)));
+        state.recompute();
+        assert!(state.muted, "pending value should show before any confirmation arrives");
+
+        let confirming = StatusFixtureBuilder::new()
+            .device_name("Living Room Amp")
+            .source(0, "Optical 1", true)
+            .active_source_index(0)
+            .power(true)
+            .muted(true)
+            .volume_raw(195)
+            .build();
+        state.ingest_status("192.168.1.50".to_string(), proto::parse_status(&confirming).unwrap());
+
+        assert!(state.muted, "the now-real value should still read true");
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().pending_muted.is_none(),
+            "a confirmed pending command must be cleared, not left dangling"
+        );
+    }
+
+    #[test]
+    fn pending_volume_falls_back_to_the_real_value_once_the_deadline_elapses_with_no_confirmation() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp")); // real 0.0dB
+        state.amps.get_mut("192.168.1.50").unwrap().pending_volume_db = Some((-24.0, Instant::now() - Duration::from_millis(1)));
+        state.recompute();
+
+        assert_eq!(state.volume_db, 0.0, "an expired pending value must fall back to the amp's real last-known value");
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().pending_volume_db.is_none(),
+            "an expired deadline must be cleared, not left pending forever"
+        );
+    }
+
+    #[test]
+    fn pending_muted_falls_back_to_the_real_value_once_the_deadline_elapses_with_no_confirmation() {
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp")); // real false
+        state.amps.get_mut("192.168.1.50").unwrap().pending_muted = Some((true, Instant::now() - Duration::from_millis(1)));
+        state.recompute();
+
+        assert!(!state.muted, "an expired pending value must fall back to the amp's real last-known value");
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().pending_muted.is_none(),
+            "an expired deadline must be cleared, not left pending forever"
+        );
+    }
+
+    #[test]
+    fn a_second_pending_volume_command_replaces_the_first_and_resets_the_deadline() {
+        // Matches a real rapid multi-step scroll: NotifyVolumeCommand
+        // always unconditionally overwrites, never checking whether a
+        // previous pending command was already live - so the *latest*
+        // command must win outright, and its own fresh deadline (not the
+        // first, superseded command's) must be what governs afterward.
+        let mut state = AmpState::default();
+        state.ingest_status("192.168.1.50".to_string(), parsed_status("Living Room Amp")); // real 0.0dB
+
+        // First command's deadline is already in the past - if a second
+        // command didn't fully replace this (value AND deadline), the very
+        // next recompute() would fall back to the real value instead of
+        // reporting the second command's.
+        state.amps.get_mut("192.168.1.50").unwrap().pending_volume_db = Some((-24.0, Instant::now() - Duration::from_millis(1)));
+
+        // A second command (e.g. the next notch of a fast scroll) arrives
+        // before that expired state is ever resolved by a recompute() call.
+        state.amps.get_mut("192.168.1.50").unwrap().pending_volume_db = Some((-22.0, Instant::now() + Duration::from_secs(10)));
+        state.recompute();
+
+        assert_eq!(
+            state.volume_db, -22.0,
+            "the latest command must win outright, not fall back just because an earlier one's original deadline had passed"
+        );
+        assert!(
+            state.amps.get("192.168.1.50").unwrap().pending_volume_db.is_some(),
+            "the second command's own fresh deadline must be what's now in effect, not the first (already-expired) one"
         );
     }
 }

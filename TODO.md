@@ -1975,9 +1975,7 @@ architecture decisions; this file is just sequencing and status.
       confirmed quantitatively for every row, not assumed from
       "Optical 1" alone.
 
-## Up next
-
-- [ ] **Phase 5.0.0 — Daemon-owned pending-command state: VolumeDb/
+- [x] **Phase 5.0.0 — Daemon-owned pending-command state: VolumeDb/
       Muted.** First chunk of a 4-chunk phase fixing the "Bug:
       FullRepresentation lags behind CompactRepresentation" entry
       above (see that entry for the investigated root cause). Branch:
@@ -2088,6 +2086,43 @@ architecture decisions; this file is just sequencing and status.
     daemon (`NotifyVolumeCommand`/`NotifyMuteCommand`, then
     `busctl get-property … VolumeDb`/`Muted` before/after the 400ms
     window) before moving to 5.0.1.
+  - **Implemented on `feature/daemon-pending-state` (not main).** Exactly
+    the fields/methods/tests specified above - `pending_volume_db`/
+    `pending_muted` on `TrackedAmp`, `resolve_pending_commands()` wired
+    into `recompute()` alongside `resolve_boot_deadlines()`,
+    `NotifyVolumeCommand`/`NotifyMuteCommand` mirroring
+    `begin_power_on_boot`'s shape, `PENDING_COMMAND_TIMEOUT = 400ms`.
+  - **Test coverage note:** the unknown-`ip` no-op guard on
+    `notify_volume_command`/`notify_mute_command` themselves has no
+    `cargo test` coverage, for the same reason `begin_power_on_boot`'s
+    own already-booting/unknown-ip guard doesn't either - both are
+    async zbus methods needing a live interface context this test
+    module doesn't set up. Confirmed live instead (see below), matching
+    that existing precedent exactly rather than inventing a new one.
+  - **`cargo test --workspace`: 37 protocol + 39 daemon (9 new for this
+    phase) = 76/76 passing. `cargo clippy --workspace --all-targets`:
+    zero warnings.**
+  - **Verified live, real amp (`192.168.0.22`), via `busctl call`/
+    `busctl get-property` against the running daemon rebuilt from this
+    branch** (state restored to -25.0dB/unmuted afterward, matching
+    what was there before this verification pass):
+    - Pending-then-expire, volume: `NotifyVolumeCommand … -33.0` (no
+      real command sent) → `VolumeDb` read `-33` immediately, then
+      `-25` (the real value) again after 600ms with no confirmation.
+    - Pending-then-confirmed, volume: `NotifyVolumeCommand … -20.0`
+      immediately followed by a real `devialet-ctl volume -20.0` →
+      `VolumeDb` read `-20` immediately (pending) and still `-20` a
+      full second later (now genuinely confirmed-real, not just an
+      about-to-expire pending value that happened to match).
+    - Pending-then-expire, mute: `NotifyMuteCommand … true` (no real
+      mute sent) → `Muted` read `true` immediately, then `false` (the
+      real value) again after 600ms.
+    - Unknown ip: `NotifyVolumeCommand` against `10.99.99.99` returned
+      successfully (exit 0, no D-Bus error) with zero effect on
+      `VolumeDb`/`AmpIp` - confirmed no-op, not silently erroring or
+      creating a phantom tracked amp.
+
+## Up next
 
 - [ ] **Phase 5.0.1 — Shared, root-anchored QML consumer for VolumeDb/
       Muted.** Depends on 5.0.0 being merged.
@@ -2301,10 +2336,12 @@ architecture decisions; this file is just sequencing and status.
     same class of thing `BeginPowerOnBoot`/`boot_deadline` (Phase
     4.3.0) already solves for `Power` - just not yet extended to
     `VolumeDb`/`Muted`, and not yet shared by both representations. See
-    **Phase 5.0.1-5.0.4 in "Up next"** for the scoped fix (daemon-owned
-    pending-command state, consumed by both representations via one
-    new shared object) - not implemented yet, dedicated branch, do not
-    close this bug until that phase's live verification confirms it.
+    **Phase 5.0.0 (Done) and 5.0.1-5.0.3 (Up next)** for the scoped fix
+    (daemon-owned pending-command state, consumed by both
+    representations via one new shared object) - daemon side landed
+    and live-verified (5.0.0), the QML consumer doesn't exist yet
+    (5.0.1-5.0.3), dedicated branch. Do not close this bug until
+    5.0.3's live verification confirms it end to end.
   - Distinct from the existing parked bug above ("widget doesn't
     reflect amp-initiated volume changes it didn't itself send") - that
     one describes a divergence that persists indefinitely until
