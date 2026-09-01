@@ -214,10 +214,42 @@ PlasmaCore.Dialog {
                 RowLayout {
                     Layout.bottomMargin: 7
                     Layout.fillWidth: true
+                    // Same hazard class as VolumeHoverTooltip.qml's statRow
+                    // (Phase 4.5.3 round 5): valueText's font.family/weight/
+                    // pixelSize swap between the numeric-dB and "Muted"/
+                    // "Unmuted" word forms, which shifts Qt.AlignBaseline's
+                    // shared row-internal offset - moving ampName (whose own
+                    // font never changes) whenever valueText's content type
+                    // changes. Fixed the same way: Qt.AlignVCenter on both
+                    // Labels plus a pinned preferredHeight so the row's own
+                    // height doesn't fluctuate either.
+                    //
+                    // 20, not a rounder-looking guess: measured live
+                    // (onImplicitHeightChanged logging via a standalone
+                    // driver instantiating this component directly, see
+                    // this phase's own verification) - valueText's implicit
+                    // height is 20 in its numeric-dB form (pixelSize 15
+                    // mono) vs 16 in its word form (pixelSize 12 display),
+                    // and ampName's is a constant 17. Pinning preferredHeight
+                    // to anything other than the true tallest content's own
+                    // implicit height (first tried 18, guessed from
+                    // pixelSize alone) leaves a residual 1px shift on
+                    // ampName even with AlignVCenter: when a sibling's
+                    // implicit height exceeds the pinned row height,
+                    // RowLayout's internal cross-axis centering still keys
+                    // off that overflowing sibling, not just the pinned
+                    // height in isolation - so AlignVCenter alone is
+                    // necessary but not sufficient; the pinned height must
+                    // equal the tallest child's real implicit height, not
+                    // an approximation. Confirmed fixed: with 20, ampName's
+                    // y no longer changes at all across any mute/volume
+                    // transition (with the guessed 18 it still toggled by
+                    // 1px between the numeric and word forms).
+                    Layout.preferredHeight: 20
 
                     Label {
                         Layout.fillWidth: true
-                        Layout.alignment: Qt.AlignBaseline
+                        Layout.alignment: Qt.AlignVCenter
                         text: toast.ampName
                         font.family: toast.theme.fontDisplay
                         font.weight: Font.DemiBold
@@ -227,7 +259,7 @@ PlasmaCore.Dialog {
                     }
 
                     Label {
-                        Layout.alignment: Qt.AlignBaseline
+                        Layout.alignment: Qt.AlignVCenter
                         text: toast.valueText + (toast.isWordValue ? "" : " dB")
                         font.family: toast.isWordValue ? toast.theme.fontDisplay : toast.theme.fontMono
                         font.weight: toast.isWordValue ? Font.DemiBold : Font.Medium
