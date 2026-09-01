@@ -2657,6 +2657,36 @@ architecture decisions; this file is just sequencing and status.
     live investigation above is fully explained by amp-broadcast
     latency plus asymmetric optimism, with no connection found to the
     amp-initiated-change bug's mechanism.
+    
+    
+- [x] **Bug: hover tooltip defaults to "Muted" on initial load, even
+      when the amp isn't muted.** Observed right after
+      plasmashell/widget reload: the tooltip shows "Muted" on first
+      hover, while the OSD toast (reading the same underlying Muted
+      D-Bus property) correctly shows the real unmuted state and
+      current dB value at the same time. Suggests the tooltip's own
+      Muted property mirror in CompactRepresentation.qml starts from
+      an incorrect default (e.g. true, or uninitialized) and doesn't
+      get corrected until an actual mute-state-changing event occurs,
+      rather than being populated from a real Get call against the
+      Muted D-Bus property on first load/first hover - the same
+      "explicit Get on every property, don't trust an assumed default"
+      principle already applied elsewhere in this project's D-Bus
+      handling. Investigate CompactRepresentation's Muted mirror
+      initialization specifically and fix so the tooltip's first-ever
+      hover after a reload reflects the amp's actual real-time mute
+      state, not a hardcoded/stale default.
+  - **Side observation from Phase 5.0.3 (not a fix, not a live
+    reproduction attempt)**: `PendingAmpState.qml`'s `muted` property
+    now defaults to `false` and is only ever assigned from real D-Bus
+    data (`unwrap(..., false)`), and there is exactly one shared
+    instance of it (Phase 5.0.1) instead of two independently-
+    initialized local mirrors racing each other - the specific race
+    class this bug was suspected to be. This is a plausible structural
+    prevention for that whole bug *class*, not a confirmed fix for
+    this specific ticket (no fresh-reload live reproduction was
+    attempted - see Phase 5.0.3 item 6). Left open.
+  - **Not able to reproduce when trying to provoke it 2026-09-01**
 
 ## Up next
 
@@ -2715,34 +2745,6 @@ architecture decisions; this file is just sequencing and status.
 
 - [ ] **Bug: volume icon on flyout mute button does not update
       depending on mute/unmute state**
-
-- [ ] **Bug: hover tooltip defaults to "Muted" on initial load, even
-      when the amp isn't muted.** Observed right after
-      plasmashell/widget reload: the tooltip shows "Muted" on first
-      hover, while the OSD toast (reading the same underlying Muted
-      D-Bus property) correctly shows the real unmuted state and
-      current dB value at the same time. Suggests the tooltip's own
-      Muted property mirror in CompactRepresentation.qml starts from
-      an incorrect default (e.g. true, or uninitialized) and doesn't
-      get corrected until an actual mute-state-changing event occurs,
-      rather than being populated from a real Get call against the
-      Muted D-Bus property on first load/first hover - the same
-      "explicit Get on every property, don't trust an assumed default"
-      principle already applied elsewhere in this project's D-Bus
-      handling. Investigate CompactRepresentation's Muted mirror
-      initialization specifically and fix so the tooltip's first-ever
-      hover after a reload reflects the amp's actual real-time mute
-      state, not a hardcoded/stale default.
-  - **Side observation from Phase 5.0.3 (not a fix, not a live
-    reproduction attempt)**: `PendingAmpState.qml`'s `muted` property
-    now defaults to `false` and is only ever assigned from real D-Bus
-    data (`unwrap(..., false)`), and there is exactly one shared
-    instance of it (Phase 5.0.1) instead of two independently-
-    initialized local mirrors racing each other - the specific race
-    class this bug was suspected to be. This is a plausible structural
-    prevention for that whole bug *class*, not a confirmed fix for
-    this specific ticket (no fresh-reload live reproduction was
-    attempted - see Phase 5.0.3 item 6). Left open.
 
 - [ ] **Bug: hover tooltip (`VolumeHoverTooltip`'s `PlasmaCore.Dialog`)
       renders almost entirely clipped off the right edge of the
