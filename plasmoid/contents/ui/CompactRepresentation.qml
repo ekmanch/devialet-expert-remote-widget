@@ -37,15 +37,23 @@ MouseArea {
     id: root
 
     required property PlasmoidItem plasmoidItem
+    // Phase 5.0.1: shared, root-anchored VolumeDb/Muted consumer - not
+    // used by anything in this file yet (additive-only this phase, see
+    // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
+    required property PendingAmpState pendingAmpState
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
     property string ampIp: ""
     property string deviceName: ""
-    property var volumeDb: undefined
-    property double lastIconStepAtMs: 0
-    property bool muted: false
-    property double lastMuteChangeAtMs: 0
+    // Phase 5.0.2 Step B: volumeDb/muted removed from this mirror -
+    // Step A already redirected every display read in this file to
+    // pendingAmpState.volumeDb/.muted, and pendingAmpState now also
+    // covers the one remaining job these local copies had (stepVolume()/
+    // toggleMute()'s own rapid-repeat accumulation base, since
+    // PendingAmpState.notifyVolume()/notifyMute() write synchronously
+    // before firing their D-Bus call - see that file's own comment).
+    // Nothing left anywhere in this file reads either property.
     // Phase 4.5.3: source name for the tooltip/toast mockups' stat/source
     // rows - a plain string scalar like AmpIp/DeviceName (no unwrap
     // ambiguity, confirmed the same way in FullRepresentation.qml's own
@@ -57,7 +65,6 @@ MouseArea {
     readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
     readonly property real volumeCeilingDb: -15.0
     readonly property real volumeFloorDb: -60.0
-    readonly property int debounceMs: 400
     readonly property string devialetCtlCommand: "devialet-ctl"
 
     // Exposed for hoverTooltip's bindings below.
@@ -69,12 +76,16 @@ MouseArea {
     // FullRepresentation's own volumeSlider uses (from/to), for the
     // tooltip/toast progress bars - matches that slider's own math
     // ((value - from) / (to - from)) rather than inventing new bounds.
-    readonly property real volumeFraction: root.volumeDb !== undefined
-        ? Math.min(1, Math.max(0, (root.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
+    // Phase 5.0.2 Step A: rebased on pendingAmpState.volumeDb (the shared,
+    // daemon-resolved value) instead of this file's own local optimistic
+    // root.volumeDb - see PendingAmpState.qml/TODO.md for why. No
+    // suppress/reactivate mechanic reads this (unlike FullRepresentation's
+    // slider Binding), so the only visible effect is the intended one: the
+    // toast/tooltip progress bar now catches up via the shared object like
+    // everything else, instead of via this file's own local optimism.
+    readonly property real volumeFraction: root.pendingAmpState.volumeDb !== undefined
+        ? Math.min(1, Math.max(0, (root.pendingAmpState.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
         : 0
-
-    function now() { return Date.now(); }
-    function within(lastMs, windowMs) { return (root.now() - lastMs) < windowMs; }
 
     function unwrap(prop, fallback) {
         if (prop === undefined || prop === null) return fallback;
@@ -84,12 +95,20 @@ MouseArea {
 
     function stepVolume(direction) {
         if (root.ampIp === "") return;
-        const base = root.volumeDb !== undefined ? root.volumeDb : root.volumeFloorDb;
+        // Phase 5.0.2 Step B: base now reads pendingAmpState.volumeDb,
+        // not a local copy - safe because PendingAmpState.notifyVolume()
+        // writes it synchronously before its D-Bus call, so a rapid
+        // second step still reads the value this call is about to set,
+        // not something stale.
+        const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
         const stepped = base + direction * root.volumeStepDb;
         const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
-        root.volumeDb = clamped;
-        root.lastIconStepAtMs = root.now();
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
+        // Tells the daemon directly, so FullRepresentation (and anything
+        // else reading pendingAmpState) sees this as authoritative
+        // without waiting for the real amp broadcast - see
+        // PendingAmpState.qml/TODO.md.
+        root.pendingAmpState.notifyVolume(clamped);
         volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction);
     }
 
@@ -101,10 +120,12 @@ MouseArea {
     // same precedent stepVolume() above already established).
     function toggleMute() {
         if (root.ampIp === "") return;
-        const newMuted = !root.muted;
-        root.muted = newMuted;
-        root.lastMuteChangeAtMs = root.now();
+        // Phase 5.0.2 Step B: see the matching comment in stepVolume() -
+        // same reasoning, reads pendingAmpState.muted instead of a local
+        // copy.
+        const newMuted = !root.pendingAmpState.muted;
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute " + (newMuted ? "on" : "off"));
+        root.pendingAmpState.notifyMute(newMuted);
         volumeToast.showMute(root.tooltipAmpName, root.activeSourceName, newMuted, root.volumeFraction);
     }
 
@@ -182,14 +203,20 @@ MouseArea {
         visualParent: root
         ampName: root.tooltipAmpName
         sourceName: root.activeSourceName
-        volumeDb: root.volumeDb
+        // Phase 5.0.2 Step A: sourced from the shared pendingAmpState
+        // object rather than this file's own local root.volumeDb/muted -
+        // see PendingAmpState.qml/TODO.md. Safe here (unlike
+        // FullRepresentation's slider): the tooltip has no suppress/
+        // reactivate binding mechanic, so this is a plain, always-correct
+        // reactive read with no glitch risk.
+        volumeDb: root.pendingAmpState.volumeDb
         volumeFraction: root.volumeFraction
         hasAmp: root.ampIp !== ""
         // Phase 4.5.3 item 3 fix: was missing entirely, so the tooltip
         // kept showing the last dB reading instead of "Muted" - the same
         // Muted D-Bus mirror VolumeToast.showMute() already reacts to
         // (see the Dbus.Properties block below), just never wired here.
-        muted: root.muted
+        muted: root.pendingAmpState.muted
     }
 
     // Phase 4.5.3 item 4 fix: the tooltip stayed open over the flyout if
@@ -282,24 +309,17 @@ MouseArea {
         onRefreshed: {
             root.ampIp = root.unwrap(properties.AmpIp, "");
             root.deviceName = root.unwrap(properties.DeviceName, "");
-            root.volumeDb = root.unwrap(properties.VolumeDb, undefined);
-            root.muted = root.unwrap(properties.Muted, false);
             root.activeSourceName = root.unwrap(properties.ActiveSourceName, "");
         }
 
+        // Phase 5.0.2 Step B: VolumeDb/Muted branches removed - this
+        // interface-level subscription still receives them on every
+        // emission (unavoidable, same as PendingAmpState's own
+        // subscription), just no longer processed here. Both are read
+        // exclusively via root.pendingAmpState.volumeDb/.muted now.
         onPropertiesChanged: (interfaceName, changed, invalidated) => {
             if ("AmpIp" in changed) root.ampIp = root.unwrap(changed.AmpIp, root.ampIp);
             if ("DeviceName" in changed) root.deviceName = root.unwrap(changed.DeviceName, root.deviceName);
-            if ("VolumeDb" in changed) {
-                if (!root.within(root.lastIconStepAtMs, root.debounceMs)) {
-                    root.volumeDb = root.unwrap(changed.VolumeDb, root.volumeDb);
-                }
-            }
-            if ("Muted" in changed) {
-                if (!root.within(root.lastMuteChangeAtMs, root.debounceMs)) {
-                    root.muted = root.unwrap(changed.Muted, root.muted);
-                }
-            }
             if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
         }
     }

@@ -162,6 +162,16 @@ Item {
     implicitWidth: theme.panelWidth
     implicitHeight: mainColumn.implicitHeight
 
+    // Phase 5.0.1: real PlasmoidItem instance reference, same pattern
+    // CompactRepresentation.qml has always used (main.qml hands it down
+    // as `plasmoidItem: root`) - added here alongside pendingAmpState
+    // below for consistency; nothing in this file reads it yet.
+    required property PlasmoidItem plasmoidItem
+    // Phase 5.0.1: shared, root-anchored VolumeDb/Muted consumer - not
+    // used by anything in this file yet (additive-only this phase, see
+    // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
+    required property PendingAmpState pendingAmpState
+
     readonly property Theme theme: Theme {}
 
     // Public KSvg API (not the private org.kde.plasma.extras/private
@@ -242,7 +252,6 @@ Item {
     property bool volumeInteracting: false
 
     property bool muted: false
-    property double lastMuteChangeAtMs: 0
 
     property bool power: false
     // Phase 4.3.1: three-state mirror of the daemon's PowerState
@@ -525,6 +534,12 @@ Item {
         root.volumeDb = clamped;
         root.lastVolumeButtonStepAtMs = root.now();
         root.runCtl("volume " + clamped);
+        // Phase 5.0.2 Step A: also tell the daemon directly, so
+        // CompactRepresentation (and anything else reading pendingAmpState)
+        // sees this as authoritative without waiting for the real amp
+        // broadcast - see PendingAmpState.qml/TODO.md. Additive only: the
+        // local optimistic assignment above is unchanged this step.
+        root.pendingAmpState.notifyVolume(clamped);
     }
 
     Dbus.Properties {
@@ -570,11 +585,11 @@ Item {
                     || root.within(root.lastVolumeSliderReleaseAtMs, root.debounceMs);
                 if (!blocked) root.volumeDb = root.unwrap(changed.VolumeDb, root.volumeDb);
             }
-            if ("Muted" in changed) {
-                if (!root.within(root.lastMuteChangeAtMs, root.debounceMs)) {
-                    root.muted = root.unwrap(changed.Muted, root.muted);
-                }
-            }
+            // Phase 5.0.2 Step B: no debounce guard here anymore - mute
+            // display has no holdout in this file (unlike VolumeDb above,
+            // which still protects the held-out slider), so nothing needs
+            // protecting from an incoming real broadcast.
+            if ("Muted" in changed) root.muted = root.unwrap(changed.Muted, root.muted);
             if ("Power" in changed) {
                 if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
                     root.power = root.unwrap(changed.Power, root.power);
@@ -1196,6 +1211,12 @@ Item {
                         // own from/to bounds) once "None" set VolumeDb to
                         // the daemon's zero-value default - see the
                         // Binding below for the matching fix.
+                        //
+                        // Phase 5.0.2 Step A: deliberately NOT switched to
+                        // pendingAmpState.volumeDb, paired with the same
+                        // holdout on the Binding below - see that comment
+                        // for the full reasoning (a real slider-handle
+                        // snap-back risk, not just "didn't get to it").
                         text: (root.ampIp !== "" && root.volumeDb !== undefined) ? volumeSlider.value.toFixed(1) : "—"
                         font.family: root.theme.fontMono
                         font.weight: Font.Medium
@@ -1299,6 +1320,28 @@ Item {
                         // instead, matching Android's renderVolume()
                         // setting the dial's progress to 0 (its minimum) in
                         // the equivalent !hasSelectedAmp branch.
+                        // Phase 5.0.2 Step A: deliberately NOT switched to
+                        // root.pendingAmpState.volumeDb, unlike every other
+                        // display binding in this phase. On release,
+                        // root.volumeDb is set synchronously below in the
+                        // very same tick `when` flips back to true and this
+                        // Binding re-applies - today that's a no-op (the
+                        // value's already correct). pendingAmpState.volumeDb
+                        // updates only via its own D-Bus round trip
+                        // (notifyVolume() below is async), so at that exact
+                        // instant it would still hold the pre-drag value -
+                        // switching this binding would snap the handle back
+                        // to the stale position, then forward again once the
+                        // round trip lands. Every other switched binding in
+                        // this phase degrades gracefully to "a bit more
+                        // latency" (the intended trade-off); this one alone
+                        // would degrade to a visible reversal instead, for
+                        // zero benefit (root.volumeDb is already correct and
+                        // synchronous for this file's own release). Revisit
+                        // in Step B, once root.volumeDb itself is deleted -
+                        // the likely fix then is pendingAmpState.notifyVolume()/
+                        // notifyMute() themselves writing an optimistic
+                        // same-tick value before firing the async call.
                         value: (root.ampIp !== "" && root.volumeDb !== undefined) ? root.volumeDb : root.volumeFloorDb
                         when: !volumeSlider.pressed
                     }
@@ -1309,6 +1352,13 @@ Item {
                             root.lastVolumeSliderReleaseAtMs = root.now();
                             root.volumeDb = volumeSlider.value;
                             root.runCtl("volume " + volumeSlider.value);
+                            // Phase 5.0.2 Step A: see stepVolume()'s matching
+                            // comment. root.volumeDb above stays the source
+                            // for THIS slider's own display (see the
+                            // Binding's holdout comment) - this call is only
+                            // so other consumers (CompactRepresentation's
+                            // tooltip/toast) learn about the change promptly.
+                            root.pendingAmpState.notifyVolume(volumeSlider.value);
                         }
                     }
 
@@ -1450,16 +1500,31 @@ Item {
                 enabled: root.ampIp !== ""
                 onClicked: {
                     const newMuted = !root.muted;
+                    // Phase 5.0.2 Step B: root.muted = newMuted below is
+                    // kept (still protects this rapid-double-click's own
+                    // read-before-write from a stale value) even though
+                    // lastMuteChangeAtMs/its debounce guard are gone -
+                    // this write has no display dependency left (Step A
+                    // cut mute display over to pendingAmpState.muted
+                    // fully, no holdout here unlike the volume slider),
+                    // so nothing needs protecting it from an incoming
+                    // real broadcast anymore.
                     root.muted = newMuted;
-                    root.lastMuteChangeAtMs = root.now();
                     root.runCtl("mute " + (newMuted ? "on" : "off"));
+                    // Phase 5.0.2 Step A: see stepVolume()'s matching
+                    // comment.
+                    root.pendingAmpState.notifyMute(newMuted);
                 }
 
+                // Phase 5.0.2 Step A: every root.muted display read below
+                // switched to root.pendingAmpState.muted - safe here (no
+                // suppress/reactivate binding mechanic like the volume
+                // slider), a plain reactive read with no glitch risk.
                 background: Rectangle {
                     radius: root.theme.radiusMd
-                    color: root.muted ? Qt.rgba(root.theme.copper.r, root.theme.copper.g, root.theme.copper.b, 0.14) : root.theme.surface
+                    color: root.pendingAmpState.muted ? Qt.rgba(root.theme.copper.r, root.theme.copper.g, root.theme.copper.b, 0.14) : root.theme.surface
                     border.width: 1
-                    border.color: root.muted ? root.theme.copperDim : (parent.hovered ? root.theme.copperDim : root.theme.divider)
+                    border.color: root.pendingAmpState.muted ? root.theme.copperDim : (parent.hovered ? root.theme.copperDim : root.theme.divider)
                 }
                 contentItem: RowLayout {
                     spacing: 6
@@ -1468,13 +1533,13 @@ Item {
                         implicitWidth: 13
                         implicitHeight: 13
                         source: "audio-volume-muted-symbolic"
-                        color: root.muted ? root.theme.copperBright : root.theme.text
+                        color: root.pendingAmpState.muted ? root.theme.copperBright : root.theme.text
                     }
                     Label {
-                        text: root.muted ? "Unmute" : "Mute"
+                        text: root.pendingAmpState.muted ? "Unmute" : "Mute"
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: root.muted ? root.theme.copperBright : root.theme.text
+                        color: root.pendingAmpState.muted ? root.theme.copperBright : root.theme.text
                     }
                     Item { Layout.fillWidth: true }
                 }
