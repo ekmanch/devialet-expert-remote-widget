@@ -346,6 +346,75 @@ dialog, and separately reload the widget itself, and confirm the
 control still reflects the value you set — not just that toggling it
 visibly changed something in the moment.
 
+## QML layout: Qt.AlignBaseline is unsafe with dynamic text (settled, do not relitigate)
+
+**The pattern**: `Qt.AlignBaseline` computes one shared row-internal
+baseline offset from the font metrics of whichever children currently
+participate in that row. If any sibling's font or content can change at
+runtime — not just its visibility — that sibling's glyph metrics
+(ascent in particular) shift the shared baseline, which silently
+repositions every other `AlignBaseline` sibling in the row, including
+ones whose own `text`/`font.*` properties never changed. This is not a
+margin or spacing bug and won't look like one; it looks like an
+unrelated label "jittering" a couple of px only when some other part of
+the row changes state.
+
+**This has now happened three separate times in this codebase**, always
+in the same shape (a row pairing a static label with a value label whose
+font/content varies by state):
+
+- `VolumeHoverTooltip.qml` (Phase 4.5.3) — took three rounds to close.
+  Round 5's actual root cause (documented in that file's own header
+  comment on `statRow`): the value Label swaps `font.family`/
+  `font.weight`/`font.pixelSize` between its numeric-dB and "Muted" word
+  forms, and the "dB" unit Label drops out of layout entirely via
+  `visible: false` when muted — both were enough to drag "Optical 1" (a
+  plain sibling whose own font never changed) along with the shifting
+  baseline, even after the row's own height had already been pinned.
+- `VolumeToast.qml` — fixed in this same style of session, but found
+  proactively during the flyout-appletpopup-rebuild spike's own
+  investigation (finding 9), *not* from a user report or a live glitch
+  anyone had seen. Same shape exactly: `ampName` (static) and
+  `valueText` (font/content swaps between numeric-dB and "Muted"/
+  "Unmuted") as direct `AlignBaseline` siblings in one `RowLayout`.
+
+Three strikes on the same exact shape — including a fresh, independent
+recurrence in a second file, found by investigation rather than by
+another live bug report — is the signal this is a house rule, not a
+one-off fix.
+
+**House rule going forward**: no `Qt.AlignBaseline` on any row that
+contains a child whose text content or font can change at runtime.
+Use `Qt.AlignVCenter` on every child in that row instead — it positions
+each child from its own height only, not a shared cross-sibling metric —
+**and** pin an explicit `Layout.preferredHeight` on the row itself to
+the tallest child's actual measured implicit height across *all* of
+that child's content states.
+
+That last clause is load-bearing, not decoration — confirmed the hard
+way while fixing `VolumeToast.qml` in this same pass. The first attempt
+pinned `Layout.preferredHeight: 18`, copied from `VolumeHoverTooltip
+.qml`'s own pinned value on the assumption a similar row needs a similar
+number. It didn't: live measurement (`onImplicitHeightChanged`/`onYChanged`
+logging via a standalone driver instantiating the real component) showed
+`valueText`'s true implicit height is `20` in its numeric-dB form vs `16`
+in its word form, and `18` — being *less* than the tallest state's real
+height — left a reproducible 1px shift on `ampName` even with
+`AlignVCenter` already applied on both children. Root cause: when a
+sibling's implicit height exceeds the row's pinned height, `RowLayout`'s
+internal cross-axis centering still keys off that overflowing sibling,
+so `AlignVCenter` alone is necessary but not sufficient — the pinned
+height must equal the tallest child's real measured height, not an
+approximation, and not a value borrowed from a different file's
+different content. Re-measure it fresh every time this pattern is
+applied; don't copy the number.
+
+**Required reading before writing any QML for the flyout-appletpopup-
+rebuild spike.** That surface has more dynamic-content rows than either
+`VolumeHoverTooltip.qml` or `VolumeToast.qml` combined, and is exactly
+where this lesson needs to actually get applied up front — not
+re-discovered a fourth time after the rebuild ships.
+
 ## Environment
 
 - OS: CachyOS (Arch-based); Desktop: KDE Plasma.
