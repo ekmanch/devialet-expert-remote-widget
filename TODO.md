@@ -2688,6 +2688,82 @@ architecture decisions; this file is just sequencing and status.
     attempted - see Phase 5.0.3 item 6). Left open.
   - **Not able to reproduce when trying to provoke it 2026-09-01**
 
+- [x] **Phase 7.0.0 — AppletPopup infrastructure spike.** On
+      `spike/flyout-appletpopup-rebuild`: replaced just the
+      compact→full transition with a bare `PlasmaCore.AppletPopup`
+      holding empty/placeholder content — no real flyout UI — to test
+      whether dismiss-on-click-outside, focus handling
+      (`requestActivate()`), and screen-edge-aware positioning
+      actually behave acceptably on this system before committing to
+      rebuilding `FullRepresentation.qml` on top of it. Specifically
+      resolved whether the known
+      `QWindow::setWindowState does not accept Qt::WindowActive`
+      warning (present even in KDE's own `CompactApplet.qml`) is
+      cosmetic-only here or actually breaks keyboard focus into
+      flyout controls.
+  - Basis: `context-on-spike-flyout-dialog-rebuild-b-quirky-wand.md`
+    investigation document (§6, "Go/no-go recommendation," step 2 of
+    the recommended path; full results now also in that document's own
+    new §7). `VolumeToast.qml`'s live `AlignBaseline` hazard (the
+    doc's finding 9, step 1 of the same recommended path) was fixed
+    first, as of commit `d2a9c49`.
+  - New `AppletPopupSpike.qml`, gated behind `main.qml`'s
+    `appletPopupSpikeEnabled` flag (default `false`) —
+    `CompactRepresentation.qml`'s left-click handler only opens it
+    instead of the real flyout when the flag is true. No
+    `FullRepresentation.qml` content was ported in and no changes were
+    made to that file. Every dismiss/positioning/focus binding was
+    copied deliberately from the real installed `CompactApplet.qml`
+    (`/usr/share/plasma/shells/org.kde.plasma.desktop/contents/
+    applet/CompactApplet.qml`) and the real `appletpopup.h`/`.cpp`/
+    `popupplasmawindow.h` headers, re-confirmed against the real
+    source this session rather than trusted from memory of §3's
+    summary.
+  - **Bug found and fixed before any live testing was possible**: the
+    spike auto-opened ~5s after `plasmashell` startup with no click
+    made. `Window`-derived types (which `PlasmaCore.AppletPopup` is)
+    default to `visible: true` in QML; `CompactApplet.qml` overrides
+    this with an explicit binding, and this file initially had no
+    equivalent explicit initial value. Fixed with a plain
+    `visible: false` initial-value assignment. Re-verified clean after
+    the fix across three separate reloads, zero auto-opens.
+  - **Verified live, real desktop (Plasma 6.7.4, Wayland/KWin)** — no
+    mouse/keyboard automation tool exists in this Wayland session (no
+    `xdotool`/`ydotool`/`wtype`), so the project owner performed the
+    physical clicking/typing directly while journald was tailed live
+    for correlation, not simulated or assumed:
+    - Opens and positions correctly even at the hardest real edge case
+      available on this system (panel icon sitting in the screen's
+      literal top-right corner) — no clipping, confirmed via two
+      separate screenshots.
+    - Dismiss-on-click-outside: confirmed explicitly (left-clicking
+      empty desktop wallpaper closed it).
+    - Escape key dismiss: confirmed explicitly.
+    - Keyboard focus reaches a real interactive control: confirmed
+      both visually (typed text appeared verbatim in a TextField, live
+      "has active focus" indicator lit) and via the `mainItem` →
+      `focusTestField` relay sequence in journald, matching
+      `CompactApplet.qml`'s own focus-relay mechanism exactly.
+    - The `QWindow::setWindowState does not accept Qt::WindowActive`
+      warning **did not appear once** across 11 separate open/
+      `requestActivate()` cycles over ~5 minutes of real interaction
+      (checked in journald filtered to the `plasmashell` process and
+      in its raw redirected stdout/stderr — both empty for this
+      string).
+    - Not tested this session: repositioning while the popup stays
+      open across a live panel move or monitor change. Carried forward
+      explicitly into Phase 7.1.0's verify list below, not silently
+      dropped just because everything else passed.
+  - **Conclusion**: every risk §6 flagged as the actual open question
+    for this spike came back clean under live verification — the green
+    light to proceed with the real rebuild, per the investigation's own
+    recommended path. This is **not** evidence that the layout-hazard
+    risk from §1/§4 is resolved — that was never exercised by an
+    empty-content spike and only gets tested once real content exists
+    (Phase 7.3.0 onward). Flag left at `false` (off) on completion; the
+    real, shell-managed flyout was left completely untouched and fully
+    functional throughout.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -2740,42 +2816,204 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-- [ ] **Phase 7.0.0 — AppletPopup infrastructure spike.** On
-      `spike/flyout-appletpopup-rebuild`: replace just the
-      compact→full transition with a bare `PlasmaCore.AppletPopup`
-      (or `PlasmaQuick::AppletPopup`/`PopupPlasmaWindow`, same class
-      chain) holding empty/placeholder content — no real flyout UI —
-      to test whether dismiss-on-click-outside, focus handling
-      (`requestActivate()`), and screen-edge-aware positioning
-      actually behave acceptably on this system before committing to
-      rebuilding `FullRepresentation.qml` on top of it. Specifically
-      resolve whether the known
-      `QWindow::setWindowState does not accept Qt::WindowActive`
-      warning (present even in KDE's own `CompactApplet.qml`) is
-      cosmetic-only here or actually breaks keyboard focus into
-      flyout controls.
-  - Basis: `context-on-spike-flyout-dialog-rebuild-b-quirky-wand.md`
-    investigation document (§6, "Go/no-go recommendation," step 2 of
-    the recommended path) — full layout-hazard inventory, the
-    tooltip's three-round `AlignBaseline` bug history, and the
-    dismiss/focus/positioning burden analysis live there, not
-    repeated here. `VolumeToast.qml`'s live `AlignBaseline` hazard
-    (the doc's finding 9, step 1 of the same recommended path) is
-    already fixed as of commit `d2a9c49`.
-  - Explicitly out of scope for this phase: no real amp/volume/source
-    content, no application of §4's row-layout principles (those are
-    for the actual rebuild, gated on this spike passing) — this is
-    infrastructure-only, testing the popup class itself.
-  - Verify: widget added to a real panel, clicked open/closed
-    repeatedly; click-outside dismiss works; keyboard focus actually
-    reaches a placeholder control inside the popup (not just that no
-    crash/warning-free log appears); popup repositions correctly at a
-    screen edge and if the panel itself moves while open.
-  - If this spike is not clean (focus genuinely broken, not just a
-    benign log warning), stop here and keep the full rebuild deferred
-    per the investigation document's own stop condition — do not
-    proceed to a full `FullRepresentation.qml` rebuild on top of a
-    broken focus primitive.
+- [ ] **Phase 7.1.0 — Promote the spike into the real flyout popup
+      shell.** Depends on 7.0.0 (Done). Still infrastructure-only — no
+      real amp/volume/source content yet, still gated behind a toggle,
+      not yet the real cutover path. Basis: investigation document
+      §7 (spike results) and §3 (API surface).
+  - Rename/evolve `AppletPopupSpike.qml` into the real flyout popup
+    component (e.g. `FlyoutPopup.qml`) that will host real content
+    from 7.3.0 onward. Carry over every dismiss/positioning/focus
+    binding proven in 7.0.0 unchanged — do not re-derive them from
+    `CompactApplet.qml` a second time.
+  - Real-build deltas from the spike, deliberate, not oversights:
+    - Set `appletInterface` (the spike left this unset on purpose, to
+      avoid the throwaway popup polluting the real flyout's persisted
+      `popupWidth`/`popupHeight` KConfig keys while both could
+      theoretically coexist — moot now that this component IS the
+      real flyout; it should own that persistence the way the shell's
+      original popup did).
+    - `hideOnWindowDeactivate` should mirror `root.plasmoidItem.
+      hideOnWindowDeactivate` (the real per-applet property
+      `CompactApplet.qml` itself reads), not the spike's hardcoded
+      `true`.
+  - Content stays a placeholder (the spike's own Label + TextField is
+    fine as-is) — this phase is about the shell behaving correctly
+    with real-build settings, not the visual rebuild.
+  - Verify:
+    - Re-run 7.0.0's full live checklist (open/position, click-outside
+      dismiss, Escape dismiss, keyboard focus into a real control, no
+      focus-breaking `requestActivate()` regression) with
+      `appletInterface` now set — confirm nothing regresses now that
+      real size persistence is active (resize the popup, close,
+      reopen, confirm the same size is restored).
+    - **Carried forward from 7.0.0, not yet tested there**: drag the
+      panel to a different screen edge, and/or move it to a different
+      monitor if one is available, while the popup is open. Confirm it
+      either repositions correctly or at minimum doesn't render
+      broken/off-screen.
+
+- [ ] **Phase 7.2.0 — §5 verification harness.** Depends on 7.1.0.
+      Builds the tooling §5 describes, before any real content exists
+      to test against — every content phase from 7.3.0 onward gates on
+      this, per the investigation document's own instruction that the
+      verification suite is "a per-phase gate," not a final pass.
+  - Screenshot half: a repeatable `spectacle -f`-based capture routine
+    (script or a precisely documented manual sequence) for the full
+    state cross product §5 specifies — volume text length (`-40.0`/
+    `-15.0`/`0.0`/`—`) × mute on/off × power (off/Booting/on) × source
+    (short/long/none) × amp (short/long-fallback-UDP-name/none
+    selected/0 known/1 known auto-selected/2+ known requiring explicit
+    selection) × amp list expanded/collapsed — plus a same-state
+    control capture as a noise baseline, exactly as the tooltip's own
+    round-5 fix used.
+  - Coordinate half: a way to log `mapToItem`/`mapToGlobal` x/y for
+    every anchored element at each state permutation (via
+    `journalctl`, matching Phase 5.0.3's own debug-logging precedent),
+    diffed numerically rather than eyeballed — this is what actually
+    catches a sub-pixel or visually-unremarkable shift on an element
+    nobody happened to be looking at, the exact failure mode that took
+    the tooltip three rounds to close.
+  - No real content exists to run this against yet at this phase —
+    verify the harness itself by running it against 7.1.0's still-
+    placeholder popup (fixed content, so "verification" here just
+    means confirming the tooling runs and produces sane, stable
+    output, not that flyout content is bug-free).
+
+- [ ] **Phase 7.3.0 — Amp header + amp list section.** Depends on
+      7.2.0. First real-content section, deliberately built first —
+      §1's master finding means every section built below this one
+      depends on this section's height stabilizing correctly.
+  - **§4 point 4's decision — confirmed, not just recommended: option
+    (b).** The amp list is pulled out of in-flow `mainColumn` entirely
+    and presented as a separate floating popup/overlay layer anchored
+    near the amp header, instead of staying inline with a capped
+    height + scroll affordance. This fully removes the list from the
+    master-finding cascade rather than just capping its contribution —
+    nothing below the amp list in `mainColumn` can ever be perturbed
+    by it expanding/collapsing or by amp count changing.
+  - **Self-containment requirement, because this is a real user-visible
+    UX choice that might get reverted later, not just an internal
+    layout detail**: build the amp list overlay as its own component/
+    file (e.g. `AmpListOverlay.qml`), not interleaved into
+    `FullRepresentation.qml`'s (or its successor's) structure. It
+    should own its own visibility, positioning (anchored off the amp
+    header), and content (the amp `Repeater`, the "no amps discovered"
+    label, findings 5/6/7's fixes below) internally, exposing only
+    what the amp header section actually needs to toggle it open/
+    closed — same shape as `VolumeHoverTooltip.qml`/`VolumeToast.qml`
+    being self-contained `PlasmaCore.Dialog`s driven from
+    `CompactRepresentation.qml` rather than inlined into it. The goal:
+    if option (b) doesn't feel right in practice later, swapping back
+    to an in-flow capped-height list stays a targeted change to this
+    one component, not a rework of 7.4.0-7.6.0's sections built on top
+    of it — nothing downstream should end up depending on the amp list
+    being an overlay specifically, only on the amp header section's
+    own final height being stable, which is true either way.
+  - Apply finding 3 (pin `wrapMode: Text.NoWrap` explicitly instead of
+    relying on the current implicit no-wrap-because-nothing-wraps-yet
+    safety) to the amp header row, which stays in `mainColumn`. Apply
+    findings 5 ("no amps discovered" label), 6 (divider), and 7
+    (`Repeater`-over-`knownAmps` height) inside the new overlay
+    component per the option-(b) shape (e.g. the divider becomes part
+    of the overlay's own presentation rather than a `mainColumn`
+    sibling, since there's no adjacent in-flow content to divide from
+    anymore — confirm the mockup's intent for this rather than
+    guessing).
+  - Verify: run 7.2.0's harness against amp count 0/1/2+ and
+    expanded/collapsed. Confirm `mainColumn`'s own height (and
+    everything below it) is completely unaffected by amp count or
+    expand/collapse state — the actual guarantee option (b) is being
+    chosen for — plus the overlay's own positioning/dismiss behavior
+    (anchored correctly off the amp header, closes appropriately)
+    separately from `mainColumn`'s stability.
+
+- [ ] **Phase 7.4.0 — Volume block: dB/unit readout, source chip,
+      slider.** Depends on 7.3.0 verified solid — this section sits
+      directly below the amp list, so it's the first real test of
+      whether 7.3.0's chosen height strategy actually held.
+  - Fix finding 1 (the dormant `AlignBaseline` on the dB-value/unit
+    `RowLayout`) preemptively — convert to `AlignVCenter` + a freshly
+    measured `Layout.preferredHeight` per §4 point 1 (house style),
+    even though nothing currently activates it.
+  - Fix finding 2 (source chip: add `elide: Text.ElideRight` +
+    `Layout.maximumWidth`, per §4 point 3).
+  - Re-verify finding 8 (the slider) is genuinely unaffected by being
+    rebuilt alongside these — it was already clean; confirm the
+    rebuild didn't accidentally change that.
+  - Verify: 7.2.0's harness, full cross product for this section's own
+    dynamic content (volume text length × mute state), plus confirm
+    nothing above (amp header/list) moved.
+
+- [ ] **Phase 7.5.0 — Action row: mute/power buttons.** Depends on
+      7.4.0 verified solid.
+  - Apply §4 point 2 explicitly to the icon/spinner swap
+    (booting-state-dependent child) — pin `Layout.preferredHeight` to
+    the tallest measured state, even though §1 called this row
+    "low-risk today." The entire reason this rebuild's checklist
+    exists is to not rely on "looked fine so far."
+  - Verify: 7.2.0's harness across power state (off/Booting/on) ×
+    mute, confirm nothing above shifted.
+
+- [ ] **Phase 7.6.0 — Source selector (ComboBox) + footer.** Depends
+      on 7.5.0 verified solid. Smallest remaining section — least
+      flagged in the investigation, but still part of the full
+      rebuild and still gated the same way as every other section.
+  - Apply §4 point 5 (reserve width for the longest expected string)
+    to any label using the existing "—" placeholder convention here.
+  - Verify: 7.2.0's harness across source (short/long/none), confirm
+    nothing above shifted. Closes out the section-by-section pass —
+    every row in the new build now exists.
+
+- [ ] **Phase 7.7.0 — Full-suite verification gate.** Depends on
+      7.3.0-7.6.0 all landed. Not a repeat of each section's own local
+      check — the complete state cross product from §5, run once
+      against the fully assembled flyout end to end (every dimension
+      simultaneously, not one at a time), the actual final gate §5
+      describes before calling the rebuild done.
+  - Full pixel-diff + coordinate-capture pass across the entire cross
+    product: volume text length × mute × power × source × amp ×
+    amp-list-state, with the same-state noise-baseline control capture.
+  - Any regression found here gets fixed and this phase re-run before
+    moving on — this phase doesn't close until a clean full pass
+    exists, matching Phase 5.0.3's own "provisionally closed pending a
+    real clean pass" discipline.
+
+- [ ] **Phase 7.8.0 — Cutover.** Depends on 7.7.0 passing clean. Two
+      sequenced steps, matching Phase 5.0.2's "cut over, then delete"
+      discipline — not simultaneous, each its own commit.
+  - **Step A — make the new build the real path.** Remove
+    `CompactRepresentation.qml`'s dependency on
+    `appletPopupSpikeEnabled` for choosing which popup opens — the new
+    flyout becomes the only thing left-click ever opens. Leave
+    `main.qml`'s `fullRepresentation:` binding, the old
+    `FullRepresentation.qml`, `AppletPopupSpike.qml`/`FlyoutPopup.qml`'s
+    spike-era scaffolding, and the `appletPopupSpikeEnabled` flag
+    itself all in place but unused — don't delete anything yet, so
+    this diff stays reviewable/revertible in isolation from 7.9.0.
+  - Verify Step A live for a real soak period (normal day-to-day use,
+    not just the scripted state cross product) before moving to
+    7.9.0 — this is the first time the new flyout is the *only* path a
+    real user actually exercises.
+
+- [ ] **Phase 7.9.0 — Cleanup.** Depends on 7.8.0 Step A verified solid
+      over real use, not just the scripted checks.
+  - Delete the spike scaffolding: whatever's left of
+    `AppletPopupSpike.qml`'s throwaway pieces and the
+    `appletPopupSpikeEnabled` flag, no longer referenced by anything.
+  - Remove `main.qml`'s now-dead `fullRepresentation:` binding and
+    delete the old `FullRepresentation.qml` — once nothing sets
+    `plasmoidItem.expanded = true` anymore, the shell's own
+    `CompactApplet.qml`-managed `AppletPopup` around it never becomes
+    visible, but it's still wasted memory/dead weight kept alive by
+    `PlasmoidItem`'s opportunistic full-representation preloading (see
+    `CompactRepresentation.qml`'s own header comment on that preload
+    behavior) until this is actually removed.
+  - Verify: fresh `kpackagetool6 --upgrade` + `plasmashell --replace`,
+    confirm the widget still works end to end with the dead files
+    actually gone (not just unused) — matches Phase 5.0.2 Step B's own
+    "only delete once the cutover itself is already verified solid"
+    ordering.
 
 ## Bugs
 
