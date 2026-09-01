@@ -2740,6 +2740,42 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
+- [ ] **Phase 7.0.0 — AppletPopup infrastructure spike.** On
+      `spike/flyout-appletpopup-rebuild`: replace just the
+      compact→full transition with a bare `PlasmaCore.AppletPopup`
+      (or `PlasmaQuick::AppletPopup`/`PopupPlasmaWindow`, same class
+      chain) holding empty/placeholder content — no real flyout UI —
+      to test whether dismiss-on-click-outside, focus handling
+      (`requestActivate()`), and screen-edge-aware positioning
+      actually behave acceptably on this system before committing to
+      rebuilding `FullRepresentation.qml` on top of it. Specifically
+      resolve whether the known
+      `QWindow::setWindowState does not accept Qt::WindowActive`
+      warning (present even in KDE's own `CompactApplet.qml`) is
+      cosmetic-only here or actually breaks keyboard focus into
+      flyout controls.
+  - Basis: `context-on-spike-flyout-dialog-rebuild-b-quirky-wand.md`
+    investigation document (§6, "Go/no-go recommendation," step 2 of
+    the recommended path) — full layout-hazard inventory, the
+    tooltip's three-round `AlignBaseline` bug history, and the
+    dismiss/focus/positioning burden analysis live there, not
+    repeated here. `VolumeToast.qml`'s live `AlignBaseline` hazard
+    (the doc's finding 9, step 1 of the same recommended path) is
+    already fixed as of commit `d2a9c49`.
+  - Explicitly out of scope for this phase: no real amp/volume/source
+    content, no application of §4's row-layout principles (those are
+    for the actual rebuild, gated on this spike passing) — this is
+    infrastructure-only, testing the popup class itself.
+  - Verify: widget added to a real panel, clicked open/closed
+    repeatedly; click-outside dismiss works; keyboard focus actually
+    reaches a placeholder control inside the popup (not just that no
+    crash/warning-free log appears); popup repositions correctly at a
+    screen edge and if the panel itself moves while open.
+  - If this spike is not clean (focus genuinely broken, not just a
+    benign log warning), stop here and keep the full rebuild deferred
+    per the investigation document's own stop condition — do not
+    proceed to a full `FullRepresentation.qml` rebuild on top of a
+    broken focus primitive.
 
 ## Bugs
 
