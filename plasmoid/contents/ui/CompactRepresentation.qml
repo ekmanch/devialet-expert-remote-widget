@@ -41,6 +41,11 @@ MouseArea {
     // used by anything in this file yet (additive-only this phase, see
     // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
     required property PendingAmpState pendingAmpState
+    // Phase 7.0.0 spike toggle, forwarded from main.qml - see that
+    // file's own comment on this property. Not `required`: defaults to
+    // false so nothing else instantiating this file needs to know about
+    // a throwaway spike.
+    property bool appletPopupSpikeEnabled: false
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
@@ -133,7 +138,15 @@ MouseArea {
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton
     onClicked: mouse => {
         if (mouse.button === Qt.LeftButton) {
-            root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
+            // Phase 7.0.0 spike branch - see main.qml's
+            // appletPopupSpikeEnabled comment. Left completely
+            // unreachable, with the exact prior behavior below fully
+            // intact, when the flag is false (the default).
+            if (root.appletPopupSpikeEnabled) {
+                appletPopupSpike.visible = !appletPopupSpike.visible;
+            } else {
+                root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
+            }
         } else if (mouse.button === Qt.MiddleButton) {
             root.toggleMute();
         }
@@ -196,6 +209,16 @@ MouseArea {
         id: hoverHideTimer
         interval: 200
         onTriggered: hoverTooltip.visible = false
+    }
+
+    // Phase 7.0.0 spike - only ever shown when root.appletPopupSpikeEnabled
+    // is true (main.qml). Always instantiated (cheap, matches how
+    // hoverTooltip/volumeToast below are always-instantiated-but-usually-
+    // hidden too), but never made visible unless the flag flips it via
+    // onClicked above.
+    AppletPopupSpike {
+        id: appletPopupSpike
+        spikeVisualParent: root
     }
 
     VolumeHoverTooltip {

@@ -68,9 +68,24 @@ PlasmoidItem {
         id: pendingAmpState
     }
 
+    // Phase 7.0.0 spike toggle (spike/flyout-appletpopup-rebuild branch,
+    // THROWAWAY - not a real feature, do not wire to config.qml/main.xml).
+    // When true, CompactRepresentation.qml's left-click handler opens
+    // AppletPopupSpike.qml (a bare PlasmaCore.AppletPopup with placeholder
+    // content) instead of toggling `expanded`/the real flyout.
+    // fullRepresentation stays bound either way below - the shell's own
+    // AppletPopup wrapping it just never becomes visible while this is
+    // true, since nothing sets `expanded = true` in that branch. Default
+    // false keeps the existing, fully-working compact->full path
+    // completely untouched; flip this one line to test the spike instead.
+    // See TODO.md's Phase 7.0.0 entry and the investigation document it
+    // cites.
+    readonly property bool appletPopupSpikeEnabled: false
+
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
+        appletPopupSpikeEnabled: root.appletPopupSpikeEnabled
     }
 
     fullRepresentation: FullRepresentation {
