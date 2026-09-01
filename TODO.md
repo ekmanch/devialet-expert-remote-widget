@@ -2420,41 +2420,245 @@ architecture decisions; this file is just sequencing and status.
         --workspace` (76/76) and `cargo clippy --workspace --all-targets`
         (zero warnings) reconfirmed unaffected.
 
-## Up next
+- [x] **Phase 5.0.3 — Live verification across every consumer.**
+      Depends on 5.0.2. Real amp (`192.168.0.22`, starting state
+      `-25.0dB`/unmuted, restored to that afterward). All interactions
+      performed via real synthetic input (a hand-built evdev virtual
+      mouse, calibrated against `workspace.cursorPos` via a KWin
+      script - not simulated/assumed), correlated against a live
+      `busctl --user monitor com.ekmanch.DevialetRemote` capture (each
+      D-Bus message carries its own microsecond-precision internal
+      `Timestamp=`, used for all latency figures below - not wall-clock
+      guesses). Each item's own evidence type is called out explicitly,
+      per instruction, rather than blended into one "confirmed":
+  1. **Scroll panel icon, flyout open - flyout slider vs. OSD toast
+     timing.** Real synthetic scroll events on the panel icon
+     (`vhelper.scroll()`), flyout open throughout. D-Bus evidence: two
+     separate `NotifyVolumeCommand` calls measured, daemon-side
+     call-to-`PropertiesChanged`-emission delta = **255µs** and
+     **165µs** respectively (i.e. sub-millisecond, effectively
+     instantaneous on the daemon side). Code-level evidence: the OSD
+     toast (`CompactRepresentation`) is driven by
+     `stepVolume()`'s own synchronous write into
+     `pendingAmpState.volumeDb` (via `notifyVolume()`'s Step B
+     optimistic write, landing *before* the async D-Bus call even
+     fires) - zero added latency by construction, confirmed by reading
+     the code, not inferred. The flyout's own slider *display* (the
+     Step A holdout - see 5.0.2) instead depends on its own
+     `onPropertiesChanged` round trip, bounded by the same
+     sub-millisecond daemon delta above plus local D-Bus delivery/QML
+     dispatch (not independently measurable without instrumenting the
+     QML engine - flagged as a boundary of this evidence, not rounded
+     up). Screenshot-based visual confirmation (taken ~0.6s after the
+     interaction, well past any such gap): flyout slider and OSD toast
+     both showed `-22.0dB`, consistent. **Result: no perceptible lag,
+     confirmed structurally (toast is synchronous-by-construction) and
+     via sub-ms daemon timestamps; frame-exact QML repaint timing was
+     not separately measured (see boundary note above).**
+  2. **Middle-click mute/unmute, flyout open.** Real synthetic
+     middle-click (`vhelper.click("middle")`) on the panel icon. D-Bus
+     evidence: `NotifyMuteCommand` call → `PropertiesChanged` (Muted)
+     emission delta = **165µs**. Screenshot-based visual confirmation
+     (~0.4s after the click, single screenshot): flyout's Mute button
+     showed the active/"Unmute" state and the OSD toast showed
+     "Muted" simultaneously, both consistent. **Result: no perceptible
+     lag, same evidence profile as item 1.**
+  3. **Reverse direction (Full→Compact): flyout's own Mute button, does
+     the tooltip pick it up?** First established that the OSD *toast*
+     is intentionally a local-interaction cue only (its
+     `volumeToast.showVolume()`/`showMute()` calls live inside
+     `CompactRepresentation`'s own `stepVolume()`/`toggleMute()`, not a
+     generic watcher on `pendingAmpState`) - confirmed by reading the
+     code, not a bug, so the toast was not expected to fire for a
+     flyout-originated change and didn't. The correct passive-mirror
+     target is the **hover tooltip**
+     (`VolumeHoverTooltip.volumeDb`/`.muted`), confirmed by grep to be
+     a direct, unconditional binding to `root.pendingAmpState.volumeDb`/
+     `.muted` with no local caching. Real synthetic click on the
+     flyout's own Mute button (`vhelper.click("left")` at its screen
+     position) toggled `Muted` to `true` (confirmed via `busctl
+     get-property` ground truth). Closed the flyout, hovered the panel
+     icon, and captured a **screenshot showing the tooltip itself**
+     reading `Optical 1 ... Muted` (copper-highlighted) - a real,
+     legible, correctly-positioned render, not just a ground-truth
+     inference. **Result: confirmed symmetric (Full→Compact), via a
+     real screenshot of the tooltip's actual rendered content.** (See
+     the tooltip-positioning side-finding below - most attempts to
+     render the tooltip this session came out almost entirely clipped
+     off the right edge of the screen; one specific trigger pattern
+     - hovering while a scroll event fires - consistently rendered it
+     correctly, and was used for this and item 6's evidence. Flagged
+     as a new, separately-tracked issue, not fixed here.)
+  4. **Real drag of the flyout's own volume slider, plus mid-drag
+     external-change injection.** Real synthetic press-move-release
+     (`vhelper.press()`/`move_rel()` in small steps/`release()`, not a
+     single jump) on the slider handle. First pass (idle ~0.3s between
+     establishing the drag and injecting an external
+     `NotifyVolumeCommand -50` via `busctl call` mid-press) showed a
+     **concerning transient**: the slider visually snapped to the
+     injected value while still pressed. Investigated rather than
+     reported at face value, per instruction to flag ambiguity: a
+     second pass using the *same* idle-hold pattern (press, establish,
+     then ~0.3s with no further move events) reproduced an unrelated
+     symptom too - the flyout popup itself spontaneously closed mid-
+     hold - which has no plausible connection to this file's own
+     `volumeInteracting` guard logic. A third pass bracketing the
+     injection with continuous small move events (matching how a real
+     held mouse button actually behaves - never perfectly idle) showed
+     **no perturbation**: slider stayed at the live drag value
+     (`-34.0dB`) through the injected `-55` call. **Conclusion: the
+     idle-hold anomaly is attributed to this session's synthetic-input
+     grab going unstable under a prolonged idle press (corroborated by
+     the unrelated popup-close symptom under the identical idle
+     pattern), not a `volumeInteracting`-guard failure - confirmed via
+     the continuous-motion retest, which is the realistic simulation of
+     a real held mouse button.** Note also: `TODO.md`'s original item 4
+     wording ("now that `volumeInteracting`'s guard is gone") is stale
+     against what 5.0.2 Step B actually shipped - Step B's own
+     investigation reversed that plan and deliberately *kept*
+     `volumeInteracting`/`lastVolumeButtonStepAtMs`/
+     `lastVolumeSliderReleaseAtMs` (see that entry above); this item
+     was evaluated against the guard's actual continued presence, not
+     the stale premise. **Released value sticks correctly**, confirmed
+     twice: released at a genuine drag position both times
+     (`-29.0dB`, then `-34.0dB`), and `busctl get-property` ground
+     truth matched exactly both times, unaffected by the mid-drag
+     external injection. **Result: no regression found in the guard
+     itself; a real but separately-explained synthetic-input artifact
+     was found and ruled out, not glossed over.**
+  5. **Rapid multi-step scroll settles on the last value.** Six real
+     synthetic scroll notches fired back-to-back
+     (`vhelper.scroll(1)` × 6, no artificial delay between calls). Six
+     `NotifyVolumeCommand` calls captured on the bus, strictly
+     sequential and monotonic: `-33, -32, -31, -30, -29, -28`, the last
+     two only **11 microseconds** apart. Final `busctl get-property`
+     ground truth: `-28` (the last value sent, not a superseded
+     intermediate), matching a screenshot of the tooltip showing
+     `-28.0dB` at the same time. **Result: confirmed via real
+     sequential D-Bus timestamps plus ground-truth + screenshot
+     agreement - no dropped or reordered steps, no stale settle.**
+  6. **"Hover tooltip defaults to Muted on initial load" - side
+     observation only, not marked fixed.** Did **not** perform a fresh
+     `plasmashell --replace` reload for this check - the daemon has
+     been running continuously all session (no restart), so there was
+     no genuine "initial load" moment to observe live, and forcing one
+     purely for a side-observation-only item felt disproportionate
+     (a full shell restart, versus every other item's non-disruptive
+     mouse/click interactions). Instead: **code-level structural
+     evidence only**, explicitly not a live reproduction attempt.
+     `PendingAmpState.qml` declares `property bool muted: false`
+     (sensible default), and both `onRefreshed`/`onPropertiesChanged`
+     only ever assign it from real D-Bus data via `unwrap(..., false)`
+     - no code path sets it speculatively to `true`. Because there is
+     now exactly one shared `PendingAmpState` instance (Phase 5.0.1),
+     the original suspected mechanism - two independently-initialized
+     local `muted` mirrors racing each other - is structurally no
+     longer possible; there is only one initialization to race against
+     itself. **This is exactly the "plausible structural prevention,
+     not a confirmed fix" the phase's own wording anticipated - stated
+     here as such, not upgraded to "fixed."** The bug entry (see Bugs
+     below) is left open.
+  - **Minor incidental finding, not one of the six items, not fixed
+    here**: `NotifyVolumeCommand`/`NotifyMuteCommand` do not themselves
+    clamp to the `-15dB` safety ceiling - confirmed by directly
+    `busctl call`-ing `NotifyVolumeCommand` with `-12` (above the
+    ceiling) during item 4's injection testing, which was accepted and
+    briefly reflected in `VolumeDb` before its 400ms pending window
+    expired and it fell back to the amp's real last-known value. In
+    normal operation this is unreachable (every QML caller already
+    clamps via `volumeCeilingDb`/`volumeFloorDb` before calling
+    `notifyVolume()`), so this is a defense-in-depth gap at the D-Bus
+    entry point, not a reachable bug via the UI - noted for awareness,
+    not treated as a regression from this phase.
+  - **New side-finding, not fixed here, worth its own follow-up**: the
+    hover tooltip (`VolumeHoverTooltip`'s `PlasmaCore.Dialog`) rendered
+    almost entirely clipped off the right edge of the screen for most
+    trigger paths tried this session (plain hover-and-wait, both before
+    and after a flyout close), despite its own code comments claiming
+    Plasma's default `location`-based positioning centers it on
+    `visualParent`. Confirmed genuinely our tooltip, not an unrelated
+    overlay (it reliably appeared/disappeared in sync with hover
+    enter/exit). Root cause not investigated - `VolumeHoverTooltip.qml`'s
+    positioning code was not touched by any of Phase 5.0.0-5.0.2, so
+    this is very likely pre-existing and environment/session-specific
+    (this display: 1920×1080 logical @ 2x scale, icon sitting far right
+    in the panel), not a regression from this phase. One specific
+    pattern (a scroll event firing while already hovering) consistently
+    rendered it correctly and was relied on for items 3 and 6's
+    screenshots; plain hover-and-wait clipped almost every other time.
+    Worth its own investigation as a separate ticket, not chased
+    further here.
+  - **Bug closure**: items 1, 2, 3, and 5 confirmed clean with no
+    caveats; item 4 confirmed clean after distinguishing a real
+    synthetic-input testing artifact from an actual guard failure
+    (see above - the guard itself was never shown to fail under
+    realistic continuous-motion conditions). On that basis, the
+    "FullRepresentation lags behind CompactRepresentation" bug (see
+    Bugs section) is marked fixed below - **pending the user's own
+    final live confirmation before merge**, per instruction; treat it
+    as provisionally closed, not unconditionally closed, until that
+    pass happens.
+    
+- [x] **Bug: FullRepresentation lags behind CompactRepresentation on
+      amp-state changes triggered via the panel icon.** Observed while
+      the flyout was open at the same time as interacting with the
+      panel icon directly (Phase 4.5.0/4.5.2 scroll-to-volume and
+      middle-click-to-mute).
+  - Scrolling on the panel icon changes volume immediately (confirmed
+    against the real amp, and the OSD toast reflects it instantly),
+    but the flyout's own volume slider visibly lags before catching up
+    to the new value - a noticeable delay, not an instant reflection.
+  - Same pattern with mute: middle-clicking the panel icon toggles
+    mute immediately (OSD toast updates instantly), but the flyout's
+    Mute button state takes a visible moment before it shows the
+    correct on/off state.
+  - **Investigated (live, real amp): root-caused, not fixed yet.**
+    None of the originally-listed candidates panned out -
+    `FullRepresentation`'s `blocked` gating only ever checks its OWN
+    timestamps (never touched by `CompactRepresentation`, confirmed via
+    live logging: `blocked=false` on every observed signal), and its
+    QML-side signal consumption is essentially instantaneous
+    (sub-millisecond after the D-Bus signal's own timestamp). The
+    actual cause: the amp only confirms a command via its own next
+    periodic status broadcast (measured live at roughly 60-200ms+ per
+    step, occasionally more), and `CompactRepresentation`'s OSD toast
+    "looks instant" only because it echoes its OWN local optimistic
+    value synchronously, with zero D-Bus wait - it isn't reading
+    confirmed state at all. `FullRepresentation` has no such optimistic
+    echo for a change it didn't itself originate, so it must wait for
+    the real (broadcast-latency-bound) signal. This is exactly the
+    same class of thing `BeginPowerOnBoot`/`boot_deadline` (Phase
+    4.3.0) already solves for `Power` - just not yet extended to
+    `VolumeDb`/`Muted`, and not yet shared by both representations. See
+    **Phase 5.0.0-5.0.1 (Done) and 5.0.2-5.0.3 (Up next)** for the
+    scoped fix (daemon-owned pending-command state, consumed by both
+    representations via one new shared object) - daemon side (5.0.0)
+    and the shared QML consumer object (5.0.1) both landed and
+    live-verified, but neither representation actually reads from that
+    object yet (that's 5.0.2's cutover), dedicated branch. Do not close
+    this bug until 5.0.3's live verification confirms it end to end.
+  - **Closed by Phase 5.0.3's live verification** (see that entry
+    above, items 1/2/5 in particular): real synthetic scroll/
+    middle-click interactions plus real D-Bus timestamps showed the
+    daemon-side round trip is sub-millisecond
+    (165-255µs measured), and `FullRepresentation`'s own display now
+    reads from the same daemon-confirmed pending state
+    `CompactRepresentation`'s optimistic echo used to leave it waiting
+    on - no more waiting on the amp's own ~60-200ms broadcast cadence.
+    **Marked closed provisionally - pending the user's own final live
+    confirmation before merge**, per Phase 5.0.3's explicit instruction
+    not to present this as unconditionally closed until that pass
+    happens.
+  - Distinct from the existing parked bug above ("widget doesn't
+    reflect amp-initiated volume changes it didn't itself send") - that
+    one describes a divergence that persists indefinitely until
+    touched; this one is a delay that does eventually resolve on its
+    own. Confirmed genuinely distinct, not the same root cause - the
+    live investigation above is fully explained by amp-broadcast
+    latency plus asymmetric optimism, with no connection found to the
+    amp-initiated-change bug's mechanism.
 
-- [ ] **Phase 5.0.3 — Live verification across every consumer.**
-      Depends on 5.0.2. Real amp, every item below individually
-      confirmed and reported - not a pass/fail summary:
-  1. Scroll the panel icon with the flyout open - the flyout's slider
-     updates with **no perceptible lag**, not just "faster than
-     before." Compare directly against the OSD toast's own timing.
-  2. Middle-click to mute/unmute with the flyout open - the Mute
-     button's state updates with no perceptible lag.
-  3. Trigger changes from the flyout's own controls (slider release,
-     Mute button) and confirm the tooltip/OSD toast
-     (`CompactRepresentation`-driven) reflect them correctly too - the
-     fix must be symmetric (Full→Compact), not just the originally-
-     reported Compact→Full direction.
-  4. **Actually drag the flyout's own volume slider - don't assume
-     from the design.** Confirm no regression: the live drag position
-     is never perturbed by an incoming signal mid-drag, and the
-     released value sticks correctly, now that `volumeInteracting`'s
-     guard is gone and the daemon's own re-armed pending-deadline is
-     what protects this window instead.
-  5. Rapid multi-step scroll (several quick notches in succession) -
-     confirm the daemon-reported value settles on the *last* value
-     sent, not a superseded intermediate one (matches what this bug's
-     investigation already observed live).
-  6. Check the parked "hover tooltip defaults to Muted on initial
-     load" bug (see Bugs section) as a side observation only.
-     **Do not mark it fixed based on this phase's architecture alone**
-     - it has never been root-caused, and this design is a plausible
-     structural prevention for that whole *class* of bug (one
-     synchronously-initialized shared object can't race two
-     independent initializations against each other), not a confirmed
-     fix for that specific ticket. If it genuinely no longer reproduces
-     during this pass, say so explicitly with what was observed, and
-     only then consider closing it on that evidence - not preemptively.
+## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
       real install location for the `devialet-ctl` binary (system-wide
@@ -2529,53 +2733,40 @@ architecture decisions; this file is just sequencing and status.
       initialization specifically and fix so the tooltip's first-ever
       hover after a reload reflects the amp's actual real-time mute
       state, not a hardcoded/stale default.
+  - **Side observation from Phase 5.0.3 (not a fix, not a live
+    reproduction attempt)**: `PendingAmpState.qml`'s `muted` property
+    now defaults to `false` and is only ever assigned from real D-Bus
+    data (`unwrap(..., false)`), and there is exactly one shared
+    instance of it (Phase 5.0.1) instead of two independently-
+    initialized local mirrors racing each other - the specific race
+    class this bug was suspected to be. This is a plausible structural
+    prevention for that whole bug *class*, not a confirmed fix for
+    this specific ticket (no fresh-reload live reproduction was
+    attempted - see Phase 5.0.3 item 6). Left open.
 
-- [ ] **Bug: FullRepresentation lags behind CompactRepresentation on
-      amp-state changes triggered via the panel icon.** Observed while
-      the flyout was open at the same time as interacting with the
-      panel icon directly (Phase 4.5.0/4.5.2 scroll-to-volume and
-      middle-click-to-mute).
-  - Scrolling on the panel icon changes volume immediately (confirmed
-    against the real amp, and the OSD toast reflects it instantly),
-    but the flyout's own volume slider visibly lags before catching up
-    to the new value - a noticeable delay, not an instant reflection.
-  - Same pattern with mute: middle-clicking the panel icon toggles
-    mute immediately (OSD toast updates instantly), but the flyout's
-    Mute button state takes a visible moment before it shows the
-    correct on/off state.
-  - **Investigated (live, real amp): root-caused, not fixed yet.**
-    None of the originally-listed candidates panned out -
-    `FullRepresentation`'s `blocked` gating only ever checks its OWN
-    timestamps (never touched by `CompactRepresentation`, confirmed via
-    live logging: `blocked=false` on every observed signal), and its
-    QML-side signal consumption is essentially instantaneous
-    (sub-millisecond after the D-Bus signal's own timestamp). The
-    actual cause: the amp only confirms a command via its own next
-    periodic status broadcast (measured live at roughly 60-200ms+ per
-    step, occasionally more), and `CompactRepresentation`'s OSD toast
-    "looks instant" only because it echoes its OWN local optimistic
-    value synchronously, with zero D-Bus wait - it isn't reading
-    confirmed state at all. `FullRepresentation` has no such optimistic
-    echo for a change it didn't itself originate, so it must wait for
-    the real (broadcast-latency-bound) signal. This is exactly the
-    same class of thing `BeginPowerOnBoot`/`boot_deadline` (Phase
-    4.3.0) already solves for `Power` - just not yet extended to
-    `VolumeDb`/`Muted`, and not yet shared by both representations. See
-    **Phase 5.0.0-5.0.1 (Done) and 5.0.2-5.0.3 (Up next)** for the
-    scoped fix (daemon-owned pending-command state, consumed by both
-    representations via one new shared object) - daemon side (5.0.0)
-    and the shared QML consumer object (5.0.1) both landed and
-    live-verified, but neither representation actually reads from that
-    object yet (that's 5.0.2's cutover), dedicated branch. Do not close
-    this bug until 5.0.3's live verification confirms it end to end.
-  - Distinct from the existing parked bug above ("widget doesn't
-    reflect amp-initiated volume changes it didn't itself send") - that
-    one describes a divergence that persists indefinitely until
-    touched; this one is a delay that does eventually resolve on its
-    own. Confirmed genuinely distinct, not the same root cause - the
-    live investigation above is fully explained by amp-broadcast
-    latency plus asymmetric optimism, with no connection found to the
-    amp-initiated-change bug's mechanism.
+- [ ] **Bug: hover tooltip (`VolumeHoverTooltip`'s `PlasmaCore.Dialog`)
+      renders almost entirely clipped off the right edge of the
+      screen for most trigger paths.** Found incidentally during Phase
+      5.0.3's live verification, not previously known. Reproduced via
+      plain hover-and-wait (both before and after closing the flyout);
+      confirmed genuinely our tooltip and not an unrelated overlay (it
+      reliably appears/disappears in sync with hover enter/exit, and
+      disappears when the mouse moves away). Contradicts the file's own
+      code comment claiming Plasma's default `location`-based
+      positioning centers the dialog on `visualParent` - the icon sits
+      close to the screen's right edge but with easily enough room
+      (~200 logical px) for a centered ~350px-wide tooltip to fit, so
+      centering alone shouldn't clip like this. One specific pattern -
+      a scroll event firing while the mouse is already hovering -
+      consistently rendered it correctly positioned; that pattern was
+      relied on for Phase 5.0.3 items 3 and 6's screenshots instead of
+      plain hover. Not investigated further and not fixed - this
+      dialog's positioning code was not touched by any of Phase
+      5.0.0-5.0.2, so this is very likely pre-existing and possibly
+      specific to this session's display setup (1920×1080 logical @ 2x
+      scale, icon near the panel's right end), not a regression from
+      the pending-state architecture work. Worth its own investigation.
+
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced
