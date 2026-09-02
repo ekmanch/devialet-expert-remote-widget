@@ -234,6 +234,59 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
+## Real flyout renders truncated (324×180) after a reload — the AppletPopup size-key collision (Phase 7.1.0/7.2.0, applies until Phase 7.8.0's cutover)
+
+**Symptom**: after `plasmashell --replace`, the real, shell-managed flyout
+opens cut off after the volume block - no action row, source selector or
+footer - at exactly 324×180 logical px, the placeholder `FlyoutPopup.qml`
+mainItem's size (18×10 grid units). Nothing in the flyout's own QML is
+wrong; do not debug `FullRepresentation.qml` for this.
+
+**Mechanism** (read from libplasma 6.7.4's `appletpopup.cpp`, fetched
+from invent.kde.org, and confirmed empirically): `AppletPopup::hideEvent()`
+writes `popupWidth`/`popupHeight` into
+`appletInterface->applet()->config()` **unconditionally on every close** -
+no user resize involved - and `setAppletInterface()` reads them back at
+construction (`m_sizeExplicitlySetFromConfig` → `resize`). On the
+`spike/flyout-appletpopup-rebuild` branch, `FlyoutPopup.qml` binds
+`appletInterface` to the same `PlasmoidItem` as the shell's own
+`CompactApplet.qml` popup around `FullRepresentation.qml`, so both write
+and read the **same** KConfig group
+(`[Containments][46][Applets][128][Configuration]` on the dev machine;
+find yours via the `plugin=com.ekmanch.devialetremote` line in
+`~/.config/plasma-org.kde.plasma.desktop-appletsrc`). Any single
+open/close of the spike popup - a harness run, or a manual click with
+`appletPopupSpikeEnabled` on - persists its size; the real flyout applies
+it the next time its popup is constructed, i.e. after the next
+`plasmashell --replace`. Phase 7.1.0's note blamed only resize-testing;
+Phase 7.2.0 found it is every close.
+
+**Cleanup, required after any manual spike-popup test** (the harness
+does this itself - `tools/flyout-harness/harness.py run` snapshots both
+keys before a run and restores/deletes them at teardown, logged in
+`run.json`):
+
+```
+F=plasma-org.kde.plasma.desktop-appletsrc
+G="--group Containments --group 46 --group Applets --group 128 --group Configuration"
+kwriteconfig6 --file $F $G --key popupWidth --delete
+kwriteconfig6 --file $F $G --key popupHeight --delete
+plasmashell --replace &
+```
+
+**Verifying this needs a fresh shell.** `KConfigGroup::writeEntry` only
+marks the group dirty when the value differs from the shell's in-memory
+copy; an external `kwriteconfig6 --delete` doesn't invalidate that cache,
+so a test against a still-running shell shows no write at all and looks
+like a pass. And never verify "keys unchanged" by comparing values that
+may already be the corruption - Phase 7.2.0's first report did exactly
+that (324×180 before and after, rewritten with identical values) and
+missed it; compare against absence after a restart instead.
+
+**Goes away at Phase 7.8.0** (cutover removes the shell-managed popup, so
+only one `AppletPopup` writes the group). Phase 7.7.0's size pinning does
+not fix it - it changes what gets written, not that it gets written.
+
 ## Settings ConfigDialog (Plasma-provided default — settled, do not re-derive)
 
 `Plasmoid.internalAction("configure")` is **not** null in a real installed
@@ -532,6 +585,20 @@ re-discovered a fourth time after the rebuild ships.
     changes `devialet-ctl` (a release build, or real packaging later,
     would install directly to a proper PATH location instead and replace
     this symlink workflow entirely).
+- **`spectacle -b -f` from a non-interactive shell needs
+  `QT_QPA_PLATFORM=wayland`** (found in Phase 7.2.0): launched from a tool/
+  script shell in this Wayland session it otherwise picks the xcb backend,
+  and an XWayland grab of a Wayland session is a fully transparent
+  3840×2160 PNG with exit code 0 - no error, just empty pixels. Interactive
+  terminals don't hit this. `tools/flyout-harness/harness.py` forces the
+  variable and fails hard on an all-transparent capture; do the same in any
+  other screenshot-driven check rather than trusting a zero exit code.
+- **D-Bus `a{ss}` (and any array-of-struct, e.g. `Sources`/`KnownAmps`)
+  reaches QML's `Plasma.DBusProperties` as an opaque `QDBusArgument`** with
+  no visible keys/length - re-confirmed in Phase 7.2.0 for a dict, not just
+  the array case `test-scaffold/watch.qml` documents. Scalars round-trip
+  fine; for structured control data prefer a JSON string (`s`) property
+  (what the harness's `UiState` does) over a dict type.
 - Package manager / tooling: `pacman` (system Rust, Qt6, zbus/socket2/
   async-io via Cargo from crates.io). Qt6 dev tooling (`qmake6`,
   `qt6-base`, `qt6-declarative`) and a C++ compiler are present on this

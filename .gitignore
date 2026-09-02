@@ -25,3 +25,7 @@ Thumbs.db
 
 # Local env / secrets, if ever introduced
 .env
+
+# Phase 7.2.0 flyout verification harness output (screenshots, coords,
+# reports) - local artefacts only, never tracked.
+tools/flyout-harness/runs/

@@ -2833,7 +2833,12 @@ architecture decisions; this file is just sequencing and status.
     directly corrupted the real, live flyout's rendered size twice
     during this session's verification. Both times fixed with
     `kwriteconfig6 --delete` on the two keys + `plasmashell --replace`,
-    confirmed restored to normal size after each fix.
+    confirmed restored to normal size after each fix. **Phase 7.2.0
+    correction: not just resize-testing** - `AppletPopup::hideEvent()`
+    writes the keys on every close (see 7.2.0's entry), so any open/close
+    of `FlyoutPopup` re-corrupts the real flyout's size; the harness now
+    restores the keys itself, manual spike testing still needs the
+    `kwriteconfig6` cleanup.
   - **Protection against this decided, not implemented yet**: rather
     than a "reset to default size on close" mechanic, chose size-
     pinning `mainItem`'s min/max Layout size hints to its final
@@ -2847,6 +2852,173 @@ architecture decisions; this file is just sequencing and status.
   - Flag reverted to `false` (off) on completion; the real, shell-
     managed flyout confirmed fully functional and back to its normal
     size throughout, with no lingering KConfig corruption.
+
+- [x] **Phase 7.2.0 — §5 verification harness.** Depends on 7.1.0.
+      Built the tooling §5 describes before any real content exists;
+      every content phase from 7.3.0 onward gates on it. Verified against
+      7.1.0's placeholder popup only - "verified" here means the tooling
+      runs and produces stable output across repeated runs of the same
+      states, not that any flyout content is bug-free. No commits (per
+      CLAUDE.md); flag reverted to `false` on completion.
+  - **Design (approved in plan review, all four review questions
+    answered in the plan itself)**: state is driven over D-Bus, no
+    synthetic input anywhere. `tools/flyout-harness/fakeamp.py`
+    impersonates the daemon on its real bus name (`Amp1`, all 13
+    properties with exact signatures, 4 methods as logged no-ops,
+    `PropertiesChanged` one property per signal in `emit_all()`'s order)
+    and owns a second control name (`…DevialetRemote.Harness` / `Harness1`:
+    `PopupOpen`, `UiState`, `StateId`, `Seq`, `SettleMs`). New
+    `plasmoid/contents/ui/LayoutProbe.qml` (instantiated once inside
+    `FlyoutPopup.qml`'s `mainItem` - the only change to that file,
+    placeholder content untouched) sets `popup.visible` from `PopupOpen`
+    (the click handler's own statement), assigns `UiState` keys onto a
+    `uiTarget` (QML-internal state such as `ampListOpen`), and on each
+    `Seq` bump waits `SettleMs` then logs every Item under `mainItem` as
+    one JSON line via `console.log` → journald (`[FlyoutProbe]` prefix,
+    Phase 5.0.3's path): key (`objectName`, else structural path),
+    class, x/y/w/h, `mapToItem(null)` and `mapToGlobal` points, implicit
+    size, visibility, `text`/`font.pixelSize` when present; nested
+    `mainItem` windows (7.3.0's planned overlay) recursed with their own
+    window record. `harness.py run` stops the systemd daemon unit if
+    active, owns the names with `DO_NOT_QUEUE` (zbus 5.19's builder was
+    read: the daemon also uses `DO_NOT_QUEUE`, no replacement flags, so
+    neither side can ever take the name from the other), drives each
+    state, asserts the probe's own `Amp1` snapshot matches what it set
+    ("state never reached the widget" is a hard error), screenshots with
+    `spectacle -b -n -f`, crops, and restores the daemon in a `finally`
+    block. `scenarios.py` derives every state from `recompute()`'s two
+    branches: amp ∈ {0known, 1auto-short, 1auto-long, 1none, 2none,
+    2sel-short, 2sel-long} × vol {-40.0, -15.0, 0.0} × mute × pow {Off,
+    Booting, On} × src {short, 16-char long, none} × list {closed, open};
+    not-connected amp values collapse the inner dims to `-`. Full set =
+    438 states / 2409 single-dimension pairs; named subsets (`smoke`,
+    `amp`, `volume-mute`, `power`, `source`) plus `--vary`/`--fix`.
+    `analyze.py` writes `report.md`/`summary.json`: control identity,
+    popup geometry table (§1 master finding at a glance), element moves
+    on single-dimension flips grouped by element with Δx/Δy/Δw/Δh and
+    text before/after (optional `expected.json` allowlist), exact pixel
+    diffs with bbox/row bands/diff images, `--noise-mask` self-noise
+    exclusion. `harness.py compare a b` diffs two runs' coordinates
+    (run-to-run stability and the per-phase settle-floor check).
+    `runs/` is gitignored. Full usage + house rules in the README.
+  - **Probe footprint, stated plainly (review question 2)**: the only
+    always-on cost is one `DBusServiceWatcher` match rule for a name that
+    never appears in normal use; everything else sits behind an inactive
+    `Loader`. Confirmed live: zero `[FlyoutProbe]` journal lines across
+    three plasmashell restarts with the harness not running (after moving
+    the lifecycle log from the Loader's `active` signal - which fires
+    once at construction as the default `true` yields to the binding -
+    into the loaded item's own `Component.onCompleted/onDestruction`).
+    Safe to ship permanently; nothing to strip before 7.8.0.
+  - **Three real bugs found by the harness's own first runs, none in
+    the flyout:**
+    - `spectacle -b -f` from the tool shell wrote a fully transparent
+      3840×2160 PNG with exit code 0 - every crop was blank and every
+      pixel diff trivially zero. Root cause: from a non-interactive shell
+      spectacle picked the xcb backend, and an XWayland grab of a Wayland
+      session is empty. Fix: `QT_QPA_PLATFORM=wayland` forced for every
+      capture, plus a hard error on an all-transparent image so it can
+      never pass silently again. Recorded in CLAUDE.md's Environment.
+    - `UiState` as an `a{ss}` dict reached QML as an opaque
+      `QDBusArgument` - `Object.keys()` empty, nothing applied, zero
+      warnings (the same marshalling gap test-scaffold/watch.qml documents
+      for `Sources`, now confirmed for dicts too). Switched to a JSON
+      string property; the probe now also logs `uiApplied` per key and
+      the expected "UiState key not on uiTarget: ampListOpen" warning
+      appears for the placeholder, which has no such property yet.
+      Recorded in CLAUDE.md.
+    - Crop noise: with an 8 px pad the control pair differed by ~8k
+      pixels - all in the pad, where the desktop behind the popup (the
+      terminal scrolling the run's own log) shows; with pad 0 still ~150
+      px along the bottom rows and corners, where the theme frame's
+      antialiased rounded edges let the desktop bleed through. Crop is
+      now the `mainItem` rectangle (window position + root item offset,
+      × dpr), which excludes the frame - the frame never changes with
+      state, so nothing the harness is for is lost.
+  - **Verified live (real desktop, Plasma 6.7.4, Wayland/KWin, 2x
+    scale), flag on, real daemon stopped/restored by the harness itself
+    every run:**
+    - Bus-name refusal: `fakeamp.py` standalone with the real daemon
+      running exits 3 with "already owned by :1.4 - stop the real daemon
+      first". Under temporary names, `busctl introspect` showed all 13
+      properties with the daemon's exact signatures, methods accepted,
+      19 per-property `PropertiesChanged` signals on the wire.
+    - `states --set full`: 438 states, 2409 pairs; the six not-connected
+      states carry `-` for vol/mute/pow/src, nothing else does.
+    - Four `--set smoke` runs (7 states + control) plus one at
+      `--settle-ms 1200` and one `--set amp` (14 states): every run exit 0,
+      13 items per state, popup 340×195 / mainItem 324×180 in every
+      state, `compare` reports **identical coordinates** run-to-run
+      (including across plasmashell restarts) and between settle 600 and
+      1200 ms - the settle-floor mechanism works (trivially, for fixed
+      content). Single-dimension-flip tables empty in every run, as they
+      must be for state-independent placeholder content. Probe item
+      count always equalled parsed lines (no journald drops).
+    - Control capture after the crop fix: **63 differing pixels in a
+      2×32 box** - exactly the placeholder TextField's blinking caret,
+      nothing else; every pair diff 0 once that noise mask applies, and
+      every non-masked pair in the amp set showed the same 63 px in the
+      same box. This is the caveat §5's control capture exists to
+      surface: content phases with animated states (Booting pulse/
+      spinner) should expect a small, attributable control diff and use
+      `--noise-mask`.
+    - Timing: 1.7 s per state at 600 ms settle (0.3 s spectacle, 0.6 s
+      settle, the rest D-Bus/journal/crop) → the 438-state full gate
+      is ~13 min, ~26 min with `--noise-mask`.
+    - Ctrl-C mid-run (`--set amp`, interrupted at state 3): names
+      released, daemon unit restarted and owning its name again within
+      1 s, `KnownAmps` = the real amp only. The persisted-selection file
+      was never touched.
+  - **Correction, found by you right after the first completion report
+    (real flyout rendered truncated to 324×180 after the flag revert):**
+    the report above originally claimed the `popupWidth`/`popupHeight`
+    KConfig keys "were never touched (324×180 before and after)" - wrong
+    conclusion from a true observation. The keys were being *rewritten
+    with the same values* on every run. Read libplasma 6.7.4's
+    `appletpopup.cpp` (fetched from invent.kde.org, not the header alone):
+    `AppletPopup::hideEvent()` writes both keys **unconditionally on
+    every close** whenever `appletInterface` is set - no resize involved -
+    and `setAppletInterface()` applies them at construction
+    (`m_sizeExplicitlySetFromConfig` → `resize`). Confirmed empirically:
+    keys deleted, shell restarted, one harness run with no resize → keys
+    back at 324×180 (= the placeholder mainItem's 18×10 grid units). So
+    the 7.1.0 hazard is broader than "resize-testing": *any* open/close of
+    `FlyoutPopup` - by the harness or by hand - persists the spike's size
+    into the group the real flyout reads on its next construction, i.e.
+    after the next `plasmashell --replace`. The 324×180 baseline recorded
+    at the start of this session was itself already this corruption, left
+    over from 7.1.0's last open/close after its own cleanup. Fixed in the
+    harness: `run` snapshots both keys for every instance of the applet
+    before starting and restores them (or deletes them if absent) at
+    teardown, logged in `run.json`; verified against a *fresh* shell:
+    keys absent before → "rewritten 324×180, restoring" logged → absent
+    after. (Verification subtlety: a run against a shell that still
+    caches the old values shows no write at all, because
+    `KConfigGroup::writeEntry` only marks the group dirty when the value
+    differs from its in-memory copy - an external `kwriteconfig6
+    --delete` doesn't invalidate that cache. Test this class of thing
+    after a `plasmashell --replace`, never against a running shell.) Applies until 7.8.0's cutover removes the sharing;
+    7.7.0's size-pinning does not change this (pinning fixes what gets
+    written, not that it gets written). Real flyout restored by deleting
+    both keys + `plasmashell --replace`; keys confirmed absent at the end
+    of the phase, flag off.
+    - Teardown: flag reverted, `kpackagetool6 --upgrade` +
+      `plasmashell --replace`, zero probe output at startup, no new QML
+      errors from this plasmoid, daemon active.
+  - **Not verified by me**: a real click on the shell-managed flyout
+    after the revert (no input automation; the load path is intact and
+    the code path is untouched, but the click itself is yours to
+    confirm). `KnownAmps` length in the probe's snapshot is always
+    `null` (opaque array, see above) - the driver checks `AmpIp`/
+    `VolumeDb`/`PowerState` instead, which distinguish every amp value.
+  - **Requirements this places on 7.3.0+ (in the README's house
+    rules)**: every anchored element gets a stable `objectName`; UI-only
+    state is a plain property on one item that `FlyoutPopup.qml`'s probe
+    points `uiTarget` at (7.3.0: `ampListOpen` on the content root, the
+    overlay binding to it internally - consistent with option (b)'s
+    self-containment, and unchanged if that option is ever reverted);
+    the settle floor is re-measured per phase by running the phase's set
+    at 600 and 1200 ms and comparing, never copied forward.
 
 ## Up next
 
@@ -2900,33 +3072,6 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-- [ ] **Phase 7.2.0 — §5 verification harness.** Depends on 7.1.0.
-      Builds the tooling §5 describes, before any real content exists
-      to test against — every content phase from 7.3.0 onward gates on
-      this, per the investigation document's own instruction that the
-      verification suite is "a per-phase gate," not a final pass.
-  - Screenshot half: a repeatable `spectacle -f`-based capture routine
-    (script or a precisely documented manual sequence) for the full
-    state cross product §5 specifies — volume text length (`-40.0`/
-    `-15.0`/`0.0`/`—`) × mute on/off × power (off/Booting/on) × source
-    (short/long/none) × amp (short/long-fallback-UDP-name/none
-    selected/0 known/1 known auto-selected/2+ known requiring explicit
-    selection) × amp list expanded/collapsed — plus a same-state
-    control capture as a noise baseline, exactly as the tooltip's own
-    round-5 fix used.
-  - Coordinate half: a way to log `mapToItem`/`mapToGlobal` x/y for
-    every anchored element at each state permutation (via
-    `journalctl`, matching Phase 5.0.3's own debug-logging precedent),
-    diffed numerically rather than eyeballed — this is what actually
-    catches a sub-pixel or visually-unremarkable shift on an element
-    nobody happened to be looking at, the exact failure mode that took
-    the tooltip three rounds to close.
-  - No real content exists to run this against yet at this phase —
-    verify the harness itself by running it against 7.1.0's still-
-    placeholder popup (fixed content, so "verification" here just
-    means confirming the tooling runs and produces sane, stable
-    output, not that flyout content is bug-free).
-
 - [ ] **Phase 7.3.0 — Amp header + amp list section.** Depends on
       7.2.0. First real-content section, deliberately built first —
       §1's master finding means every section built below this one

@@ -42,6 +42,11 @@
 //   CompactApplet.qml itself reads, confirmed at its dialog's own
 //   `hideOnWindowDeactivate: root.plasmoidItem.hideOnWindowDeactivate`
 //   binding), not the spike's hardcoded `true`.
+//
+// Phase 7.2.0: a LayoutProbe (see LayoutProbe.qml) is instantiated inside
+// mainItem below - the QML half of tools/flyout-harness/. Inert unless the
+// harness's own bus name is registered; safe to ship permanently (see that
+// file's header). Placeholder content is unchanged by that phase.
 
 import QtQuick
 import QtQuick.Layouts
@@ -121,6 +126,16 @@ PlasmaCore.AppletPopup {
             if (flyoutMainItem.activeFocus) {
                 focusTestField.forceActiveFocus();
             }
+        }
+
+        // Phase 7.2.0 harness probe - non-visual, drives popup visibility
+        // and logs every item's coordinates only while
+        // tools/flyout-harness/ is running. Content phases (7.3.0+) point
+        // `uiTarget` at the item owning QML-internal UI state such as
+        // ampListOpen; for the placeholder there is none yet.
+        LayoutProbe {
+            popup: flyoutPopup
+            root: flyoutMainItem
         }
 
         // Placeholder content only - real flyout content starts at Phase
