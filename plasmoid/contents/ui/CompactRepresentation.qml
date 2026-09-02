@@ -143,7 +143,7 @@ MouseArea {
             // unreachable, with the exact prior behavior below fully
             // intact, when the flag is false (the default).
             if (root.appletPopupSpikeEnabled) {
-                appletPopupSpike.visible = !appletPopupSpike.visible;
+                flyoutPopup.visible = !flyoutPopup.visible;
             } else {
                 root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
             }
@@ -211,14 +211,19 @@ MouseArea {
         onTriggered: hoverTooltip.visible = false
     }
 
-    // Phase 7.0.0 spike - only ever shown when root.appletPopupSpikeEnabled
-    // is true (main.qml). Always instantiated (cheap, matches how
+    // Phase 7.1.0: promoted from the Phase 7.0.0 spike
+    // (AppletPopupSpike.qml, now removed) into the real flyout popup
+    // shell - see FlyoutPopup.qml's own header comment for the real-build
+    // deltas (appletInterface, hideOnWindowDeactivate) applied this
+    // phase. Still only ever shown when root.appletPopupSpikeEnabled is
+    // true (main.qml). Always instantiated (cheap, matches how
     // hoverTooltip/volumeToast below are always-instantiated-but-usually-
     // hidden too), but never made visible unless the flag flips it via
     // onClicked above.
-    AppletPopupSpike {
-        id: appletPopupSpike
-        spikeVisualParent: root
+    FlyoutPopup {
+        id: flyoutPopup
+        flyoutVisualParent: root
+        plasmoidItem: root.plasmoidItem
     }
 
     VolumeHoverTooltip {

@@ -2764,6 +2764,90 @@ architecture decisions; this file is just sequencing and status.
     real, shell-managed flyout was left completely untouched and fully
     functional throughout.
 
+- [x] **Phase 7.1.0 — Promote the spike into the real flyout popup
+      shell.** Depends on 7.0.0. Still infrastructure-only — no real
+      amp/volume/source content, still gated behind `main.qml`'s
+      `appletPopupSpikeEnabled` flag (default `false`), not yet the
+      real cutover path. Basis: investigation document §7 (spike
+      results) and §3 (API surface), re-confirmed directly against
+      `appletpopup.h`/`popupplasmawindow.h` and `CompactApplet.qml`
+      again this phase.
+  - `AppletPopupSpike.qml` renamed/evolved into `FlyoutPopup.qml`
+    (old file removed). Every dismiss/positioning/focus binding
+    carried over unchanged from the proven 7.0.0 spike, not
+    re-derived. `CompactRepresentation.qml` and `main.qml`'s comments
+    updated to reference the new name; the toggle flag itself keeps
+    its existing name.
+  - Two real-build deltas applied, both confirmed against real
+    headers before implementing (not assumed from the 7.0.0 summary):
+    - `appletInterface: flyoutPopup.plasmoidItem` — `PlasmoidItem`
+      IS-A `AppletQuickItem` (`appletpopup.h`'s internal
+      `QPointer<AppletQuickItem>`), the exact same binding
+      `CompactApplet.qml`'s own `dialog` uses. A new required
+      `plasmoidItem` property was added to `FlyoutPopup.qml` and wired
+      from `CompactRepresentation.qml` to carry this through.
+    - `hideOnWindowDeactivate: flyoutPopup.plasmoidItem.
+      hideOnWindowDeactivate`, replacing the spike's hardcoded `true`.
+  - Content stayed the spike's own placeholder Label/TextField/Close
+    button, unchanged, per this phase's own scope.
+  - **Verified live, real desktop (Plasma 6.7.4, Wayland/KWin)**,
+    project owner performing all physical interaction (no input
+    automation available in this Wayland session), journald tailed
+    live for correlation:
+    - Open/position, click-outside dismiss, Escape dismiss, and the
+      `mainItem` → `focusTestField` focus-relay sequence all
+      re-confirmed clean with `appletInterface` now set — zero
+      regressions from 7.0.0, zero
+      `QWindow::setWindowState does not accept Qt::WindowActive`
+      occurrences across all open/close cycles.
+    - Size persistence (the actual point of setting
+      `appletInterface`): resized the popup, closed it, reopened it —
+      same size restored. Confirmed working.
+    - **Carried-forward item from 7.0.0, now closed**: literally
+      dragging the panel to a different edge while the popup stays
+      open isn't achievable on this system (panel-edit drag mode and
+      an open popup don't coexist, and there's no second monitor to
+      test a screen change with instead). Verified the practical
+      equivalent instead — a second instance of the widget was added
+      to a left-edge panel and the flyout opened there — confirming
+      `popupDirection`'s `Plasmoid.location` switch correctly
+      reorients (`LeftEdge → Qt.RightEdge`) rather than rendering
+      off-screen or misaligned. Accepted as closing this item; a live
+      mid-open panel/monitor change specifically remains untestable on
+      this hardware, not silently dropped.
+  - **Real bug found live, not anticipated by this phase's own task
+    description**: `PlasmaCore.AppletPopup` is user-resizable by
+    click-and-drag as a built-in feature of the class itself
+    (`appletpopup.h`'s own doc comment — confirmed by reading it, not
+    assumed), with no QML property to disable it. This is not new
+    behavior introduced by this rebuild — the *existing*, already-
+    shipped flyout has always been wrapped in this exact class by the
+    shell (`CompactApplet.qml`'s `dialog`), so it has always been
+    draggable this way; nobody had tried before. Because
+    `FlyoutPopup` and the real shell-managed `dialog` both bind
+    `appletInterface` to the same `plasmoidItem` while they coexist
+    behind the toggle (true until Phase 7.8.0's cutover), they persist
+    size into the *same* KConfig group
+    (`[Containments][46][Applets][128][Configuration]`, keys
+    `popupWidth`/`popupHeight`) — so resize-testing `FlyoutPopup`
+    directly corrupted the real, live flyout's rendered size twice
+    during this session's verification. Both times fixed with
+    `kwriteconfig6 --delete` on the two keys + `plasmashell --replace`,
+    confirmed restored to normal size after each fix.
+  - **Protection against this decided, not implemented yet**: rather
+    than a "reset to default size on close" mechanic, chose size-
+    pinning `mainItem`'s min/max Layout size hints to its final
+    preferred size once that size is known and verified stable —
+    recorded as a new explicit requirement in Phase 7.7.0's entry
+    below, since it needs the fully-assembled, verified-stable final
+    content size that phase's own pass establishes. Until 7.7.0 lands,
+    any future resize-testing against `FlyoutPopup` while both popups
+    still coexist must be followed by the same `kwriteconfig6`
+    cleanup — this hazard doesn't go away on its own before cutover.
+  - Flag reverted to `false` (off) on completion; the real, shell-
+    managed flyout confirmed fully functional and back to its normal
+    size throughout, with no lingering KConfig corruption.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -2816,43 +2900,6 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-- [ ] **Phase 7.1.0 — Promote the spike into the real flyout popup
-      shell.** Depends on 7.0.0 (Done). Still infrastructure-only — no
-      real amp/volume/source content yet, still gated behind a toggle,
-      not yet the real cutover path. Basis: investigation document
-      §7 (spike results) and §3 (API surface).
-  - Rename/evolve `AppletPopupSpike.qml` into the real flyout popup
-    component (e.g. `FlyoutPopup.qml`) that will host real content
-    from 7.3.0 onward. Carry over every dismiss/positioning/focus
-    binding proven in 7.0.0 unchanged — do not re-derive them from
-    `CompactApplet.qml` a second time.
-  - Real-build deltas from the spike, deliberate, not oversights:
-    - Set `appletInterface` (the spike left this unset on purpose, to
-      avoid the throwaway popup polluting the real flyout's persisted
-      `popupWidth`/`popupHeight` KConfig keys while both could
-      theoretically coexist — moot now that this component IS the
-      real flyout; it should own that persistence the way the shell's
-      original popup did).
-    - `hideOnWindowDeactivate` should mirror `root.plasmoidItem.
-      hideOnWindowDeactivate` (the real per-applet property
-      `CompactApplet.qml` itself reads), not the spike's hardcoded
-      `true`.
-  - Content stays a placeholder (the spike's own Label + TextField is
-    fine as-is) — this phase is about the shell behaving correctly
-    with real-build settings, not the visual rebuild.
-  - Verify:
-    - Re-run 7.0.0's full live checklist (open/position, click-outside
-      dismiss, Escape dismiss, keyboard focus into a real control, no
-      focus-breaking `requestActivate()` regression) with
-      `appletInterface` now set — confirm nothing regresses now that
-      real size persistence is active (resize the popup, close,
-      reopen, confirm the same size is restored).
-    - **Carried forward from 7.0.0, not yet tested there**: drag the
-      panel to a different screen edge, and/or move it to a different
-      monitor if one is available, while the popup is open. Confirm it
-      either repositions correctly or at minimum doesn't render
-      broken/off-screen.
-
 - [ ] **Phase 7.2.0 — §5 verification harness.** Depends on 7.1.0.
       Builds the tooling §5 describes, before any real content exists
       to test against — every content phase from 7.3.0 onward gates on
@@ -2978,6 +3025,27 @@ architecture decisions; this file is just sequencing and status.
     moving on — this phase doesn't close until a clean full pass
     exists, matching Phase 5.0.3's own "provisionally closed pending a
     real clean pass" discipline.
+  - **Size-pinning protection (confirmed decision, found live during
+    7.1.0)**: `PlasmaCore.AppletPopup` is user-resizable by
+    click-and-drag as a deliberate, built-in feature of the class
+    itself (`appletpopup.h`'s own doc comment: "this class is
+    resizable and can forward any input events received on the margin
+    to the main item") — there is no QML property to switch this off,
+    and this is not something the rebuild introduces: the *existing*,
+    already-shipped flyout has always been wrapped in this same class
+    by the shell (`CompactApplet.qml`'s `dialog`), so it has always
+    been draggable this way, just never noticed. Once this phase has
+    the fully assembled flyout's final, verified-stable implicit
+    size (the entire point of this phase's pixel-diff/coordinate pass
+    above), pin `mainItem`'s `Layout.minimumWidth` ==
+    `Layout.maximumWidth` == its preferred width, and the equivalent
+    for height, to that measured value. With min and max collapsed to
+    the same number the resize handles have no range to drag into —
+    functionally non-resizable, without needing any un-exposed
+    private API. Chosen over a "reset to default size on close"
+    alternative: pinning stops the drag from visibly doing anything at
+    all in the moment, rather than letting it appear to work and then
+    snapping back next open (which reads as a bug, not a feature).
 
 - [ ] **Phase 7.8.0 — Cutover.** Depends on 7.7.0 passing clean. Two
       sequenced steps, matching Phase 5.0.2's "cut over, then delete"
