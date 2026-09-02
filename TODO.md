@@ -2896,6 +2896,31 @@ architecture decisions; this file is just sequencing and status.
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
 - [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
+- [ ] **Known issue, contingency fix if Phase 7's AppletPopup rebuild is
+      abandoned: the existing flyout is user-resizable by click-and-drag,
+      unintentionally.** Discovered live during the spike/flyout-
+      appletpopup-rebuild branch's Phase 7.1.0 work — `PlasmaCore.
+      AppletPopup` is resizable by deliberate design of the class itself
+      (`appletpopup.h`'s own doc comment: "this class is resizable and
+      can forward any input events received on the margin to the main
+      item"), with no QML property to switch it off. This isn't
+      something the rebuild introduces — the *existing*, already-shipped
+      flyout has always been wrapped in this same class by the shell
+      (`CompactApplet.qml`'s `dialog`), so it has always been draggable
+      this way, just never noticed until now.
+  - If Phase 7's rebuild proceeds and lands on main, this is already
+    handled there (see Phase 7.7.0: pin `mainItem`'s min/max Layout size
+    hints to its final, verified-stable implicit size once known).
+  - **If the rebuild is abandoned and FullRepresentation.qml stays the
+    permanent flyout**, apply the identical fix directly to it instead:
+    once its content's implicit width/height is confirmed stable (no
+    drift across mute/volume/power/source/amp states — the same
+    guarantee 7.7.0's verification pass exists to provide), pin its root
+    layout's `Layout.minimumWidth == Layout.maximumWidth ==
+    Layout.preferredWidth` (and the same for height) to that measured
+    value. Same underlying technique — collapsing min/max to one number
+    leaves the resize handles nowhere to drag into — just applied to the
+    surface that would then be staying permanent instead of the new one.
 
 ## Tasks to complete outside repo
 
