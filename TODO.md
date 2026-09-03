@@ -3180,22 +3180,118 @@ architecture decisions; this file is just sequencing and status.
     `tools/flyout-harness/__pycache__/*.pyc` - worth a `git rm --cached`
     + a `__pycache__/` gitignore entry before committing.
 
-- [ ] **Phase 7.4.0 — Volume block: dB/unit readout, source chip,
+- [x] **Phase 7.4.0 — Volume block: dB/unit readout, source chip,
       slider.** Depends on 7.3.0 verified solid — this section sits
       directly below the amp list, so it's the first real test of
       whether 7.3.0's chosen height strategy actually held.
+  - **New component**: `VolumeBlock.qml`, following AmpHeader.qml/
+    AmpListOverlay.qml's Phase 7.3.0 precedent exactly - pure signal-up
+    (`stepRequested(direction)`/`sliderReleased(value)`), no direct
+    D-Bus/exec calls of its own. Replaces the first chunk of
+    FlyoutContent.qml's `sectionsPlaceholder` (270 → 156, an estimate
+    for 7.5.0/7.6.0's remaining sections, same as 7.3.0's own estimate
+    was for all four).
+  - **Architecture decision, not in the original task brief - flagged
+    here rather than silently made**: volumeDb is fed from
+    `root.pendingAmpState.volumeDb` (Phase 5's shared, daemon-resolved
+    pending-or-confirmed value), *not* a new local D-Bus mirror the way
+    FullRepresentation.qml's `root.volumeDb` still works. This makes
+    FullRepresentation.qml's `lastVolumeButtonStepAtMs`/
+    `lastVolumeSliderReleaseAtMs`/`volumeInteracting` debounce
+    machinery unnecessary here: Phase 5.0.2 Step B already made
+    `PendingAmpState.notifyVolume()` write synchronously, same-tick,
+    before firing its D-Bus call, and the daemon's own
+    `resolve_pending_commands()` (Phase 5.0.0) already owns confirmed-
+    vs-expired resolution. `CompactRepresentation.qml`'s `stepVolume()`
+    already relies on exactly this with no such bookkeeping - this
+    phase's `FlyoutContent.stepVolume()`/`releaseVolume()` mirror that
+    file's shape 1:1, not FullRepresentation.qml's older one. The
+    slider's external Binding is `when: !pressed` only, no separate
+    holdout flag needed (the "snap-back risk" that blocked switching
+    FullRepresentation.qml's own binding no longer applies once
+    notifyVolume() writes synchronously - see VolumeBlock.qml's header
+    comment for the full reasoning).
   - Fix finding 1 (the dormant `AlignBaseline` on the dB-value/unit
-    `RowLayout`) preemptively — convert to `AlignVCenter` + a freshly
-    measured `Layout.preferredHeight` per §4 point 1 (house style),
-    even though nothing currently activates it.
-  - Fix finding 2 (source chip: add `elide: Text.ElideRight` +
-    `Layout.maximumWidth`, per §4 point 3).
-  - Re-verify finding 8 (the slider) is genuinely unaffected by being
-    rebuilt alongside these — it was already clean; confirm the
-    rebuild didn't accidentally change that.
-  - Verify: 7.2.0's harness, full cross product for this section's own
-    dynamic content (volume text length × mute state), plus confirm
-    nothing above (amp header/list) moved.
+    `RowLayout`): converted `dbValueRow` to `AlignVCenter` on both
+    Labels + a measured `Layout.preferredHeight`. Neither Label's font
+    swaps state in this row (checked `FullRepresentation.qml` first,
+    per the task's own instruction - only `dbValueLabel`'s text
+    *length* varies, numeric vs the "—" placeholder), so the row's
+    implicit height was already constant; pinned anyway per house
+    style. Measured via the harness dump (not copied from another
+    file, per the `VolumeToast.qml` lesson): a constant **35** across
+    every actually-reachable state (`"-40.0"`/`"-15.0"`, the "—"
+    placeholder, and the harness's synthetic `vol=0.0` scenario, which
+    the Slider's own `to: -15.0` clamps to displaying `"-15.0"` too,
+    same as it would for the original file's identical slider bound -
+    not a bug this phase introduced).
+  - Fix finding 2 (source chip): `sourceChip`/`sourceChipLabel` gained
+    `elide: Text.ElideRight` + `Layout.maximumWidth: 140`, plus an
+    explicit `sourceChipLabel.width: parent.width - 18` (needed for
+    elide to actually engage - a Label with no width constraint sizes
+    to its own implicitWidth regardless of `elide`). Verified against
+    the harness's own longest source name, `"Chromecast Audio"` (16
+    chars, the protocol's real slot-name maximum) - fits at 140 without
+    eliding, confirmed by eyeball (see below).
+  - Re-verified finding 8 (the slider): unchanged in shape (width from
+    the two fixed 26×26 buttons, `implicitHeight: 26` literal,
+    background/handle sized purely from `availableWidth`/
+    `visualPosition`) - confirmed still clean by the harness's own zero-
+    unexpected-moves result across every state.
+  - `wrapMode: Text.NoWrap` added to every Label in this file (not just
+    the ones getting `elide`), matching `AmpHeader.qml`'s finding-3
+    convention - cheap, not explicitly requested by this task's items,
+    but consistent with house style.
+  - **New `tools/flyout-harness/expected-7.4.0.json`**, extending
+    7.3.0's overlay-only allowlist with this section's own legitimate
+    within-row reflow: `dbValueRow`/`dbValueLabel`/`dbUnitLabel` for
+    `vol`/`amp`, `sourceChip`/`sourceChipLabel` for `src`/`amp`, the
+    fillWidth spacer between them for `vol`/`src`/`amp`, and the
+    slider's own fill/handle Rectangles for `vol`/`amp` - each rule
+    scoped to the specific dimension that actually drives it (not a
+    blanket `dim: "*"`), so an unrelated dimension moving one of these
+    keys would still be caught as a real regression.
+  - **Verified live (Plasma 6.7.4, Wayland/KWin), flag on, harness
+    driving via D-Bus (no input automation), all against
+    `tools/flyout-harness/expected-7.4.0.json`**:
+    - `run --set smoke`: **exit 0**, 0 unexpected moves, 0 warnings,
+      control identical, single popup-geometry row (316×357 window /
+      300×342 mainItem, unchanged from 7.3.0). Re-ran after the height
+      pin was corrected from an initial 32 guess to the measured 35.
+    - `run --vary vol,mute` (the task's own narrow run - 6 states):
+      **exit 0**, 0 unexpected moves, 0 warnings. Every allowed move's
+      key confined to `VolumeBlock`'s own elements (`dbValueRow`,
+      `dbValueLabel`, `dbUnitLabel`, the fillWidth spacer, the slider's
+      fill/handle) or the amp-list overlay - nothing under `AmpHeader`/
+      `mainColumn`'s other direct children moved at all, confirming
+      7.3.0's guarantee held through this section's own dynamic
+      content. `mute` alone produced zero geometry change anywhere in
+      this section (nothing in the volume block keys off `Muted` - that
+      only arrives with 7.5.0's action row).
+    - Settle floor: `--vary vol,mute` at 600ms (default) vs
+      `--settle-ms 1200` → `harness.py compare` **identical
+      coordinates**. 600ms holds for this section too; not re-derived
+      upward.
+    - `--set full` explicitly not run this phase, per the task's own
+      instruction that the full 438-state sweep is reserved for
+      7.7.0's phase-end gate.
+  - **Eyeballed** (`shots/*.png` from the smoke run, inspected
+    directly): base state renders "−40.0 dB" / "Optical 1" chip /
+    slider at its correct position, pixel-matching the mockup; the
+    `src=long` state's "Chromecast Audio" chip fits without eliding;
+    the `amp=0known` (not-connected) state shows the whole block
+    correctly dimmed to 0.4 opacity, "—" placeholders in both the dB
+    label and the (very faint, by design - same as the original file's
+    identical opacity treatment) source chip, slider parked at its
+    floor position - all matching `FullRepresentation.qml`'s original
+    behavior, not a rebuild regression.
+  - Popup size keys (`popupWidth`/`popupHeight`) confirmed restored to
+    their pre-run `300`/`342` values after every run via `kreadconfig6`,
+    matching CLAUDE.md's AppletPopup size-key collision note; flag set
+    back to `false` and the plasmoid reinstalled/`plasmashell --replace`
+    afterward, matching 7.3.0's own convention.
+  - Did not touch Phase 7.5.0/7.6.0's sections (action row, source
+    selector) - `sectionsPlaceholder` still stands in for both.
 
 - [ ] **Phase 7.5.0 — Action row: mute/power buttons.** Depends on
       7.4.0 verified solid.

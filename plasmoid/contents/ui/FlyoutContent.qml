@@ -3,21 +3,29 @@
 // FlyoutPopup.qml's PlasmaCore.AppletPopup mainItem. See TODO.md's Phase
 // 7.3.0 entry and the plan it cites.
 //
-// This phase builds ONLY the amp header (AmpHeader.qml, in-flow) + the amp
-// list (AmpListOverlay.qml, pulled out of flow per §4 point 4 option (b)).
-// Everything below the header - volume block, action row, source selector,
-// footer - is a declared placeholder spacer (`sectionsPlaceholder`) that
-// 7.4.0-7.6.0 replace section by section; it exists so the popup's height
-// is realistic from now on (the overlay would otherwise be clipped by a
-// header-only ~72px popup). Do not port 7.4.0-7.6.0's sections here.
+// Phase 7.3.0 built the amp header (AmpHeader.qml, in-flow) + the amp list
+// (AmpListOverlay.qml, pulled out of flow per §4 point 4 option (b)).
+// Phase 7.4.0 adds the volume block (VolumeBlock.qml - dB/unit readout,
+// source chip, -/slider/+). Everything below it - action row, source
+// selector, footer - remains a declared placeholder spacer
+// (`sectionsPlaceholder`) that 7.5.0-7.6.0 replace section by section; it
+// exists so the popup's height stays realistic (the overlay would
+// otherwise be clipped by a too-short popup). Do not port 7.5.0/7.6.0's
+// sections here.
 //
-// State/functions below are the header-only subset ported verbatim from
-// FullRepresentation.qml (online/deviceName/ampIp/power/powerState/
-// knownAmps/selectedAmpIp + unwrap/unwrapKnownAmps/fetchKnownAmpsFresh/
-// selectAmpByIp + headerName/headerSub + its Dbus.Properties mirror for
-// exactly those properties). Volume/mute/power-debounce/sources handling
-// is deliberately NOT ported - it arrives with 7.4.0-7.6.0 (and volume/
-// mute go through pendingAmpState per Phase 5, not a local mirror).
+// State/functions below were the header-only subset ported verbatim from
+// FullRepresentation.qml through 7.3.0 (online/deviceName/ampIp/power/
+// powerState/knownAmps/selectedAmpIp + unwrap/unwrapKnownAmps/
+// fetchKnownAmpsFresh/selectAmpByIp + headerName/headerSub + its
+// Dbus.Properties mirror for exactly those properties). Phase 7.4.0 adds
+// activeSourceName (a plain scalar, trusted directly like ampIp/
+// deviceName) plus the volume command surface (runCtl/exec/stepVolume/
+// releaseVolume) - volumeDb/muted themselves are deliberately NOT a new
+// local mirror here, they're read from `pendingAmpState` (the required
+// property already forwarded in) per Phase 5's shared, daemon-resolved
+// architecture - see VolumeBlock.qml's header comment for the full
+// reasoning. Mute/power-debounce/sources handling for the action row and
+// source selector is still not ported - that's 7.5.0/7.6.0.
 
 pragma ComponentBehavior: Bound
 
@@ -27,13 +35,17 @@ import org.kde.kirigami as Kirigami
 import org.kde.ksvg as KSvg
 import org.kde.plasma.plasmoid
 import org.kde.plasma.workspace.dbus as Dbus
+import org.kde.plasma.plasma5support as P5Support
 
 Item {
     id: root
 
     required property PlasmoidItem plasmoidItem
-    // Forwarded from FlyoutPopup; unused until 7.4.0's volume section reads
-    // it (Phase 5's shared pending-state consumer).
+    // Forwarded from FlyoutPopup - Phase 5's shared, daemon-resolved
+    // pending-state consumer. Phase 7.4.0: VolumeBlock's volumeDb is fed
+    // from pendingAmpState.volumeDb, and stepVolume/releaseVolume below
+    // call pendingAmpState.notifyVolume() - see VolumeBlock.qml's header
+    // comment for why this is deliberately not a new local mirror.
     required property PendingAmpState pendingAmpState
     // Bound one-way from FlyoutPopup.visible - drives the amp-list reset on
     // flyout hide below (and is the future binding target for the deferred
@@ -66,6 +78,58 @@ Item {
     property string powerState: "Off"
     property var knownAmps: []
     property string selectedAmpIp: ""
+
+    // ---- Phase 7.4.0: volume block state ----
+    // Plain scalar mirror, trusted directly like online/deviceName/ampIp
+    // above (no array-of-struct fetch-fresh workaround needed - same basis
+    // as FullRepresentation.qml's own header comment on ActiveSourceName).
+    property string activeSourceName: ""
+
+    readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
+    readonly property real volumeCeilingDb: -15.0
+    readonly property real volumeFloorDb: -60.0
+    readonly property string devialetCtlCommand: "devialet-ctl"
+
+    function runCtl(argsString) {
+        const cmd = root.devialetCtlCommand + " --ip " + root.ampIp + " " + argsString;
+        console.log("running:", cmd);
+        exec.connectSource(cmd);
+    }
+
+    // Button/wheel step - mirrors CompactRepresentation.qml's stepVolume()
+    // exactly (Phase 5.0.2 Step B shape): reads pendingAmpState.volumeDb as
+    // its base (safe because notifyVolume() writes it synchronously before
+    // firing its D-Bus call, so a rapid second step still reads the value
+    // this call is about to set), not a local copy.
+    function stepVolume(direction) {
+        if (root.ampIp === "") return;
+        const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
+        const stepped = base + direction * root.volumeStepDb;
+        const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        root.runCtl("volume " + clamped);
+        root.pendingAmpState.notifyVolume(clamped);
+    }
+
+    // Slider release - the value is already the authoritative drag result
+    // (computed inside VolumeBlock from its own live value), sent as-is.
+    function releaseVolume(value) {
+        if (root.ampIp === "") return;
+        root.runCtl("volume " + value);
+        root.pendingAmpState.notifyVolume(value);
+    }
+
+    // Fires devialet-ctl once per connectSource() call, then disconnects
+    // itself - same pattern as CompactRepresentation.qml/
+    // FullRepresentation.qml's own `exec`.
+    P5Support.DataSource {
+        id: exec
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-ctl finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
 
     // The single UI-state hook (harness `uiTarget` points here). Writers
     // are all imperative - see the header of this file's plan; no binding
@@ -177,6 +241,7 @@ Item {
             root.ampIp = root.unwrap(properties.AmpIp, "");
             root.power = root.unwrap(properties.Power, false);
             root.powerState = root.unwrap(properties.PowerState, "Off");
+            root.activeSourceName = root.unwrap(properties.ActiveSourceName, "");
             const initialKnownAmps = root.unwrapKnownAmps(root.unwrap(properties.KnownAmps, []));
             if (initialKnownAmps.length > 0) {
                 root.knownAmps = initialKnownAmps;
@@ -190,6 +255,7 @@ Item {
             if ("AmpIp" in changed) root.ampIp = root.unwrap(changed.AmpIp, root.ampIp);
             if ("Power" in changed) root.power = root.unwrap(changed.Power, root.power);
             if ("PowerState" in changed) root.powerState = root.unwrap(changed.PowerState, root.powerState);
+            if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
             if ("SelectedAmpIp" in changed) root.selectedAmpIp = root.unwrap(changed.SelectedAmpIp, root.selectedAmpIp);
             if ("KnownAmps" in changed) root.fetchKnownAmpsFresh();
         }
@@ -233,15 +299,30 @@ Item {
             onToggleRequested: root.ampListOpen = !root.ampListOpen
         }
 
-        // Stand-in for 7.4.0-7.6.0's sections (volume block, action row,
-        // source selector, footer). Height is an estimate of that combined
-        // content so the popup is a realistic size and the overlay isn't
-        // clipped; each later phase replaces part of it, and it is gone by
-        // 7.6.0. Not a binding to any real content - purely a spacer.
+        VolumeBlock {
+            id: volumeBlock
+            theme: root.theme
+            ampIp: root.ampIp
+            volumeDb: root.pendingAmpState.volumeDb
+            volumeFloorDb: root.volumeFloorDb
+            volumeCeilingDb: root.volumeCeilingDb
+            volumeStepDb: root.volumeStepDb
+            activeSourceName: root.activeSourceName
+            onStepRequested: direction => root.stepVolume(direction)
+            onSliderReleased: value => root.releaseVolume(value)
+        }
+
+        // Stand-in for 7.5.0/7.6.0's remaining sections (action row, source
+        // selector, footer). Height is an estimate of that combined content
+        // so the popup is a realistic size and the overlay isn't clipped;
+        // each later phase replaces part of it, and it is gone by 7.6.0.
+        // Not a binding to any real content - purely a spacer. Shrunk from
+        // 7.3.0's 270 by VolumeBlock's own measured contribution now that
+        // it's real content instead of part of this estimate.
         Item {
             objectName: "sectionsPlaceholder"
             Layout.fillWidth: true
-            Layout.preferredHeight: 270
+            Layout.preferredHeight: 156
         }
     }
 
