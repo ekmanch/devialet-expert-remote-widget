@@ -224,6 +224,10 @@ MouseArea {
         id: flyoutPopup
         flyoutVisualParent: root
         plasmoidItem: root.plasmoidItem
+        // Phase 7.3.0: forwarded so FlyoutContent can hand it to the
+        // volume section in 7.4.0 (Phase 5's shared pending-state
+        // consumer). Same instance CompactRepresentation already holds.
+        pendingAmpState: root.pendingAmpState
     }
 
     VolumeHoverTooltip {

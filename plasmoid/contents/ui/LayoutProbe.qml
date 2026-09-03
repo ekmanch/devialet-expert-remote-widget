@@ -44,6 +44,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import org.kde.plasma.workspace.dbus as Dbus
 
 Item {
@@ -231,7 +232,12 @@ Item {
                 const begin = {
                     type: "begin", state: st, seq: seq,
                     dpr: Screen.devicePixelRatio,
-                    win: { x: p.x, y: p.y, w: p.width, h: p.height, visible: p.visible },
+                    // `active` (Phase 7.3.0): the overlay-is-not-a-second-
+                    // window check - an in-window Popup must leave the
+                    // flyout window itself visible AND active; a second
+                    // native window taking activation would flip this false
+                    // (and hideOnWindowDeactivate would then close us).
+                    win: { x: p.x, y: p.y, w: p.width, h: p.height, visible: p.visible, active: p.active },
                     mainItem: { w: r.width, h: r.height, iw: r.implicitWidth, ih: r.implicitHeight },
                     amp: {
                         AmpIp: probe.unwrap(ampView.properties.AmpIp, null),
@@ -245,6 +251,15 @@ Item {
                 console.log(probe.tag + JSON.stringify(begin));
                 session.count = 0;
                 session.walk(r, "root");
+                // Phase 7.3.0: a QtQuick.Controls Popup reparents its
+                // content into the window's Overlay, not under mainItem, so
+                // walk it as a second root (prefix "overlay"). Its items
+                // carry window-relative coords like everything else; when no
+                // Popup is open the overlay just has no relevant children.
+                const ov = Overlay.overlay;
+                if (ov) {
+                    session.walk(ov, "overlay");
+                }
                 console.log(probe.tag + JSON.stringify({ type: "end", state: st, seq: seq, count: session.count }));
                 session.uiWarnings = [];
             }
@@ -253,12 +268,19 @@ Item {
                 if (item === probe || item === session) return;
                 const wp = item.mapToItem(null, 0, 0);
                 const gp = item.mapToGlobal(0, 0);
+                // Center in window coords too (wcx/wcy). The move test diffs
+                // on the center, not the (0,0) corner: a rotated item (e.g.
+                // the amp caret's 180° flip) maps its origin corner to the
+                // opposite corner while its layout box never moves - the
+                // corner is a false positive, the center is rotation-
+                // invariant and still tracks any real translation 1:1.
+                const cp = item.mapToItem(null, item.width / 2, item.height / 2);
                 const rec = {
                     type: "item",
                     key: item.objectName !== "" ? item.objectName : path,
                     path: path, on: item.objectName, cls: session.clsName(item),
                     x: item.x, y: item.y, w: item.width, h: item.height,
-                    wx: wp.x, wy: wp.y, gx: gp.x, gy: gp.y,
+                    wx: wp.x, wy: wp.y, wcx: cp.x, wcy: cp.y, gx: gp.x, gy: gp.y,
                     iw: item.implicitWidth, ih: item.implicitHeight,
                     vis: item.visible, op: item.opacity
                 };

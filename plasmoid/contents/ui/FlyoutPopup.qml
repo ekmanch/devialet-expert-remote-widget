@@ -64,6 +64,9 @@ PlasmaCore.AppletPopup {
     // same reasoning the spike's `spikeVisualParent` used.
     required property Item flyoutVisualParent
     required property PlasmoidItem plasmoidItem
+    // Phase 7.3.0: forwarded through to FlyoutContent (Phase 5's shared
+    // pending-state consumer); unused until 7.4.0's volume section.
+    required property PendingAmpState pendingAmpState
 
     // Window-derived types default to visible:true in QML - CompactApplet.
     // qml overrides this with an explicit binding
@@ -116,62 +119,48 @@ PlasmaCore.AppletPopup {
         // QTBUG-146992 workaround, same as CompactApplet.qml's mainItem.
         enabled: flyoutPopup.visible
 
-        implicitWidth: Kirigami.Units.gridUnit * 18
-        implicitHeight: Kirigami.Units.gridUnit * 10
+        // Phase 7.3.0: size the popup to the real content's implicit size
+        // (was the spike's hardcoded gridUnit*18 x gridUnit*10). AppletPopup
+        // transfers mainItem's size hints to the window (appletpopup.h:
+        // "Size hints are transferred from the mainItem's size hints"), so
+        // this is what makes the popup grow to fit FlyoutContent. No binding
+        // loop: FlyoutContent's implicit sizes (theme.panelWidth,
+        // mainColumn.implicitHeight) don't depend on its own width/height.
+        implicitWidth: flyoutContent.implicitWidth
+        implicitHeight: flyoutContent.implicitHeight
 
         Keys.onEscapePressed: flyoutPopup.visible = false
 
+        // Phase 7.3.0: relay focus into the real flyout content (the
+        // placeholder's TextField is gone). Same MouseEventListener ->
+        // content relay CompactApplet.qml uses to hand focus to
+        // fullRepresentation.
         onActiveFocusChanged: {
             console.log("[FlyoutPopup] mainItem activeFocus:", flyoutMainItem.activeFocus);
             if (flyoutMainItem.activeFocus) {
-                focusTestField.forceActiveFocus();
+                flyoutContent.forceActiveFocus();
             }
         }
 
         // Phase 7.2.0 harness probe - non-visual, drives popup visibility
         // and logs every item's coordinates only while
-        // tools/flyout-harness/ is running. Content phases (7.3.0+) point
-        // `uiTarget` at the item owning QML-internal UI state such as
-        // ampListOpen; for the placeholder there is none yet.
+        // tools/flyout-harness/ is running. Phase 7.3.0: uiTarget points at
+        // flyoutContent, whose `ampListOpen` is the harness's UiState hook.
         LayoutProbe {
             popup: flyoutPopup
             root: flyoutMainItem
+            uiTarget: flyoutContent
         }
 
-        // Placeholder content only - real flyout content starts at Phase
-        // 7.3.0 (see TODO.md). Do not port FullRepresentation.qml UI in
-        // here as part of this phase.
-        ColumnLayout {
+        // Phase 7.3.0: the real flyout content (amp header + amp list
+        // overlay this phase; volume/action/source/footer arrive in
+        // 7.4.0-7.6.0). See FlyoutContent.qml.
+        FlyoutContent {
+            id: flyoutContent
             anchors.fill: parent
-            anchors.margins: Kirigami.Units.largeSpacing
-            spacing: Kirigami.Units.smallSpacing
-
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: "AppletPopup spike — no real content yet"
-            }
-
-            TextField {
-                id: focusTestField
-                Layout.fillWidth: true
-                placeholderText: "Type here to test keyboard focus"
-                onActiveFocusChanged: console.log("[FlyoutPopup] focusTestField activeFocus:", focusTestField.activeFocus)
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: focusTestField.activeFocus
-                    ? "✓ TextField has active focus"
-                    : "✗ TextField does NOT have active focus"
-                color: focusTestField.activeFocus ? "#3fb950" : "#f85149"
-            }
-
-            Button {
-                Layout.alignment: Qt.AlignRight
-                text: "Close"
-                onClicked: flyoutPopup.visible = false
-            }
+            plasmoidItem: flyoutPopup.plasmoidItem
+            pendingAmpState: flyoutPopup.pendingAmpState
+            popupVisible: flyoutPopup.visible
         }
     }
 }

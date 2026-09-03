@@ -29,3 +29,6 @@ Thumbs.db
 # Phase 7.2.0 flyout verification harness output (screenshots, coords,
 # reports) - local artefacts only, never tracked.
 tools/flyout-harness/runs/
+
+# Python bytecode caches from the flyout harness scripts.
+__pycache__/

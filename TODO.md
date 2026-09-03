@@ -3072,53 +3072,113 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-- [ ] **Phase 7.3.0 — Amp header + amp list section.** Depends on
-      7.2.0. First real-content section, deliberately built first —
-      §1's master finding means every section built below this one
-      depends on this section's height stabilizing correctly.
-  - **§4 point 4's decision — confirmed, not just recommended: option
-    (b).** The amp list is pulled out of in-flow `mainColumn` entirely
-    and presented as a separate floating popup/overlay layer anchored
-    near the amp header, instead of staying inline with a capped
-    height + scroll affordance. This fully removes the list from the
-    master-finding cascade rather than just capping its contribution —
-    nothing below the amp list in `mainColumn` can ever be perturbed
-    by it expanding/collapsing or by amp count changing.
-  - **Self-containment requirement, because this is a real user-visible
-    UX choice that might get reverted later, not just an internal
-    layout detail**: build the amp list overlay as its own component/
-    file (e.g. `AmpListOverlay.qml`), not interleaved into
-    `FullRepresentation.qml`'s (or its successor's) structure. It
-    should own its own visibility, positioning (anchored off the amp
-    header), and content (the amp `Repeater`, the "no amps discovered"
-    label, findings 5/6/7's fixes below) internally, exposing only
-    what the amp header section actually needs to toggle it open/
-    closed — same shape as `VolumeHoverTooltip.qml`/`VolumeToast.qml`
-    being self-contained `PlasmaCore.Dialog`s driven from
-    `CompactRepresentation.qml` rather than inlined into it. The goal:
-    if option (b) doesn't feel right in practice later, swapping back
-    to an in-flow capped-height list stays a targeted change to this
-    one component, not a rework of 7.4.0-7.6.0's sections built on top
-    of it — nothing downstream should end up depending on the amp list
-    being an overlay specifically, only on the amp header section's
-    own final height being stable, which is true either way.
-  - Apply finding 3 (pin `wrapMode: Text.NoWrap` explicitly instead of
-    relying on the current implicit no-wrap-because-nothing-wraps-yet
-    safety) to the amp header row, which stays in `mainColumn`. Apply
-    findings 5 ("no amps discovered" label), 6 (divider), and 7
-    (`Repeater`-over-`knownAmps` height) inside the new overlay
-    component per the option-(b) shape (e.g. the divider becomes part
-    of the overlay's own presentation rather than a `mainColumn`
-    sibling, since there's no adjacent in-flow content to divide from
-    anymore — confirm the mockup's intent for this rather than
-    guessing).
-  - Verify: run 7.2.0's harness against amp count 0/1/2+ and
-    expanded/collapsed. Confirm `mainColumn`'s own height (and
-    everything below it) is completely unaffected by amp count or
-    expand/collapse state — the actual guarantee option (b) is being
-    chosen for — plus the overlay's own positioning/dismiss behavior
-    (anchored correctly off the amp header, closes appropriately)
-    separately from `mainColumn`'s stability.
+- [x] **Phase 7.3.0 — Amp header + amp list section.** Depends on 7.2.0.
+      First real-content section of the FlyoutPopup rebuild. §4 point 4
+      option (b) implemented: the amp list is pulled out of in-flow
+      mainColumn into a self-contained overlay, so amp count and
+      expand/collapse cannot move anything below the header. Flag committed
+      `false` (off), matching the repo convention that the spike flag is
+      flipped to `true` only locally to test (see main.qml:83's own
+      comment); it was `true` on-disk during the 2026-09-03 session for the
+      user's live confirmation below, then set back to `false` for the
+      commit. That session also diagnosed the AppletPopup size-key
+      collision, which had truncated the *old* flyout while the flag was
+      off - popup size keys cleared as the fix, and the harness clears them
+      on each run's teardown.
+  - **New components**: `FlyoutContent.qml` (successor to
+    FullRepresentation.qml's root - header-subset D-Bus mirror, background
+    tint, settings gear, mainColumn, the `ampListOpen` UI-state hook, and
+    the `popupVisible`-driven hide reset); `AmpHeader.qml` (in-flow header,
+    finding 3 applied - every Label `wrapMode: Text.NoWrap` +
+    `maximumLineCount: 1`; height pinned to a measured literal, 46 row + 26
+    pad = 72, every child `Qt.AlignVCenter`, no `AlignBaseline`; owns its
+    own bottom divider); `AmpListOverlay.qml` (a QtQuick.Controls Popup, not
+    a second Dialog - PC3 ComboBox precedent - anchored flush under the
+    header, findings 4/5/6/7: real ScrollView+ScrollBar instead of the old
+    silent clip-at-220, "no amps" label, the divider as the overlay's own
+    bottom edge, the Repeater height all contained). `FlyoutPopup.qml` hosts
+    `FlyoutContent` and now sizes the popup to its implicit size (was the
+    spike's hardcoded gridUnit*18 x gridUnit*10).
+  - **Divider decided from the mockup, not guessed** (task item 4):
+    `devialet_tray_boot_state_mockup.html` - `.amp-header{border-bottom}`
+    is the header's own edge (always on, in `AmpHeader`);
+    `.amp-list.open{border-bottom-color:var(--divider)}` is the list's own
+    edge (only while open), so it became the overlay's opaque background's
+    1px bottom border. Neither divider "separates" adjacent content, so
+    neither needs an in-flow mainColumn sibling.
+  - **Self-containment** (task item 2): the overlay crosses its boundary
+    only via inputs `theme`/`knownAmps`/`ampIp` and outputs `closed`
+    (Popup's own) + `ampChosen(ip)`; reverting option (b) to an in-flow
+    list is this file + one line in FlyoutContent. State sync is
+    binding-free (a Popup's `visible` must never be bound - closePolicy
+    calls close() imperatively): `ampListOpen` is a plain bool with four
+    imperative writers (header toggle, overlay `closed`, flyout-hide reset,
+    harness UiState) and one consumer (`onAmpListOpenChanged` -> open()/
+    close()); re-entrancy terminates because close() on a closed Popup
+    emits nothing.
+  - **Harness extended**: `LayoutProbe.qml` now walks `Overlay.overlay`
+    (Popup content is reparented there, path prefix `overlay`), logs a
+    rotation-invariant window-space **center** (`wcx`/`wcy`) alongside the
+    origin corner, and records the flyout window's `active` flag;
+    `analyze.py` diffs on the center (the corner is a false positive on a
+    rotated item - the caret's 180deg flip) and warns on any state whose
+    popup is not visible+active. `expected-7.3.0.json` allowlists overlay-
+    subtree keys (matched by walk path, since those items carry
+    objectNames). Two real harness bugs found and fixed by 7.3.0's own
+    first run: the allowlist matched key only, missing objectName-keyed
+    overlay items (now matches path too); and the caret's rotated origin
+    read as a 7x13px move (now center-based).
+  - **Verified live (Plasma 6.7.4, Wayland/KWin, 2x), flag on, harness
+    driving via D-Bus (no input automation):**
+    - `run --vary amp,list` (14 states, 0known/1auto-short/1auto-long/
+      1none/2none/2sel-short/2sel-long x closed/open) + control:
+      **exit 0, zero unexpected moves, zero warnings, a single popup-
+      geometry row** - the master-finding guarantee: `mainColumn`, the
+      header, `sectionsPlaceholder` and `settingsTrigger` are pixel-
+      identical across every amp count and both list states; the 772
+      "allowed" moves are all overlay-subtree (the overlay resizing with
+      amp count, rows appearing), state-dependent by design.
+    - Header height a constant **72** across all amp states (the pinned
+      literal matches the real layout exactly).
+    - Settle floor: `--vary amp,list` at 600 vs `--settle-ms 1200` →
+      `harness.py compare` **identical coordinates**; layout lands by
+      600 ms. `--set smoke` exit 0.
+    - **No second window** (task item 3, verified not inferred): the
+      in-window Popup leaves the flyout window `visible`+`active` in every
+      `list=open` state (a second native window taking activation would
+      flip `active` false and hideOnWindowDeactivate would close the
+      flyout); the `QWindow::setWindowState does not accept
+      Qt::WindowActive` warning stayed **absent** across the whole
+      session; zero QML errors from the new files.
+    - Eyeballed (standalone fakeamp, keys cleared so the popup takes its
+      content-driven size): popup 316x357 window / 300x342 mainItem;
+      header (copper dot, DEVIALET eyebrow, model name, ip · Connected,
+      gear, open caret) and overlay (None row italic + outline dot, inner
+      divider, selected amp copper + check, second amp "· name
+      unresolved") render per the mockup; overlay floats over the
+      still-empty placeholder region.
+  - **Physical-click behaviours - user-confirmed live 2026-09-03** (these
+    can't be driven by the harness, which has no input automation, so they
+    were left for the user's own click, same as every prior phase): the
+    real dismiss *gestures* both work - **Escape closes the flyout**, and
+    **a click outside the flyout closes it** (`closePolicy: CloseOnEscape |
+    CloseOnPressOutsideParent`); and **the amp list resets to closed when
+    the flyout is closed with the list open and then reopened** (the
+    `popupVisible`-driven `ampListOpen = false` hide reset) - the user
+    explicitly confirmed this last is the desired behaviour. The
+    `mainItem`->content focus relay fires only on a real window-activating
+    click (not the harness's programmatic `visible=true`); no focus warning
+    occurs either way. User verdict: "I don't see any reason to not move
+    ahead with this" - 7.3.0 accepted, proceed to 7.4.0.
+  - **`sectionsPlaceholder`**: a 270px spacer standing in for
+    7.4.0-7.6.0's volume/action/source/footer, so the popup has a
+    realistic ~342px content height and the overlay isn't clipped. An
+    estimate, not a measurement of the old flyout; each later phase
+    shrinks it and it is gone by 7.6.0.
+  - **Note for whoever commits**: the Phase 7.2.0 harness python files
+    were `git add`ed for review, which also staged
+    `tools/flyout-harness/__pycache__/*.pyc` - worth a `git rm --cached`
+    + a `__pycache__/` gitignore entry before committing.
 
 - [ ] **Phase 7.4.0 — Volume block: dB/unit readout, source chip,
       slider.** Depends on 7.3.0 verified solid — this section sits

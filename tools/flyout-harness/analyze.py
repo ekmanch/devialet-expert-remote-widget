@@ -37,7 +37,12 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scenarios  # noqa: E402
 
-GEOM = ("wx", "wy", "w", "h")
+# Move test diffs on the window-space CENTER (wcx/wcy), not the (0,0)
+# corner: a rotated item (the amp caret's 180deg flip) maps its origin
+# corner to the opposite corner while its layout box is unmoved - the
+# corner is a false positive, the center is rotation-invariant and still
+# tracks a real translation 1:1. wx/wy stay in the dump for debugging.
+GEOM = ("wcx", "wcy", "w", "h")
 MAX_BANDS = 12
 
 
@@ -63,22 +68,23 @@ def load_coords(run_dir, cid):
 
 
 def geom_delta(a, b):
-    return {k: b[k] - a[k] for k in GEOM if a[k] != b[k]}
+    # Only keys present in both records (a pre-center run lacks wcx/wcy).
+    return {k: b[k] - a[k] for k in GEOM if k in a and k in b and a[k] != b[k]}
 
 
 def compare_items(ia, ib):
     out = []
     for key in sorted(set(ia) | set(ib)):
         if key not in ia:
-            out.append({"key": key, "kind": "only_in_b", "cls": ib[key]["cls"]})
+            out.append({"key": key, "kind": "only_in_b", "cls": ib[key]["cls"], "path": ib[key].get("path", key)})
         elif key not in ib:
-            out.append({"key": key, "kind": "only_in_a", "cls": ia[key]["cls"]})
+            out.append({"key": key, "kind": "only_in_a", "cls": ia[key]["cls"], "path": ia[key].get("path", key)})
         else:
             d = geom_delta(ia[key], ib[key])
             if d:
                 out.append({
-                    "key": key, "kind": "moved", "cls": ia[key]["cls"],
-                    "dx": d.get("wx", 0.0), "dy": d.get("wy", 0.0), "dw": d.get("w", 0.0), "dh": d.get("h", 0.0),
+                    "key": key, "kind": "moved", "cls": ia[key]["cls"], "path": ia[key].get("path", key),
+                    "dx": d.get("wcx", 0.0), "dy": d.get("wcy", 0.0), "dw": d.get("w", 0.0), "dh": d.get("h", 0.0),
                     "textA": ia[key].get("text"), "textB": ib[key].get("text"),
                     "visA": ia[key]["vis"], "visB": ib[key]["vis"],
                 })
@@ -129,9 +135,9 @@ def load_expected(path):
     return [(re.compile(r["key"]), r.get("dim", "*"), r.get("note", "")) for r in rules]
 
 
-def is_expected(rules, key, dim):
+def is_expected(rules, key, dim, path=None):
     for rx, rdim, _ in rules:
-        if rx.search(key) and (rdim == "*" or rdim == dim):
+        if (rx.search(key) or (path and rx.search(path))) and (rdim == "*" or rdim == dim):
             return True
     return False
 
@@ -173,6 +179,12 @@ def run(run_dir, expected_path=None, write=True):
             warn(f"{cid}: probe logged {c['end']['count']} items but {len(c['items'])} were parsed (journald drop?)")
         for w in c.get("begin", {}).get("uiWarnings", []) or []:
             warn(f"{cid}: {w}")
+        # Phase 7.3.0: the overlay-is-not-a-second-window check, free on
+        # every state - the in-window Popup must leave the flyout window
+        # itself visible and active. `active` is absent in pre-7.3.0 runs.
+        win = c.get("begin", {}).get("win", {})
+        if "active" in win and not (win.get("visible") and win.get("active")):
+            warn(f"{cid}: flyout window not visible+active (visible={win.get('visible')}, active={win.get('active')}) - a second window may have taken activation")
 
     # ---- 1. control identity ------------------------------------------
     control = []
@@ -224,7 +236,7 @@ def run(run_dir, expected_path=None, write=True):
         if a in coords and b in coords:
             for mv in compare_items(coords[a]["by_key"], coords[b]["by_key"]):
                 rec = dict(mv, a=a, b=b, dim=dim)
-                (allowed if is_expected(rules, mv["key"], dim) else unexpected).append(rec)
+                (allowed if is_expected(rules, mv["key"], dim, mv.get("path")) else unexpected).append(rec)
         ra, rb = rgb(a), rgb(b)
         if ra is None or rb is None:
             continue
