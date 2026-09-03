@@ -742,3 +742,21 @@ entirely (see TODO.md). Do not re-attempt without first confirming a
 fundamentally different Plasma API is available (e.g. a future
 `PlasmaWindow::BackgroundHints` value, or migration back to a window
 class that does expose `NoBackground`).
+
+**Update (Phase 7.9.0+, follow-up correction)**: the conclusion above is
+still accurate for what it actually tested - the *shell-managed* popup
+(`CompactApplet.qml`'s own `AppletPopup`), which has no `NoBackground`
+option. It was never a conclusion that a *hand-built* popup couldn't do
+better - escaping exactly that limitation was the stated reason Phase 7.x's
+flyout rebuild exists at all, and this section's own last sentence already
+named the escape hatch ("migration back to a window class that does expose
+`NoBackground`"). Phase 7.0.0-7.8.0 then built a hand-rolled popup, but
+chose `PlasmaCore.AppletPopup` for it - the same `PlasmaWindow`-family class
+already confirmed above to have no `NoBackground` value, reproducing the
+identical limitation this section describes. That choice was made on
+dismiss/focus/positioning-risk grounds without re-checking it against the
+transparency goal; see TODO.md's Phase 7.0.0 entry for the correction and
+Phase 7.9.0+ for the fix in progress (`PlasmaCore.Dialog`, which - unlike
+`PlasmaWindow` - has a real, code-enforced `NoBackground` value, confirmed
+directly in `dialog.cpp`, and is what `VolumeHoverTooltip.qml`/
+`VolumeToast.qml` already use successfully).

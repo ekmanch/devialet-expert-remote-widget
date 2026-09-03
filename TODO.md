@@ -2763,6 +2763,27 @@ architecture decisions; this file is just sequencing and status.
     (Phase 7.3.0 onward). Flag left at `false` (off) on completion; the
     real, shell-managed flyout was left completely untouched and fully
     functional throughout.
+  - **Correction, added after Phase 7.8.0's cutover**: this "green
+    light" assessment — and the investigation document's own §6
+    recommendation to use `PlasmaCore.AppletPopup` "not the older
+    Dialog" — never checked the choice against the rebuild's own stated
+    goal. The investigation document's own Context section states the
+    goal explicitly: rebuilding as a custom `PlasmaCore.Dialog` "would
+    open up real background/transparency control on the flyout, the
+    same way it already did for `VolumeToast.qml` and
+    `VolumeHoverTooltip.qml`." §6 instead recommended `AppletPopup`
+    specifically because "it's the exact class already producing
+    today's flyout" — without noticing that being the exact class
+    already producing today's flyout is exactly *why* today's flyout
+    has no transparency: `PlasmaWindow`'s `BackgroundHints` enum
+    (confirmed in `plasmawindow.h`, and already documented
+    independently in CLAUDE.md's own "real transparency investigated"
+    note) has no `NoBackground` value at all. Phases 7.0.0-7.8.0 are
+    functionally solid and thoroughly verified (see each phase's own
+    entry) but do not achieve real transparency — caught by the project
+    owner comparing a live screenshot against the tooltip/OSD's
+    already-transparent look, after 7.8.0's cutover. See Phase 7.9.0+
+    below for the fix.
 
 - [x] **Phase 7.1.0 — Promote the spike into the real flyout popup
       shell.** Depends on 7.0.0. Still infrastructure-only — no real
@@ -3825,13 +3846,146 @@ architecture decisions; this file is just sequencing and status.
     sequence that triggered the original bug.
   - **Phase 7.8.0 Step A now confirmed solid over real use** - the
     user's own soak-test explicitly given, escape-dismiss bug found and
-    fixed within it, re-verified. Proceeding to Phase 7.9.0 is
-    unblocked.
+    fixed within it, re-verified. Proceeding to the next phase is
+    unblocked — but see the correction on Phase 7.0.0's own entry above:
+    what comes next is no longer cleanup. Cleanup is renumbered
+    **Phase 7.13.0** and moved to the end of the sequence below; the new
+    **Phase 7.9.0** is the transparency-goal fix this whole rebuild was
+    originally for.
 
 ## Up next
 
-- [ ] **Phase 7.9.0 — Cleanup.** Depends on 7.8.0 Step A verified solid
-      over real use, not just the scripted checks.
+- [ ] **Phase 7.9.0 — Dialog + Overlay.overlay spike (investigation,
+      gates 7.10.0).** Depends on 7.8.0. Corrects the mistake documented
+      on Phase 7.0.0's own entry above: the rebuild's whole stated
+      reason for existing was real desktop transparency, matching
+      `VolumeHoverTooltip.qml`/`VolumeToast.qml`'s already-working look
+      — `PlasmaCore.AppletPopup` never delivers that (`PlasmaWindow`'s
+      `BackgroundHints` has no `NoBackground` value, confirmed in
+      `plasmawindow.h`). This phase is not a repeat of Phase 7.0.0's own
+      spike — that proved `AppletPopup` mechanics; this proves the
+      specific piece that's genuinely unproven for `PlasmaCore.Dialog`:
+      a real `Overlay.overlay`-hosted `Popup`/`ComboBox` (the shape
+      `AmpListOverlay.qml`/`SourceSelector.qml` already use) inside a
+      bare `Dialog` with `backgroundHints: NoBackground`.
+  - Build a throwaway spike (same spirit as the removed
+    `AppletPopupSpike.qml`) — a bare `PlasmaCore.Dialog`
+    (`backgroundHints: NoBackground`, `type: Dialog.AppletPopup` —
+    confirmed to exist as a literal `WindowType` enum member in
+    `dialog.h`, unlike either of `VolumeHoverTooltip.qml`/
+    `VolumeToast.qml`'s own non-interactive `Tooltip`/`OnScreenDisplay`
+    types — `visualParent`/`location: Plasmoid.location` positioning,
+    `hideOnWindowDeactivate`) hosting a minimal
+    `MouseEventListener{focus:true}` plus a real
+    `QtQuick.Controls.ComboBox` or `Popup`, no other real content.
+  - Verify live: does it render with real transparency? Does the
+    Popup/ComboBox content actually reparent into and render from
+    `Overlay.overlay` the same way `LayoutProbe.qml` already confirms
+    for `AppletPopup`? Does dismiss-on-click-outside correctly
+    distinguish "clicked into the open ComboBox popup" from "clicked
+    elsewhere" (the investigation document already read
+    `Dialog::focusOutEvent()`, dialog.cpp 1254-1283, and found it
+    handles exactly this case — confirm it live, not just from source)?
+    Does Escape work? Does keyboard focus reach real interactive
+    content? Does edge-aware positioning work correctly at a real
+    panel-icon anchor — specifically checking whether it reproduces
+    `VolumeHoverTooltip.qml`'s own known off-screen-clip bug (still
+    open, see the Bugs section below) or not, since that's the one
+    existing real-world data point for this exact positioning
+    mechanism (`visualParent` + `location`).
+  - If genuinely broken (not just a rough edge) — stop and report back
+    before 7.10.0, same as Phase 7.0.0's own go/no-go gate.
+
+- [ ] **Phase 7.10.0 — Rebuild FlyoutPopup.qml on PlasmaCore.Dialog.**
+      Depends on 7.9.0's spike coming back clean.
+  - Rebuild `FlyoutPopup.qml` around `PlasmaCore.Dialog`
+    (`backgroundHints: NoBackground`), reusing `FlyoutContent.qml` and
+    every section component (`AmpHeader`, `AmpListOverlay`,
+    `VolumeBlock`, `ActionRow`, `SourceSelector`, `Footer`) as-is or
+    with minimal changes — the section components themselves need no
+    changes; only the host window class and `FlyoutPopup.qml`'s own
+    `AppletPopup`-specific properties change:
+    `popupDirection`→`location` (Dialog has no `popupDirection`; use
+    `location: Plasmoid.location` directly, same type
+    `Plasma::Types::Location` on both), `removeBorderStrategy`→removed
+    (no Dialog equivalent — likely moot once `NoBackground` removes the
+    drawn frame border there'd be nothing left to "remove borders"
+    from), `floating` if used (type mismatch: `AppletPopup`'s is
+    `bool`, `Dialog`'s is `int` "by how much... floating" — not
+    currently set by `FlyoutPopup.qml`, confirm still unneeded).
+    `visualParent`, `hideOnWindowDeactivate`, `mainItem`,
+    `appletInterface` keep the same names/types on both classes.
+    `appletInterface`'s tie-in to KConfig `popupWidth`/`popupHeight`
+    persistence is marked `// TODO: plasmoidItem?` in `dialog.h` itself
+    — verify this still persists correctly, don't assume identical
+    behavior just because the property exists.
+  - Re-verify the Phase 7.7.0 resize-pin fresh under `Dialog` (own
+    three-pronged check: harness geometry, live KWin-script
+    `minSize`/`maxSize`/`resizeable` query, physical drag) — not
+    assumed to carry over. The pin's actual C++ implementation
+    (`LayoutChangedProxy`) is a private `AppletPopup`-only member
+    (`appletpopup.h`); `dialog.h`'s own `DialogPrivate` separately
+    declares parallel slots (`updateMinimumWidth()`,
+    `updateMaximumWidth()`, `updateMinimumHeight()`,
+    `updateMaximumHeight()`, `updateLayoutParameters()`,
+    `slotMainItemSizeChanged()`) strongly suggesting the same
+    conceptual mechanism exists natively on `Dialog` — but via
+    different private code, so re-verify, don't assume.
+  - `Keys.onEscapePressed`, the Phase 7.8.0 window-scoped
+    `Shortcut{Escape}` fix, the `MouseEventListener{focus:true}`/
+    `onActiveFocusChanged` relay, `requestActivate()`, and the
+    `visible: false` initial-value workaround are generic QML/`QWindow`
+    API unaffected by the base class — port verbatim.
+    `CompactRepresentation.qml` needs no changes at all: `Dialog`
+    exposes the identical `Q_PROPERTY(bool visible READ isVisible
+    WRITE setVisible NOTIFY visibleChangedProxy)` contract
+    `flyoutPopup.visible = !flyoutPopup.visible` already depends on.
+  - Do not touch `AmpListOverlay.qml`, `SourceSelector.qml`, or any
+    other section component's own content — this phase is the host
+    window only.
+
+- [ ] **Phase 7.11.0 — Full re-verification pass.** Depends on 7.10.0.
+  - Run the existing Phase 7.2.0 harness's full suite against the
+    `Dialog`-hosted flyout. `LayoutProbe.qml`'s own `Overlay.overlay`
+    walk (`dump()`'s `const ov = Overlay.overlay; if (ov) {
+    session.walk(ov, "overlay"); }`) may need adjusting depending on
+    7.9.0's findings — check this explicitly, don't assume it
+    transfers unchanged.
+  - Confirm real transparency renders correctly (the actual goal)
+    alongside the existing coordinate/pixel-diff checks — a screenshot
+    comparison against `VolumeHoverTooltip.qml`/`VolumeToast.qml`'s
+    look, matching how the mismatch was originally caught.
+  - Same discipline as Phase 7.7.0: a genuinely clean full pass, not
+    provisional, before moving on. Real soak period under normal use
+    again, matching Phase 7.8.0's own precedent, since this changes the
+    flyout's underlying window class.
+
+- [ ] **Phase 7.12.0 — Darkly corner-radius mismatch fix.** Depends on
+      7.11.0 verified solid. Sequenced after the Dialog rebuild
+      deliberately (confirmed with the project owner, not assumed):
+      `backgroundHints: NoBackground` clears the real Darkly frame
+      SVG's own image path entirely (`dialogBackground->setImagePath
+      (QString())`, confirmed in `dialog.cpp`), which is the *other*
+      half of the corner-seam bug's root cause per CLAUDE.md's own
+      writeup (two different corner curves layered — our tint
+      Rectangle's true circular arc vs Darkly's real frame SVG's cubic-
+      Bezier corner underneath it). Once that real frame SVG is gone
+      entirely, there may be nothing left underneath to seam against —
+      check whether the seam still exists at all under real
+      `NoBackground` before designing a fix, rather than fixing a
+      problem that may have disappeared on its own.
+  - Own investigation, not resolved here: the project owner wants this
+    solved (not just accepted) despite planning to keep using Darkly,
+    likely via a setting that bypasses Darkly's specific corner
+    adaptation and draws plain/default corners instead — exact
+    mechanism (a config toggle, a different corner-drawing approach,
+    etc.) is an open question for that phase's own investigation.
+
+- [ ] **Phase 7.13.0 — Cleanup.** Depends on 7.12.0 — cleanup only
+      happens once the flyout that's actually being kept is the one
+      that's done (renamed/moved from the original Phase 7.9.0, content
+      unchanged; see the correction on Phase 7.0.0's entry above for
+      why cleanup no longer directly follows 7.8.0).
   - Delete the spike scaffolding: whatever's left of
     `AppletPopupSpike.qml`'s throwaway pieces and the
     `appletPopupSpikeEnabled` flag, no longer referenced by anything.
