@@ -70,16 +70,23 @@ PlasmoidItem {
 
     // Phase 7.0.0/7.1.0 rebuild toggle (spike/flyout-appletpopup-rebuild
     // branch, not a real feature, do not wire to config.qml/main.xml).
-    // When true, CompactRepresentation.qml's left-click handler opens
-    // FlyoutPopup.qml (a real PlasmaCore.AppletPopup, still placeholder
-    // content as of Phase 7.1.0 - see TODO.md) instead of toggling
-    // `expanded`/the shell-managed flyout. fullRepresentation stays bound
-    // either way below - the shell's own AppletPopup wrapping it just
-    // never becomes visible while this is true, since nothing sets
-    // `expanded = true` in that branch. Default false keeps the existing,
-    // fully-working compact->full path completely untouched; flip this
-    // one line to test the rebuild instead. See TODO.md's Phase 7.x.x
-    // entries and the investigation document they cite.
+    // Originally: when true, CompactRepresentation.qml's left-click
+    // handler opened FlyoutPopup.qml instead of toggling `expanded`/the
+    // shell-managed flyout, letting the rebuild be tested side-by-side
+    // with the still-live original by flipping one line.
+    //
+    // Phase 7.8.0 Step A (cutover): CompactRepresentation.qml's onClicked
+    // no longer reads this property at all - the new flyout is now the
+    // only thing left-click opens, unconditionally, regardless of this
+    // flag's value. Left in place, still `false`, still forwarded below,
+    // purely so this diff (and the eventual deletion diff) stay small and
+    // reviewable in isolation - see TODO.md's Phase 7.8.0/7.9.0 entries.
+    // `fullRepresentation` below is now genuinely dead code (nothing sets
+    // `expanded = true` via the left-click path anymore - see
+    // CompactRepresentation.qml's own onClicked comment for the one
+    // remaining live path, the shell's auto-generated toggle shortcut),
+    // kept only until Phase 7.9.0 deletes it alongside
+    // `FullRepresentation.qml` and this flag.
     readonly property bool appletPopupSpikeEnabled: false
 
     compactRepresentation: CompactRepresentation {

@@ -3720,22 +3720,115 @@ architecture decisions; this file is just sequencing and status.
     plasmoid reinstalled/`plasmashell --replace` afterward, matching
     every prior phase's convention.
 
-- [ ] **Phase 7.8.0 — Cutover.** Depends on 7.7.0 passing clean. Two
+- [x] **Phase 7.8.0 — Cutover.** Depends on 7.7.0 passing clean. Two
       sequenced steps, matching Phase 5.0.2's "cut over, then delete"
       discipline — not simultaneous, each its own commit.
-  - **Step A — make the new build the real path.** Remove
-    `CompactRepresentation.qml`'s dependency on
-    `appletPopupSpikeEnabled` for choosing which popup opens — the new
-    flyout becomes the only thing left-click ever opens. Leave
-    `main.qml`'s `fullRepresentation:` binding, the old
-    `FullRepresentation.qml`, `AppletPopupSpike.qml`/`FlyoutPopup.qml`'s
-    spike-era scaffolding, and the `appletPopupSpikeEnabled` flag
-    itself all in place but unused — don't delete anything yet, so
-    this diff stays reviewable/revertible in isolation from 7.9.0.
-  - Verify Step A live for a real soak period (normal day-to-day use,
-    not just the scripted state cross product) before moving to
-    7.9.0 — this is the first time the new flyout is the *only* path a
-    real user actually exercises.
+  - [x] **Step A — make the new build the real path.**
+    `CompactRepresentation.qml`'s `onClicked` no longer reads
+    `appletPopupSpikeEnabled` at all - `flyoutPopup.visible =
+    !flyoutPopup.visible` unconditionally, the old `if
+    (root.appletPopupSpikeEnabled) {...} else {root.plasmoidItem.
+    expanded = ...}` branch is gone from the active path. `main.qml`'s
+    `fullRepresentation:` binding, `FullRepresentation.qml`, and the
+    `appletPopupSpikeEnabled` flag/property (both `main.qml`'s and
+    `CompactRepresentation.qml`'s own copy, still forwarded) are all
+    left in place but genuinely unused now - untouched, per the task's
+    explicit "reviewable/revertible in isolation from 7.9.0" scope.
+  - **Real regression caught and fixed while doing the cutover itself,
+    not left for later**: the hover-tooltip suppress-while-flyout-open
+    logic (Phase 4.5.3 item 2/4's fix) was keyed entirely off
+    `root.plasmoidItem.expanded`, which nothing sets anymore once the
+    left-click path stops touching it - left as-is, the tooltip would
+    have silently started appearing over the open flyout again the
+    moment this step landed, undoing that fix without anyone changing
+    `VolumeHoverTooltip.qml` itself. Fixed by adding the equivalent
+    `onVisibleChanged` suppression directly on `flyoutPopup` (mirroring
+    the existing `Connections{target: root.plasmoidItem}` block's own
+    shape) and updating `onEntered`/`hoverShowTimer.onTriggered`'s
+    guards to check `flyoutPopup.visible` too. The old `expanded`-based
+    checks were kept alongside the new ones, not replaced outright -
+    `expanded` is still a real, live property until 7.9.0 deletes
+    `fullRepresentation:` (the shell's own auto-generated per-applet
+    "toggle" global keyboard shortcut is a second, independent path
+    that can still flip it, opening the *old* `FullRepresentation.qml`
+    flyout - untouched by this step, deliberately, since disabling
+    global shortcuts isn't in this step's scope and that shortcut
+    predates this rebuild entirely). `main.qml`'s own comment on the
+    flag corrected to describe its now-vestigial status accurately,
+    without touching the binding itself.
+  - **Smoke-level verification only, per the task's own explicit
+    scope** (the full 438-state cross product already ran clean at the
+    end of 7.7.0 and re-running it here would mostly re-prove content
+    already proven, not the cutover itself): confirmed the harness's
+    own `run --set smoke` passes clean (**exit 0**,
+    `control_unstable=False`, `size_mismatch=False`,
+    `unexpected_moves=0`) against the now-permanently-unconditional
+    path, with **no flag toggling at all** - `appletPopupSpikeEnabled`
+    stayed `false` (its permanent value from here on) for the entire
+    run, and `LayoutProbe`/`FlyoutPopup` still worked correctly,
+    confirming the harness's own precondition #1 (previously "flip the
+    flag, reload, revert after") is genuinely obsolete now - updated
+    `tools/flyout-harness/README.md` to say so. Eyeballed the smoke
+    run's own screenshot: renders correctly, matching every prior
+    phase.
+  - Popup size keys confirmed restored to empty after the smoke run via
+    `kreadconfig6`; plasmoid reinstalled/`plasmashell --replace` after
+    the QML changes, matching every prior phase's convention. Real
+    daemon confirmed active afterward.
+  - **Real soak period, done by the user, real day-to-day use** - volume
+    (all the different ways it's adjustable), mute, power cycle, source
+    switch, amp pick. Explicit callout: "the new amp list is way nicer
+    than the old accordion-style list" (Phase 7.3.0's overlay-instead-
+    of-in-flow design, §4 point 4 option (b)). Click-outside dismiss and
+    the resize pin re-confirmed live too (the pin: "I have confirmed
+    again that I cannot resize the flyout").
+  - **Real bug found during the soak, not by the scripted checks**:
+    Escape did not dismiss the flyout. Root-caused (not fully proven
+    live - no input automation exists in this session to directly
+    confirm the exact focus state) from an already-established fact in
+    this project's own code: `LayoutProbe.qml`'s header comment
+    documents that a `QtQuick.Controls` `Popup` - `AmpListOverlay`, and
+    `SourceSelector`'s `ComboBox` dropdown - reparents its content into
+    the window's `Overlay.overlay` when open, a *sibling* of `mainItem`
+    in the window's item tree, not a descendant of it.
+    `Keys.onEscapePressed` (on `flyoutMainItem`) relies on the focused
+    item's own `parent`-chain bubbling reaching back up to it; if focus
+    is left on something under that reparented subtree (or ends up
+    null) after closing one of those popups, the bubbling chain never
+    passes through `flyoutMainItem` and its handler never fires -
+    consistent with the user's own report ("everything else seems
+    fine" - the ComboBox/amp-list interactions themselves worked
+    correctly, only Escape *afterward* was affected) and with why the
+    scripted harness never caught it (no input automation, so the
+    focus-chain state this depends on was never exercised the way real
+    clicking does). Compared directly against
+    `/usr/share/plasma/shells/org.kde.plasma.desktop/contents/applet/
+    CompactApplet.qml` (the real shell reference this file's dismiss/
+    focus code was always copied from) - structurally identical
+    (`MouseEventListener{focus:true}`/`Keys.onEscapePressed`/
+    `onActiveFocusChanged` relay), so this isn't a divergence from the
+    real pattern, just a pre-existing fragility in that pattern once a
+    Popup-reparenting control is added to the content - something
+    `FullRepresentation.qml`'s own ComboBox could equally have hit, just
+    apparently never exercised this specific way before.
+  - **Fix**: a window-scoped `Shortcut` (`context: Qt.WindowShortcut`)
+    added in `FlyoutPopup.qml` alongside the existing
+    `Keys.onEscapePressed` (kept, not replaced - still correct for the
+    base case). A `Shortcut` fires independent of whichever item
+    currently holds focus, sidestepping the bubbling-chain fragility
+    entirely rather than patching the exact focus path.
+  - **Verified live by the user, multiple times, specifically targeting
+    the failure scenario**: Escape now dismisses the flyout reliably -
+    "even when the amp list is expanded or the source list is
+    expanded," and "definitely works consistently even after I have
+    selected a different amp / source" - exactly the interaction
+    sequence that triggered the original bug.
+  - **Phase 7.8.0 Step A now confirmed solid over real use** - the
+    user's own soak-test explicitly given, escape-dismiss bug found and
+    fixed within it, re-verified. Proceeding to Phase 7.9.0 is
+    unblocked.
+
+## Up next
 
 - [ ] **Phase 7.9.0 — Cleanup.** Depends on 7.8.0 Step A verified solid
       over real use, not just the scripted checks.

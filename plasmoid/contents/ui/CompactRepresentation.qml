@@ -45,6 +45,11 @@ MouseArea {
     // file's own comment on this property. Not `required`: defaults to
     // false so nothing else instantiating this file needs to know about
     // a throwaway spike.
+    // Phase 7.8.0 Step A (cutover): no longer read anywhere in this
+    // file's own active code path (onClicked below now unconditionally
+    // opens flyoutPopup) - left in place, still forwarded from main.qml,
+    // per that phase's "leave the flag itself in place but unused until
+    // 7.9.0" discipline. Do not wire this back into onClicked.
     property bool appletPopupSpikeEnabled: false
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
@@ -138,15 +143,19 @@ MouseArea {
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton
     onClicked: mouse => {
         if (mouse.button === Qt.LeftButton) {
-            // Phase 7.0.0 spike branch - see main.qml's
-            // appletPopupSpikeEnabled comment. Left completely
-            // unreachable, with the exact prior behavior below fully
-            // intact, when the flag is false (the default).
-            if (root.appletPopupSpikeEnabled) {
-                flyoutPopup.visible = !flyoutPopup.visible;
-            } else {
-                root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
-            }
+            // Phase 7.8.0 Step A (cutover): the new flyout
+            // (FlyoutPopup/FlyoutContent, everything built in
+            // 7.1.0-7.7.0) is now the only thing left-click opens - for
+            // real, unconditionally. The old `appletPopupSpikeEnabled`
+            // branch and its `root.plasmoidItem.expanded = ...` path are
+            // gone from this active code; nothing left in this file sets
+            // `expanded` anymore. main.qml's `fullRepresentation:`
+            // binding, `FullRepresentation.qml`, and the
+            // `appletPopupSpikeEnabled` flag/property itself are all left
+            // in place but unused - Phase 7.9.0's job to delete, once
+            // this cutover has been soak-tested solid over real use (see
+            // TODO.md's Phase 7.8.0 entry).
+            flyoutPopup.visible = !flyoutPopup.visible;
         } else if (mouse.button === Qt.MiddleButton) {
             root.toggleMute();
         }
@@ -176,7 +185,13 @@ MouseArea {
     // times the mouse re-enters - not just once at the moment it opens.
     onEntered: {
         hoverHideTimer.stop();
-        if (!hoverTooltip.visible && !root.plasmoidItem.expanded) {
+        // Phase 7.8.0 Step A: also reads flyoutPopup.visible now, not
+        // just root.plasmoidItem.expanded - see hoverShowTimer's own
+        // onTriggered comment below for why both are still checked
+        // (expanded is dead for the left-click path specifically, but
+        // still a real, live path to the *old* flyout via the shell's
+        // auto-generated toggle shortcut until Phase 7.9.0).
+        if (!hoverTooltip.visible && !flyoutPopup.visible && !root.plasmoidItem.expanded) {
             hoverShowTimer.restart();
         }
     }
@@ -196,11 +211,19 @@ MouseArea {
         // the Kirigami property rather than reading that KConfig group
         // ourselves, since it's the standard path to the same value.
         interval: Kirigami.Units.toolTipDelay
-        // Re-checked here too, not just in onEntered - expanded could
-        // flip true during the pending delay itself (flyout opened via
-        // some other path while the timer was already running).
+        // Re-checked here too, not just in onEntered - the flyout could
+        // open via some other path (e.g. the shell's own auto-generated
+        // "toggle" keyboard shortcut, still routed to
+        // root.plasmoidItem.expanded/FullRepresentation.qml until Phase
+        // 7.9.0 deletes that path - see this file's onClicked comment)
+        // while the timer was already running. Checks flyoutPopup.visible
+        // AND root.plasmoidItem.expanded (Phase 7.8.0 Step A) - the
+        // latter is dead for the left-click path specifically now, but
+        // still a real, live path to the *old* flyout via that shortcut
+        // until 7.9.0, and showing this hover tooltip on top of either
+        // open flyout would be the same Phase 4.5.3 bug back.
         onTriggered: {
-            if (!root.plasmoidItem.expanded) {
+            if (!flyoutPopup.visible && !root.plasmoidItem.expanded) {
                 hoverTooltip.visible = true;
             }
         }
@@ -215,11 +238,10 @@ MouseArea {
     // (AppletPopupSpike.qml, now removed) into the real flyout popup
     // shell - see FlyoutPopup.qml's own header comment for the real-build
     // deltas (appletInterface, hideOnWindowDeactivate) applied this
-    // phase. Still only ever shown when root.appletPopupSpikeEnabled is
-    // true (main.qml). Always instantiated (cheap, matches how
-    // hoverTooltip/volumeToast below are always-instantiated-but-usually-
-    // hidden too), but never made visible unless the flag flips it via
-    // onClicked above.
+    // phase. Phase 7.8.0 Step A: this is now the *only* thing onClicked
+    // above opens - toggled unconditionally, no flag gating it anymore.
+    // Always instantiated (cheap, matches how hoverTooltip/volumeToast
+    // below are always-instantiated-but-usually-hidden too).
     FlyoutPopup {
         id: flyoutPopup
         flyoutVisualParent: root
@@ -228,6 +250,20 @@ MouseArea {
         // volume section in 7.4.0 (Phase 5's shared pending-state
         // consumer). Same instance CompactRepresentation already holds.
         pendingAmpState: root.pendingAmpState
+
+        // Phase 7.8.0 Step A: the flyout-side equivalent of the
+        // Connections{target: root.plasmoidItem} block below (Phase
+        // 4.5.3 item 4's fix) - this is now the popup that actually
+        // opens on left-click, so it needs the identical hide-the-
+        // tooltip-on-open treatment the old expanded-driven flyout got,
+        // or the tooltip would silently start appearing on top of it.
+        onVisibleChanged: {
+            if (flyoutPopup.visible) {
+                hoverShowTimer.stop();
+                hoverHideTimer.stop();
+                hoverTooltip.visible = false;
+            }
+        }
     }
 
     VolumeHoverTooltip {
@@ -262,10 +298,20 @@ MouseArea {
     // already present (and apparently never fixed) at FullRepresentation.
     // qml:216 - the attached-property wrapper doesn't forward
     // expandedChanged the same way the real PlasmoidItem instance does.
-    // root.plasmoidItem is that real instance (already used directly for
-    // reads/writes elsewhere in this file, e.g. onClicked's
-    // `root.plasmoidItem.expanded = ...`), and connecting to it directly
-    // resolves the signal correctly - confirmed live, no warning.
+    // root.plasmoidItem is that real instance, and connecting to it
+    // directly resolves the signal correctly - confirmed live, no
+    // warning.
+    //
+    // Phase 7.8.0 Step A: nothing in this file's own onClicked sets
+    // `expanded` anymore (see that handler's comment), but this block is
+    // deliberately NOT dead - `expanded` is still a real, live property
+    // the shell can flip via other paths (its own auto-generated
+    // per-applet "toggle" global keyboard shortcut, still wired to
+    // main.qml's `fullRepresentation:` binding / `FullRepresentation.qml`
+    // until Phase 7.9.0 deletes that), so this stays as the equivalent
+    // suppression for *that* path - see the new `onVisibleChanged` on
+    // `flyoutPopup` above for the left-click path's own version of the
+    // same fix.
     Connections {
         target: root.plasmoidItem
         function onExpandedChanged() {

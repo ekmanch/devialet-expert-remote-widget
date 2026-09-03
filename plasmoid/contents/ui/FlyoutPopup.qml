@@ -165,6 +165,44 @@ PlasmaCore.AppletPopup {
 
         Keys.onEscapePressed: flyoutPopup.visible = false
 
+        // Phase 7.8.0 Step A bug fix (found live, real day-to-day use):
+        // the user reported Escape not dismissing the flyout after normal
+        // interaction (adjusting volume, changing source, picking a
+        // different amp) - Keys.onEscapePressed above alone did not
+        // reliably fire. Root cause, reasoned from an already-established
+        // fact in this project's own code (LayoutProbe.qml's header
+        // comment): a QtQuick.Controls Popup - AmpListOverlay, and
+        // SourceSelector's ComboBox dropdown - reparents its content into
+        // the window's Overlay.overlay when open, which is a SIBLING of
+        // mainItem in the window's item tree, not a descendant of it.
+        // Keys.onEscapePressed relies on the focused item's own
+        // `parent`-chain bubbling reaching flyoutMainItem; if keyboard
+        // focus is left on something under that reparented subtree after
+        // closing one of those popups (plausible after picking a source
+        // or an amp - exactly what the user did before hitting the bug),
+        // the bubbling chain no longer passes through flyoutMainItem at
+        // all, so its Keys.onEscapePressed never sees the event. Not
+        // fully reproduced/proven live (no input automation exists in
+        // this session to confirm the exact focus-chain state), but this
+        // is a real, already-documented structural fact about this
+        // popup's own content, not a guess.
+        //
+        // Fix: a window-scoped Shortcut, which fires independent of
+        // whatever item currently holds focus (QQuickShortcut/
+        // Qt.WindowShortcut context ties to the window, not the focus
+        // item's own ancestor chain) - robust against exactly this class
+        // of "focus ended up somewhere the bubbling chain doesn't reach"
+        // problem, unlike Keys.onEscapePressed. Kept Keys.onEscapePressed
+        // above too (harmless, still correct for the base case, matches
+        // CompactApplet.qml's own real-shell pattern) rather than
+        // replacing it - this is a defensive addition, not a swap.
+        Shortcut {
+            sequence: "Escape"
+            context: Qt.WindowShortcut
+            enabled: flyoutPopup.visible
+            onActivated: flyoutPopup.visible = false
+        }
+
         // Phase 7.3.0: relay focus into the real flyout content (the
         // placeholder's TextField is gone). Same MouseEventListener ->
         // content relay CompactApplet.qml uses to hand focus to

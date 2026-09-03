@@ -21,10 +21,15 @@ from inside QML — the same statement the click handler runs.
 
 ## Preconditions
 
-1. `main.qml`: `appletPopupSpikeEnabled: true`, then
-   `kpackagetool6 --type Plasma/Applet --upgrade plasmoid/` and
-   `plasmashell --replace &` (CLAUDE.md's reload workflow). Revert the flag
-   the same way afterwards.
+1. Just the normal reload workflow: `kpackagetool6 --type Plasma/Applet
+   --upgrade plasmoid/` then `plasmashell --replace &` (CLAUDE.md's
+   reload workflow) after any QML change. `main.qml`'s
+   `appletPopupSpikeEnabled` flag no longer needs flipping (Phase 7.8.0
+   Step A cutover) — the new flyout is unconditional now, so `LayoutProbe`
+   is always live behind the harness's own bus name regardless of that
+   flag's value. (Historical: before 7.8.0, this step was "flip
+   `appletPopupSpikeEnabled: true`, reload, revert after" — kept here only
+   as a note in case you're reading this against a pre-cutover checkout.)
 2. Python 3 with PyGObject (`gi`), Pillow and numpy — all present on the
    dev machine via pacman; `spectacle` on PATH.
 3. Keep hands off mouse and keyboard while a run is in progress: a hover
