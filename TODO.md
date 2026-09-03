@@ -3568,40 +3568,157 @@ architecture decisions; this file is just sequencing and status.
     `plasmashell --replace` afterward, matching every prior phase's
     convention.
 
-- [ ] **Phase 7.7.0 — Full-suite verification gate.** Depends on
+- [x] **Phase 7.7.0 — Full-suite verification gate.** Depends on
       7.3.0-7.6.0 all landed. Not a repeat of each section's own local
       check — the complete state cross product from §5, run once
       against the fully assembled flyout end to end (every dimension
       simultaneously, not one at a time), the actual final gate §5
       describes before calling the rebuild done.
-  - Full pixel-diff + coordinate-capture pass across the entire cross
-    product: volume text length × mute × power × source × amp ×
-    amp-list-state, with the same-state noise-baseline control capture.
-  - Any regression found here gets fixed and this phase re-run before
-    moving on — this phase doesn't close until a clean full pass
-    exists, matching Phase 5.0.3's own "provisionally closed pending a
-    real clean pass" discipline.
-  - **Size-pinning protection (confirmed decision, found live during
-    7.1.0)**: `PlasmaCore.AppletPopup` is user-resizable by
-    click-and-drag as a deliberate, built-in feature of the class
-    itself (`appletpopup.h`'s own doc comment: "this class is
-    resizable and can forward any input events received on the margin
-    to the main item") — there is no QML property to switch this off,
-    and this is not something the rebuild introduces: the *existing*,
-    already-shipped flyout has always been wrapped in this same class
-    by the shell (`CompactApplet.qml`'s `dialog`), so it has always
-    been draggable this way, just never noticed. Once this phase has
-    the fully assembled flyout's final, verified-stable implicit
-    size (the entire point of this phase's pixel-diff/coordinate pass
-    above), pin `mainItem`'s `Layout.minimumWidth` ==
-    `Layout.maximumWidth` == its preferred width, and the equivalent
-    for height, to that measured value. With min and max collapsed to
-    the same number the resize handles have no range to drag into —
-    functionally non-resizable, without needing any un-exposed
-    private API. Chosen over a "reset to default size on close"
-    alternative: pinning stops the drag from visibly doing anything at
-    all in the moment, rather than letting it appear to work and then
-    snapping back next open (which reads as a bug, not a feature).
+  - **Prerequisite (task item 1): the harness never actually asserted
+    `h == ih`.** `analyze.py`'s popup-geometry check (§2) only asserted
+    *stability* (one geometry row across every state), which a
+    stale-but-consistent stuck size — exactly the Phase 7.1.0/7.2.0
+    KConfig size-collision class, and exactly what Phase 7.6.0 found by
+    hand via a screenshot missing an element — passes cleanly. Added a
+    direct assertion: per state, `mainItem.w == mainItem.iw` and
+    `mainItem.h == mainItem.ih`, exact equality (matching `geom_delta`'s
+    own no-epsilon convention). Wired into a new exit code (3, between
+    1=control-unstable and 2=unexpected-moves in severity) and a
+    dedicated report table. **Verified the check itself actually
+    catches the bug it's meant to catch**, not just added and trusted:
+    deliberately wrote a stale `popupHeight` via `kwriteconfig6`,
+    restarted plasmashell, ran `--set smoke` — got exit 3 with a correct
+    mismatch table (`300×200` actual vs `300×373` implicit). Cleaned up
+    and reconfirmed a clean baseline before the real gate.
+  - **Two infrastructure hardening fixes made during this phase, both
+    root-caused before being treated as harness bugs to paper over**:
+    1. A popup-visibility failure (`win.visible`/`active` flipping to
+       `false` between two D-Bus-driven captures with `PopupOpen` never
+       toggled by the harness in between — confirmed via the raw
+       journal, not assumed) hit twice during early full-sweep attempts.
+       Initially suspected as self-inflicted (my own interleaved `sleep
+       && tail` check-in commands possibly causing a terminal focus
+       event); **the user corrected this live** — it was their own use
+       of the computer (and, on a later attempt, their screensaver)
+       actually stealing window activation, not anything this session
+       did. `hideOnWindowDeactivate` is real, documented
+       `PopupPlasmaWindow` behavior (investigation doc §3), not a bug in
+       this rebuild's own QML. Added a bounded one-retry recovery in
+       `harness.py`'s `run_capture()` that explicitly forces
+       `PopupOpen=True` again before re-dumping (not just re-dumping the
+       same still-closed window, which would fail identically) — makes
+       the gate robust to a one-off external dismissal while still
+       failing hard if the popup were genuinely, reproducibly
+       dismissable by this rebuild's own content.
+    2. A `spectacle wrote a fully transparent image` failure (the
+       README's own documented Wayland/XWayland capture-backend caveat,
+       first seen in Phase 7.2.0's very first smoke run) recurred twice
+       during the same attempts, each time ~100 states apart with no
+       common trigger in the state content itself — consistent with the
+       user's screensaver/lock explanation (a blanked/locked screen
+       captured as transparent), not a QML bug. Added a bounded 3-attempt
+       retry directly inside `capture()` (harness.py) — re-invokes
+       `spectacle`, does not touch or re-derive any state/position data
+       the coordinate checks already verified.
+  - **The genuinely clean full pass** (`run --set full --noise-mask`,
+    against `expected-7.6.0.json`, real amp state via `fakeamp`, no
+    physical interaction with the machine for the remainder of the run
+    per the user's own precaution): **exit 0**. 438 states, 876 captures
+    parsed, 2409 single-dimension pairs.
+    - `control_unstable: False` — every control-pair coordinate set
+      identical across all 438 states.
+    - `size_mismatch: False`, 0 mismatches — the new prerequisite check
+      passing for real, not just present.
+    - **Single popup geometry across all 438 states**:
+      `{"win": [316, 388], "mainItem": [300, 373, 300, 373]}` — one row,
+      `w == iw` and `h == ih` both holding simultaneously across the
+      entire cross product (volume text length × mute × power × source
+      × amp × amp-list-state).
+    - `unexpected_moves: 0`. `allowed_moves: 32819`, spot-checked by
+      grouping on key: every single key belongs to an already-
+      established, individually-justified allowlist category from
+      7.3.0-7.6.0 (`powerSpinner`+children, `ActionRow`'s mute/power
+      width-trade family, `VolumeBlock`'s spacer/chip/dB-row/slider
+      family, the whole `overlay`/`ampOption:<ip>` subtree, `Source
+      Selector`'s `MobileCursor`, `footer`/`footerDot`/`footerLabel`) —
+      no foreign key snuck through under a rule that was broader than
+      intended. Critically, **no `AmpHeader` element
+      (`ampDot`/`ampEyebrow`/`ampName`/`ampSub`/`ampCaret`/
+      `ampHeaderDivider`) and no `settingsTrigger` appear anywhere in
+      either the unexpected or allowed lists** — the header genuinely
+      never moved once, across the full 438-state cross product, which
+      is the master-finding guarantee (investigation doc §0) this
+      entire rebuild was built to prove.
+    - `warnings: []`.
+    - The 47,933 total control-pair differing pixels are not a red flag
+      - checked directly, not waved off: **100% of nonzero control-pair
+        pixel counts (144 of 438 states) come from `pow=Booting` states
+        specifically** (the spinner rotation + amp-dot pulse
+        animations, the README's own documented un-pixel-matchable
+        noise class) - zero non-Booting states show any control-pair
+        pixel difference at all. Coordinates, the thing that actually
+        gates pass/fail, are unaffected.
+  - **Size-pinning protection (task item 4, confirmed decision, found
+    live during 7.1.0), done only after the full pass above confirmed
+    stability, per the task's explicit ordering requirement**:
+    `PlasmaCore.AppletPopup` is user-resizable by click-and-drag as a
+    deliberate, built-in feature of the class itself (`appletpopup.h`'s
+    own doc comment: "this class is resizable and can forward any input
+    events received on the margin to the main item") — no QML property
+    to switch it off, not something this rebuild introduces (the
+    existing shipped flyout has always been wrapped in the same class).
+    **Mechanism confirmed by reading `appletpopup.cpp` directly**
+    (fetched from `raw.githubusercontent.com/KDE/libplasma` after
+    `invent.kde.org` required auth this session - both are the real
+    upstream source, not inferred from the header alone): a
+    `LayoutChangedProxy` owned by `AppletPopup` reads `mainItem`'s
+    `Layout.minimumWidth/Height` and `Layout.maximumWidth/Height`
+    attached properties (via `connectNotifySignal`, independent of
+    whether `mainItem` sits inside a real Layout container) and calls
+    the window's own `setMinimumSize`/`setMaximumSize` whenever they
+    change. Implemented in `FlyoutPopup.qml`: all four properties bound
+    reactively to the same `flyoutContent.implicitWidth`/
+    `implicitHeight` already driving `implicitWidth`/`implicitHeight`
+    (not hardcoded literals - stays correct if content legitimately
+    changes later, rather than needing hand-updating). Re-verified after
+    adding the pin: `--set smoke` and `--set amp` both **exit 0**,
+    identical `316×388`/`300×373` geometry, confirming the pin doesn't
+    fight the automatic content-driven sizing (tautologically
+    guaranteed, since both are bound to the exact same expression).
+  - **Resize-inert verified directly, without a physical drag** (the
+    user asked for the drag test; no mouse/keyboard automation exists in
+    this session to perform one, so verified via the actual constraint a
+    drag would be bounded by instead): opened the popup deterministically
+    via `fakeamp.py --state ... --open` (real daemon stopped first, same
+    precondition the harness itself enforces), then loaded a small KWin
+    script (`org.kde.KWin`'s `Scripting` D-Bus interface -
+    `loadScript`/run, `workspace.windowList()`, read back via
+    `journalctl _COMM=kwin_wayland`) that inspects the flyout window's
+    real `minSize`/`maxSize`/`resizeable` as KWin itself computes them -
+    not the QML property values (already confirmed via the harness), the
+    actual compositor-level constraint a click-and-drag resize would be
+    clamped against. Result, the real window (`w=316 h=388`, matching
+    every harness dump): `minW=316 minH=388`, `maxW=316 maxH=388`,
+    **`resizeable=false`** - KWin's own computed boolean, arrived at
+    independently of the QML-side reasoning, agrees with it. Confirms the
+    pin is enforced where it actually matters (the window manager), not
+    just correctly wired on the QML side. Cleaned up after (`unloadScript`,
+    fakeamp killed, real daemon restarted, `plasmashell --replace` to
+    close the still-open popup and revert the flag) - popup size keys
+    confirmed still empty afterward (the forced restart didn't trigger a
+    graceful `hideEvent` write).
+  - **Physically confirmed live by the user, same session**: while the
+    popup was open for the KWin-script check above, the user tried
+    dragging its edges by hand and could not resize it - agrees with
+    both the KWin-level `resizeable=false` reading and the QML-side
+    `LayoutChangedProxy` reasoning. Three independent confirmations
+    (upstream source, live compositor query, live physical drag attempt)
+    now agree.
+  - Popup size keys confirmed restored to empty after every run (the
+    deliberate stale-key injection during the prerequisite's self-test
+    included) via `kreadconfig6`; flag set back to `false` and the
+    plasmoid reinstalled/`plasmashell --replace` afterward, matching
+    every prior phase's convention.
 
 - [ ] **Phase 7.8.0 — Cutover.** Depends on 7.7.0 passing clean. Two
       sequenced steps, matching Phase 5.0.2's "cut over, then delete"

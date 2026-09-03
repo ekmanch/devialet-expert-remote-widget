@@ -129,6 +129,40 @@ PlasmaCore.AppletPopup {
         implicitWidth: flyoutContent.implicitWidth
         implicitHeight: flyoutContent.implicitHeight
 
+        // Phase 7.7.0: pin the popup against user click-and-drag resize.
+        // AppletPopup is resizable by that gesture as a built-in feature of
+        // its base window class, with no QML property to disable the
+        // gesture itself directly - not something this rebuild introduces,
+        // the existing shipped flyout has always been wrapped in the same
+        // window class. Confirmed by reading appletpopup.cpp directly
+        // (libplasma, invent.kde.org/frameworks/libplasma): a
+        // `LayoutChangedProxy` owned by AppletPopup reads mainItem's
+        // `Layout.minimumWidth/Height` and `Layout.maximumWidth/Height`
+        // attached properties (via `connectNotifySignal`, independent of
+        // whether mainItem actually sits inside a real Layout container)
+        // and calls the window's own `setMinimumSize`/`setMaximumSize`
+        // whenever they change - so pinning min == max == the popup's own
+        // preferred size makes drag-resize a no-op at the window-manager
+        // level, the standard technique for a "not resizable" Qt window.
+        // Bound reactively to the same `flyoutContent.implicitWidth/Height`
+        // already driving `implicitWidth/Height` above (not hardcoded
+        // literals) so this stays correct if content ever legitimately
+        // changes in a later phase, rather than needing to be manually
+        // re-measured and kept in sync by hand.
+        //
+        // Done only now, after Phase 7.7.0's full 438-state sweep (every
+        // dimension simultaneously - volume text length x mute x power x
+        // source x amp x amp-list-state) proved a single geometry
+        // (`{"win": [316, 388], "mainItem": [300, 373, 300, 373]}` across
+        // all 438 states, see TODO.md) - pinning before that confirmation
+        // would have risked locking in a value that later turned out to
+        // still drift, relocating the size-collision bug class into the
+        // pin itself instead of fixing it.
+        Layout.minimumWidth: flyoutContent.implicitWidth
+        Layout.maximumWidth: flyoutContent.implicitWidth
+        Layout.minimumHeight: flyoutContent.implicitHeight
+        Layout.maximumHeight: flyoutContent.implicitHeight
+
         Keys.onEscapePressed: flyoutPopup.visible = false
 
         // Phase 7.3.0: relay focus into the real flyout content (the

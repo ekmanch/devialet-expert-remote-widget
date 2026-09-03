@@ -96,11 +96,16 @@ them — those states carry no inner product.
 
 Report sections: (1) control identity — coordinates must be identical,
 pixel noise reported with bbox/row bands; (2) popup geometry per state —
-more than one row means the whole popup resizes (§1 master finding);
-(3) unexpected element moves on single-dimension flips, grouped by
-element with Δx/Δy/Δw/Δh and text before/after; (3b) moves matched by
-`expected.json`; (4) pixel diffs per pair; (5) warnings. Exit code 1 =
-control unstable, 2 = unexpected moves, 0 = clean.
+more than one row means the whole popup resizes (§1 master finding), and
+(Phase 7.7.0) every state's `mainItem` w/h must also equal its own
+implicit w/h — a *stable-but-stuck* size (the AppletPopup popupWidth/
+popupHeight KConfig collision — see Caveats) passes the "one row" check
+but fails this one; (3) unexpected element moves on single-dimension
+flips, grouped by element with Δx/Δy/Δw/Δh and text before/after;
+(3b) moves matched by `expected.json`; (4) pixel diffs per pair;
+(5) warnings. Exit code 1 = control unstable, 3 = popup size doesn't
+match its own implicit size in some state, 2 = unexpected moves, 0 =
+clean.
 
 `expected.json` (optional, per phase): `[{"key": "<regex on key>", "dim":
 "vol" | "*", "note": "dB value label legitimately changes width"}]`.
@@ -134,12 +139,28 @@ control unstable, 2 = unexpected moves, 0 = clean.
   non-interactive shell in this session it otherwise picks the xcb backend,
   and an XWayland grab of a Wayland session is a fully transparent image
   with exit code 0 (the first 7.2.0 smoke run produced blank crops this
-  way). The harness now fails hard on an all-transparent capture.
+  way). The harness fails hard on an all-transparent capture — but first
+  retries the `spectacle` invocation up to 3 times (Phase 7.7.0, added
+  after two real occurrences ~100 states apart during the full sweep, an
+  intermittent compositor/spectacle timing race — screen-lock/screensaver
+  activity during a run is one real-world trigger, confirmed live).
 
 - Perpetual animations (Booting dot pulse 550 ms loop, spinner 700 ms) and
   the placeholder's blinking text caret can never pixel-match between two
   captures; the control capture surfaces that and `--noise-mask` masks
   it. Coordinates are unaffected.
+- **Keep hands off the machine for the whole run, screensaver included.**
+  Phase 7.7.0's full sweep hit `popup window is not visible - PopupOpen
+  was not honoured` twice — real window-deactivation events (the user's
+  own interaction, then their screensaver engaging), not a QML bug:
+  `hideOnWindowDeactivate` is genuine `PopupPlasmaWindow` behavior, and
+  anything that steals window activation during a run closes the popup
+  out from under it. `run_capture()` retries once, explicitly forcing
+  `PopupOpen=True` again before re-dumping (not just re-checking the same
+  still-closed window) — recovers from a one-off dismissal, still fails
+  hard if the popup won't reopen. If a run is long enough to risk the
+  screen going idle, disable the screensaver/screen-lock first rather
+  than relying on the retry to absorb repeated hits.
 - **Popup size keys.** libplasma's `AppletPopup::hideEvent()` writes
   `popupWidth`/`popupHeight` into the applet's KConfig group on *every*
   close when `appletInterface` is set — no resize needed (read from

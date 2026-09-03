@@ -10,7 +10,14 @@ Checks, in report order:
    regions such as a blinking caret or the Booting pulse).
 2. Popup geometry - window w/h and mainItem implicit w/h per state, so a
    whole-popup resize (investigation document §1's master finding) shows
-   in one table.
+   in one table. Also asserts, per state, that the popup's actual
+   mainItem w/h equals its own implicit w/h (Phase 7.7.0) - a *stable*
+   geometry across states can still be wrong if it's stuck at a stale
+   value (the AppletPopup popupWidth/popupHeight KConfig collision,
+   CLAUDE.md's documented gotcha, silently clipping real content - found
+   by hand in Phase 7.6.0 because a screenshot happened to be missing an
+   element, not by this harness). This check catches that class of bug
+   directly instead of relying on eyeballing.
 3. Single-dimension flips - for every pair of states differing in exactly
    one dimension (scenarios.adjacent_pairs), every element whose window
    x/y/w/h differs, grouped by element. An optional expected.json allowlist
@@ -22,8 +29,9 @@ Checks, in report order:
    excluded from that state's pair diffs (--noise-mask makes every state
    have one).
 
-Exit code: 1 = control coordinates unstable, 2 = unexpected element
-moves, 0 otherwise.
+Exit code: 1 = control coordinates unstable, 3 = popup mainItem size
+doesn't match its own implicit size in some state (Phase 7.7.0 - see
+check 2), 2 = unexpected element moves, 0 otherwise.
 """
 
 import json
@@ -211,13 +219,28 @@ def run(run_dir, expected_path=None, write=True):
 
     # ---- 2. popup geometry ---------------------------------------------
     geometry = {}
+    size_mismatches = []
     for st in states:
         c = coords.get(st["id"])
         if not c:
             continue
         b = c["begin"]
-        key = json.dumps({"win": [b["win"]["w"], b["win"]["h"]], "mainItem": [b["mainItem"]["w"], b["mainItem"]["h"], b["mainItem"]["iw"], b["mainItem"]["ih"]]})
+        m = b["mainItem"]
+        key = json.dumps({"win": [b["win"]["w"], b["win"]["h"]], "mainItem": [m["w"], m["h"], m["iw"], m["ih"]]})
         geometry.setdefault(key, []).append(st["id"])
+        # Phase 7.7.0: the actual w/h a state's mainItem renders at must
+        # equal its own implicit (content-driven) w/h - the check that
+        # would have caught the Phase 7.6.0 popup-size-key collision
+        # automatically (a stale KConfig-persisted popupWidth/popupHeight
+        # silently clips real content while still being *stable* across
+        # every state, so the "more than one geometry" check below can't
+        # catch it - a stuck-but-consistent wrong size passes that check
+        # cleanly). Exact equality, no epsilon - matches geom_delta's own
+        # convention above, and these are plain QML property reads with
+        # no reason to differ by a sub-pixel amount from their own source.
+        if m["w"] != m["iw"] or m["h"] != m["ih"]:
+            size_mismatches.append({"state": st["id"], "w": m["w"], "h": m["h"], "iw": m["iw"], "ih": m["ih"]})
+    size_mismatch = bool(size_mismatches)
 
     # ---- 3. single-dimension flips + 4. pixel diffs --------------------
     pairs = scenarios.adjacent_pairs(states)
@@ -263,12 +286,14 @@ def run(run_dir, expected_path=None, write=True):
         "control": control,
         "control_unstable": control_unstable,
         "geometry": {k: v for k, v in geometry.items()},
+        "size_mismatches": size_mismatches,
+        "size_mismatch": size_mismatch,
         "unexpected_moves": unexpected,
         "allowed_moves": allowed,
         "pixel": pixel_rows,
         "warnings": warnings,
     }
-    exit_code = 1 if control_unstable else (2 if unexpected else 0)
+    exit_code = 1 if control_unstable else (3 if size_mismatch else (2 if unexpected else 0))
     summary["exit_code"] = exit_code
     if write:
         with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
@@ -309,7 +334,7 @@ def render_report(s, run_info, coords):
     L.append(f"- states: {s['states']}, captures parsed: {s['captures_parsed']}, single-dimension pairs: {s['pairs']}")
     if run_info:
         L.append(f"- selection: `{run_info.get('selection')}`, settle: {run_info.get('settle_ms')} ms, crop: {run_info.get('crop')}, avg per state: {run_info.get('avg_state_seconds')} s")
-    verdict = {0: "PASS — control stable, no unexpected element moves", 1: "FAIL — control capture coordinates differ (harness/render instability)", 2: "FAIL — unexpected element moves on single-dimension flips"}[s["exit_code"]]
+    verdict = {0: "PASS — control stable, no unexpected element moves", 1: "FAIL — control capture coordinates differ (harness/render instability)", 3: "FAIL — popup mainItem size doesn't match its own implicit size in some state (stale/stuck popup size)", 2: "FAIL — unexpected element moves on single-dimension flips"}[s["exit_code"]]
     L.append(f"- **verdict: {verdict}**\n")
 
     L.append("## 1. Control identity (same state captured twice)\n")
@@ -341,6 +366,16 @@ def render_report(s, run_info, coords):
     if len(s["geometry"]) > 1:
         L.append("\n**More than one popup geometry across states — the whole popup resizes (§1 master finding).**")
     L.append("")
+
+    if s.get("size_mismatches"):
+        L.append("**Popup mainItem size does not match its own implicit size — stale/stuck popup (Phase 7.7.0 check):**\n")
+        L.append("| state | actual w×h | implicit w×h |")
+        L.append("|---|---|---|")
+        for mm in s["size_mismatches"][:20]:
+            L.append(f"| `{mm['state']}` | {mm['w']}×{mm['h']} | {mm['iw']}×{mm['ih']} |")
+        if len(s["size_mismatches"]) > 20:
+            L.append(f"| … | {len(s['size_mismatches']) - 20} more | |")
+        L.append("")
 
     def moves_section(title, moves):
         L.append(f"## {title}\n")

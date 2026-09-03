@@ -197,22 +197,41 @@ def restore_size_keys(snapshot):
 
 
 # ---- capture --------------------------------------------------------------
-def capture(path):
+def capture(path, log=None):
     # QT_QPA_PLATFORM=wayland is load-bearing: launched from a non-interactive
     # shell in this Wayland session, spectacle otherwise picks the xcb
     # backend and an XWayland grab of a Wayland session is a fully
     # transparent 3840x2160 image with exit code 0 (found in the first
     # Phase 7.2.0 smoke run). The alpha check below turns that silent
     # failure mode into a hard error should it ever recur.
+    #
+    # Phase 7.7.0: bounded retry added after two real occurrences during the
+    # full 438-state sweep (at different, unrelated states, ~100 states
+    # apart) - an intermittent compositor/spectacle timing race, not tied to
+    # any specific state's content (the coordinate dump for the same state
+    # had already succeeded before the screenshot step failed each time).
+    # Re-invoking spectacle a moment later is a legitimate fix for a capture-
+    # layer flake like this - it does not touch or re-derive the state/
+    # position data the coordinate checks already verified.
     env = dict(os.environ)
     if env.get("XDG_SESSION_TYPE", "wayland") == "wayland":
         env["QT_QPA_PLATFORM"] = "wayland"
-    r = subprocess.run(["spectacle", "-b", "-n", "-f", "-o", path], capture_output=True, text=True, timeout=30, env=env)
-    if r.returncode != 0 or not os.path.exists(path):
-        raise RuntimeError(f"spectacle failed (rc={r.returncode}): {r.stderr.strip()[-300:]}")
-    im = Image.open(path)
-    if im.mode == "RGBA" and im.getchannel("A").getextrema()[1] == 0:
-        raise RuntimeError(f"spectacle wrote a fully transparent image ({path}) - capture backend problem, see README")
+    last_err = None
+    for attempt in (1, 2, 3):
+        r = subprocess.run(["spectacle", "-b", "-n", "-f", "-o", path], capture_output=True, text=True, timeout=30, env=env)
+        if r.returncode != 0 or not os.path.exists(path):
+            last_err = RuntimeError(f"spectacle failed (rc={r.returncode}): {r.stderr.strip()[-300:]}")
+        else:
+            im = Image.open(path)
+            if im.mode == "RGBA" and im.getchannel("A").getextrema()[1] == 0:
+                last_err = RuntimeError(f"spectacle wrote a fully transparent image ({path}) - capture backend problem, see README")
+            else:
+                return
+        if attempt < 3:
+            if log:
+                log(f"  {last_err} - retrying capture ({attempt}/3)")
+            time.sleep(0.5)
+    raise last_err
 
 
 def crop_box_from_dump(dump, pad, size):
@@ -363,7 +382,7 @@ def cmd_run(args):
         fake.start()
 
         closed_shot = os.path.join(run_dir, "_closed_full.png")
-        capture(closed_shot)
+        capture(closed_shot, log=log)
         screen_size = Image.open(closed_shot).size
         log(f"screen {screen_size[0]}x{screen_size[1]} (popup-closed reference saved)")
 
@@ -381,7 +400,6 @@ def cmd_run(args):
                 fake.set_ctl(StateId=cid, Seq=seq)
                 try:
                     dump = journal.wait_dump(cid, seq, args.timeout)
-                    break
                 except ProbeTimeout as e:
                     if attempt == 2:
                         raise ProbeTimeout(
@@ -389,11 +407,35 @@ def cmd_run(args):
                             f"(kpackagetool6 --upgrade + plasmashell --replace)? Did the popup open? "
                             f"journal saw {journal.raw_count} [FlyoutProbe] lines so far.") from None
                     log(f"  probe timeout for {cid}, retrying once with a new Seq")
+                    continue
+                # Phase 7.7.0: a real, live-observed case during the full
+                # sweep - the popup went visible:false/active:false between
+                # two captures with PopupOpen never toggled by the harness
+                # in between (win.visible was true at seq N, false at
+                # seq N+1, same cid family, no PopupOpen=False in between -
+                # confirmed by reading the raw journal, not assumed). Most
+                # likely an external, one-off window-activation event
+                # (something else briefly taking focus - hideOnWindowDeactivate
+                # is real, documented PopupPlasmaWindow behavior, not a bug
+                # in this rebuild's own QML - see the investigation
+                # document's §3). Bounded to one retry, and the retry
+                # explicitly forces PopupOpen back on rather than just
+                # re-dumping the same still-closed window (which would
+                # fail identically) - if the popup is genuinely, robustly
+                # dismissable by this rebuild's own content (not a one-off
+                # environmental blip), forcing it back open and still
+                # finding it closed on the second attempt still fails hard.
+                if not dump["begin"]["win"].get("visible"):
+                    if attempt == 2:
+                        raise RuntimeError(f"{cid}: popup window is not visible - PopupOpen was not honoured (still closed after forcing PopupOpen=True and retrying once)")
+                    log(f"  {cid}: popup not visible (external dismissal / hideOnWindowDeactivate?) - forcing PopupOpen=True and retrying once")
+                    fake.set_ctl(PopupOpen=True)
+                    time.sleep(0.5)
+                    continue
+                break
             if fake.name_lost.is_set():
                 raise RuntimeError("lost a bus name mid-run (another owner appeared) - aborting")
             begin = dump["begin"]
-            if not begin["win"].get("visible"):
-                raise RuntimeError(f"{cid}: popup window is not visible - PopupOpen was not honoured")
             problems = snapshot_mismatch(begin, st["props"])
             if problems:
                 raise RuntimeError(f"{cid}: state did not reach the widget: {problems}")
@@ -406,7 +448,7 @@ def cmd_run(args):
                 json.dump(dump, f)
 
             full_path = os.path.join(shots, cid + ".full.png")
-            capture(full_path)
+            capture(full_path, log=log)
             if crop is None:
                 crop = crop_box_from_dump(dump, args.pad, screen_size)
                 if crop is None:
@@ -471,7 +513,7 @@ def cmd_run(args):
     if exit_code == 0 and not args.no_report:
         summ = analyze.run(run_dir, args.expected)
         log(f"report: {os.path.join(run_dir, 'report.md')} -> exit {summ['exit_code']} "
-            f"(control_unstable={summ['control_unstable']}, unexpected_moves={len(summ['unexpected_moves'])}, warnings={len(summ['warnings'])})")
+            f"(control_unstable={summ['control_unstable']}, size_mismatch={summ['size_mismatch']}, unexpected_moves={len(summ['unexpected_moves'])}, warnings={len(summ['warnings'])})")
         return summ["exit_code"]
     return exit_code
 
