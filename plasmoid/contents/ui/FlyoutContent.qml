@@ -5,27 +5,37 @@
 //
 // Phase 7.3.0 built the amp header (AmpHeader.qml, in-flow) + the amp list
 // (AmpListOverlay.qml, pulled out of flow per §4 point 4 option (b)).
-// Phase 7.4.0 adds the volume block (VolumeBlock.qml - dB/unit readout,
-// source chip, -/slider/+). Everything below it - action row, source
-// selector, footer - remains a declared placeholder spacer
-// (`sectionsPlaceholder`) that 7.5.0-7.6.0 replace section by section; it
-// exists so the popup's height stays realistic (the overlay would
-// otherwise be clipped by a too-short popup). Do not port 7.5.0/7.6.0's
-// sections here.
+// Phase 7.4.0 added the volume block (VolumeBlock.qml - dB/unit readout,
+// source chip, -/slider/+). Phase 7.5.0 adds the action row (ActionRow.qml
+// - mute/power buttons). Everything below it - source selector, footer -
+// remains a declared placeholder spacer (`sectionsPlaceholder`) that
+// 7.6.0 replaces; it exists so the popup's height stays realistic (the
+// overlay would otherwise be clipped by a too-short popup). Do not port
+// 7.6.0's section here.
 //
 // State/functions below were the header-only subset ported verbatim from
 // FullRepresentation.qml through 7.3.0 (online/deviceName/ampIp/power/
 // powerState/knownAmps/selectedAmpIp + unwrap/unwrapKnownAmps/
 // fetchKnownAmpsFresh/selectAmpByIp + headerName/headerSub + its
-// Dbus.Properties mirror for exactly those properties). Phase 7.4.0 adds
+// Dbus.Properties mirror for exactly those properties). Phase 7.4.0 added
 // activeSourceName (a plain scalar, trusted directly like ampIp/
 // deviceName) plus the volume command surface (runCtl/exec/stepVolume/
 // releaseVolume) - volumeDb/muted themselves are deliberately NOT a new
-// local mirror here, they're read from `pendingAmpState` (the required
+// local mirror, they're read from `pendingAmpState` (the required
 // property already forwarded in) per Phase 5's shared, daemon-resolved
 // architecture - see VolumeBlock.qml's header comment for the full
-// reasoning. Mute/power-debounce/sources handling for the action row and
-// source selector is still not ported - that's 7.5.0/7.6.0.
+// reasoning. Phase 7.5.0 adds the mute/power command surface
+// (toggleMute/togglePower/beginPowerOnBoot): mute follows the same
+// pendingAmpState.muted pattern volume already established (no local
+// mirror, no debounce - Phase 5.0.2 Step B's daemon-resolved shape).
+// Power/PowerState are different - PendingAmpState deliberately doesn't
+// cover them (see its own header comment), so they stay in this file's
+// own D-Bus mirror (already present since 7.3.0 for the header), which
+// gains its first writer this phase and therefore its first debounce
+// guard (`lastPowerChangeAtMs`, ported from FullRepresentation.qml -
+// still genuinely needed here, unlike volume/mute, since no daemon-owned
+// pending-command state exists for Power). Sources handling for the
+// source selector is still not ported - that's 7.6.0.
 
 pragma ComponentBehavior: Bound
 
@@ -90,6 +100,17 @@ Item {
     readonly property real volumeFloorDb: -60.0
     readonly property string devialetCtlCommand: "devialet-ctl"
 
+    // ---- Phase 7.5.0: action row (mute/power) state ----
+    // Power/PowerState debounce - see this file's header comment for why
+    // this is still needed here (no daemon-owned pending-command state for
+    // Power, unlike VolumeDb/Muted) and PendingAmpState.qml's own comment
+    // for why it doesn't cover this either.
+    readonly property int debounceMs: 400
+    property double lastPowerChangeAtMs: 0
+
+    function now() { return Date.now(); }
+    function within(lastMs, windowMs) { return (root.now() - lastMs) < windowMs; }
+
     function runCtl(argsString) {
         const cmd = root.devialetCtlCommand + " --ip " + root.ampIp + " " + argsString;
         console.log("running:", cmd);
@@ -116,6 +137,65 @@ Item {
         if (root.ampIp === "") return;
         root.runCtl("volume " + value);
         root.pendingAmpState.notifyVolume(value);
+    }
+
+    // Mirrors CompactRepresentation.qml's toggleMute() exactly (Phase
+    // 5.0.2 Step B shape) - reads pendingAmpState.muted directly, no local
+    // mirror, no debounce (see this file's header comment).
+    function toggleMute() {
+        if (root.ampIp === "") return;
+        const newMuted = !root.pendingAmpState.muted;
+        root.runCtl("mute " + (newMuted ? "on" : "off"));
+        root.pendingAmpState.notifyMute(newMuted);
+    }
+
+    // Tells the daemon a power-on boot is starting, so it can start
+    // tracking BOOT_TIMEOUT (Phase 4.3.0) - ported verbatim from
+    // FullRepresentation.qml. Called synchronously, back-to-back with
+    // runCtl("power on") in togglePower() below, before the devialet-ctl
+    // invocation - both are fire-and-forget async dispatches issued in the
+    // same handler, with no wait on either one's completion in between, so
+    // there's no window where the real power-on command has gone out but
+    // the daemon doesn't yet know a boot is in progress.
+    function beginPowerOnBoot() {
+        Dbus.SessionBus.asyncCall(
+            new Dbus.dbusMessage({
+                service: "com.ekmanch.DevialetRemote",
+                path: "/com/ekmanch/DevialetRemote/Amp",
+                interface: "com.ekmanch.DevialetRemote.Amp1",
+                member: "BeginPowerOnBoot",
+                arguments: [root.ampIp]
+            }),
+            function (reply) {
+                if (reply.isError) {
+                    console.log("[WARN] BeginPowerOnBoot call returned a D-Bus error:", JSON.stringify(reply.error));
+                }
+            },
+            function (reply) {
+                console.log("[WARN] BeginPowerOnBoot call failed:", JSON.stringify(reply.error));
+            }
+        );
+    }
+
+    // Ported verbatim from FullRepresentation.qml's power button
+    // onClicked. Optimistic set on both power/powerState, stamped so the
+    // debounce guard in onPropertiesChanged below holds them through the
+    // 400ms window - see this file's header comment for why Power still
+    // needs this (unlike volume/mute).
+    function togglePower() {
+        if (root.ampIp === "" || root.powerState === "Booting") return;
+        const newPower = !root.power;
+        root.power = newPower;
+        root.powerState = newPower ? "Booting" : "Off";
+        root.lastPowerChangeAtMs = root.now();
+        if (newPower) {
+            // Told the daemon first, then the real command - see
+            // beginPowerOnBoot()'s own doc for why this ordering leaves no
+            // gap. Power-off stays exactly as before: immediate, no
+            // daemon notification.
+            root.beginPowerOnBoot();
+        }
+        root.runCtl("power " + (newPower ? "on" : "off"));
     }
 
     // Fires devialet-ctl once per connectSource() call, then disconnects
@@ -253,8 +333,22 @@ Item {
             if ("Online" in changed) root.online = root.unwrap(changed.Online, root.online);
             if ("DeviceName" in changed) root.deviceName = root.unwrap(changed.DeviceName, root.deviceName);
             if ("AmpIp" in changed) root.ampIp = root.unwrap(changed.AmpIp, root.ampIp);
-            if ("Power" in changed) root.power = root.unwrap(changed.Power, root.power);
-            if ("PowerState" in changed) root.powerState = root.unwrap(changed.PowerState, root.powerState);
+            // Phase 7.5.0: debounce guard added now that togglePower()
+            // below writes these optimistically - see this file's header
+            // comment for why Power/PowerState still need one (unlike
+            // volume/mute, which are pendingAmpState-resolved). Both share
+            // lastPowerChangeAtMs: one click drives both, so one guard is
+            // enough (matches FullRepresentation.qml's own reasoning).
+            if ("Power" in changed) {
+                if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
+                    root.power = root.unwrap(changed.Power, root.power);
+                }
+            }
+            if ("PowerState" in changed) {
+                if (!root.within(root.lastPowerChangeAtMs, root.debounceMs)) {
+                    root.powerState = root.unwrap(changed.PowerState, root.powerState);
+                }
+            }
             if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
             if ("SelectedAmpIp" in changed) root.selectedAmpIp = root.unwrap(changed.SelectedAmpIp, root.selectedAmpIp);
             if ("KnownAmps" in changed) root.fetchKnownAmpsFresh();
@@ -312,17 +406,28 @@ Item {
             onSliderReleased: value => root.releaseVolume(value)
         }
 
-        // Stand-in for 7.5.0/7.6.0's remaining sections (action row, source
-        // selector, footer). Height is an estimate of that combined content
-        // so the popup is a realistic size and the overlay isn't clipped;
-        // each later phase replaces part of it, and it is gone by 7.6.0.
-        // Not a binding to any real content - purely a spacer. Shrunk from
-        // 7.3.0's 270 by VolumeBlock's own measured contribution now that
-        // it's real content instead of part of this estimate.
+        ActionRow {
+            id: actionRow
+            theme: root.theme
+            ampIp: root.ampIp
+            muted: root.pendingAmpState.muted
+            power: root.power
+            powerState: root.powerState
+            onMuteToggleRequested: root.toggleMute()
+            onPowerToggleRequested: root.togglePower()
+        }
+
+        // Stand-in for 7.6.0's remaining section (source selector,
+        // footer). Height is an estimate of that combined content so the
+        // popup is a realistic size and the overlay isn't clipped; 7.6.0
+        // replaces it and it is gone. Not a binding to any real content -
+        // purely a spacer. Shrunk from 7.4.0's 156 by ActionRow's own
+        // measured contribution now that it's real content instead of
+        // part of this estimate.
         Item {
             objectName: "sectionsPlaceholder"
             Layout.fillWidth: true
-            Layout.preferredHeight: 156
+            Layout.preferredHeight: 100
         }
     }
 

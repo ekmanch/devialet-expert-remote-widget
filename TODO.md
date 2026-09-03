@@ -3293,15 +3293,130 @@ architecture decisions; this file is just sequencing and status.
   - Did not touch Phase 7.5.0/7.6.0's sections (action row, source
     selector) - `sectionsPlaceholder` still stands in for both.
 
-- [ ] **Phase 7.5.0 — Action row: mute/power buttons.** Depends on
+- [x] **Phase 7.5.0 — Action row: mute/power buttons.** Depends on
       7.4.0 verified solid.
-  - Apply §4 point 2 explicitly to the icon/spinner swap
-    (booting-state-dependent child) — pin `Layout.preferredHeight` to
-    the tallest measured state, even though §1 called this row
-    "low-risk today." The entire reason this rebuild's checklist
-    exists is to not rely on "looked fine so far."
-  - Verify: 7.2.0's harness across power state (off/Booting/on) ×
-    mute, confirm nothing above shifted.
+  - **New component**: `ActionRow.qml`, following AmpHeader.qml/
+    AmpListOverlay.qml/VolumeBlock.qml's precedent exactly - pure
+    signal-up (`muteToggleRequested()`/`powerToggleRequested()`), no
+    direct D-Bus/exec calls of its own. Replaces the next chunk of
+    FlyoutContent.qml's `sectionsPlaceholder` (156 → 100, an estimate
+    for 7.6.0's remaining source-selector+footer section).
+  - **Architecture (task item 3)**: `muted` is fed from
+    `root.pendingAmpState.muted` (no local mirror), mirroring
+    VolumeBlock.qml's volumeDb pattern exactly -
+    `FlyoutContent.toggleMute()` mirrors `CompactRepresentation.qml`'s
+    `toggleMute()` 1:1 (no debounce - Phase 5.0.2 Step B's
+    daemon-resolved shape already covers it). `power`/`powerState` are
+    different: `PendingAmpState` deliberately doesn't cover them (its
+    own header comment scopes it to `AmpIp`/`VolumeDb`/`Muted` only),
+    so they stay in FlyoutContent's existing local D-Bus mirror
+    (present since 7.3.0 for the header's dot/sub-text) - this phase is
+    that mirror's first *writer* (`togglePower()`), so it's also the
+    first phase that needs a debounce guard on `Power`/`PowerState` in
+    `onPropertiesChanged` - added, ported verbatim from
+    `FullRepresentation.qml`'s `lastPowerChangeAtMs`/`within()`/
+    `beginPowerOnBoot()`. Confirmed this really is still needed here
+    (unlike volume/mute): Phase 5.0.0's daemon-owned pending-command
+    state was scoped to `VolumeDb`/`Muted` only, nothing covers `Power`.
+  - Applied §4 point 2 (task item 2) to `powerContentRow` (the
+    icon<->spinner swap) - explicit `Qt.AlignVCenter` on every child +
+    a measured `Layout.preferredHeight`, even though the investigation
+    doc called this row low-risk. Measured via the harness dump across
+    off/Booting/on (not assumed from the icon/spinner both being 13x13
+    literals): a constant **14** in all three. Extended the identical
+    treatment to `muteContentRow` for consistency (task item 2 named
+    only the power button by name, but Mute/Unmute's own label-length
+    change is the same dependent-child class) - also constant **14**
+    across mute on/off. **Correction during verification**: both were
+    first pinned at a guessed 18 (not measured) before the harness run
+    - caught and fixed to the real measured 14 before the final
+    passing run, same "don't copy/guess a number" discipline as
+    7.4.0's dB-row pin.
+  - **Honesty note, not in the task brief**: unlike `VolumeBlock.qml`'s
+    `dbValueRow` (a real nested `RowLayout`-in-`RowLayout`, where the
+    `Layout.preferredHeight` pin is structurally load-bearing),
+    `muteContentRow`/`powerContentRow` are `Button.contentItem` -
+    sized by the `Button` control itself (fills the full 38px button
+    height per QQC2's own contentItem geometry management, confirmed
+    by the harness dump's own `h:38` vs `ih:14`), not read via
+    `QtQuick.Layouts` attached properties. The pin is therefore
+    decorative here, not load-bearing - kept anyway per this rebuild's
+    stated blanket policy (§4 point 2's own reasoning: pin regardless
+    of assessed risk), and each child's explicit `Qt.AlignVCenter` is
+    what's actually doing the safety work (no cross-sibling
+    contamination, unlike `Qt.AlignBaseline` - see CLAUDE.md's house
+    rule for why that distinction is what makes VCenter safe by
+    construction here even without a functioning height pin).
+  - **New `tools/flyout-harness/expected-7.5.0.json`**, extending
+    7.4.0's file with `ActionRow[0]`-prefixed rules scoped precisely to
+    `mute`/`pow`/`amp` (the three dims that actually drive this
+    section's own reflow - the two `Layout.fillWidth` GridLayout
+    columns trade width against each other as `Mute`/`Unmute`/
+    `Power On`/`Power Off`/`Powering on…` text length changes, inherited
+    unchanged from `FullRepresentation.qml`'s original GridLayout, not
+    a new gap introduced here) plus one narrow rule for `powerSpinner`
+    and its two anonymous children, scoped to their own path prefix
+    with `dim: "*"` - justified (not a blanket carve-out) by the raw
+    coords dump confirming `vis: false` in every flagged pair: an
+    invisible `RowLayout` child's computed x/y is incidental Qt Layout
+    output that never renders, distinct from its real, asserted
+    on-screen position while actually visible (`pow=Booting`, covered
+    by the `pow`-dim rule).
+  - **Verified live (Plasma 6.7.4, Wayland/KWin), flag on, harness
+    driving via D-Bus (no input automation), all against
+    `expected-7.5.0.json`**:
+    - `run --set smoke`: **exit 0**, 0 unexpected moves, 0 warnings,
+      control identical, single popup-geometry row (316×357/300×342,
+      unchanged since 7.3.0). Re-ran after correcting the height pins
+      from 18 to the measured 14.
+    - `run --vary pow,mute` (the task's own narrow run - 6 states, all
+      three power states × both mute states): **exit 0**, 0 unexpected
+      moves, 0 warnings. Every allowed move's key confined to
+      `ActionRow`'s own subtree or (from 7.3.0/7.4.0's carried-forward
+      rules) the overlay - zero coordinate drift on `AmpHeader`/
+      `VolumeBlock`/`mainColumn`'s other direct children, confirming
+      7.3.0/7.4.0's guarantee held through this section's own dynamic
+      content, including the genuinely-animated spinner.
+    - Settle floor: `--vary pow,mute` and `--set smoke` at 600ms
+      (default) vs `--settle-ms 1200` → `harness.py compare` on both:
+      every *visible* element's coordinates identical, including
+      `powerSpinner`'s own real on-screen position in the `Booting`
+      state specifically (checked directly against the raw coords
+      dump, not just the diff summary) - confirmed the settle timer
+      reliably lands after the spinner has started rendering, not
+      mid-transition, per the task's specific concern. The only
+      reported diff in either compare was the already-accounted-for
+      invisible-spinner incidental-position noise (see above) -
+      confirmed non-visual by checking `vis: false` in the raw dump
+      before accepting it as harmless rather than assuming.
+    - `--set full` explicitly not run this phase, reserved for 7.7.0.
+  - **Eyeballed** (`shots/*.png`, inspected directly): `Off` (idle grey
+    "Power On"), `Booting` (amber "Booting…" header, amber-bordered
+    power button, spinner ring+arc rendered correctly mid-rotation),
+    and `mute=on` (copper-highlighted "Unmute" pill, "Power Off") all
+    match the mockup; the not-connected (`0known`) state shows the
+    whole row correctly dimmed to 0.4 opacity alongside the header/
+    volume block.
+  - **Not verified this session - needs the user's own click, same
+    category as 7.3.0's dismiss-gesture items**: a genuinely live power-
+    on against the real amp (real daemon, not the harness's `fakeamp`)
+    with the spinner actually rotating on screen in real time, not a
+    single still frame. No mouse/keyboard automation exists in this
+    Wayland session (confirmed repeatedly across this project's
+    history), and the harness's own `fakeamp.py` must own the real
+    `com.ekmanch.DevialetRemote` bus name to drive the popup at all, so
+    it can't run *alongside* the real daemon to combine "harness-opened
+    popup" with "real daemon state" - the two are mutually exclusive
+    with the tooling that exists today. Every static state the daemon
+    can be in (`Off`/`Booting`/`On`, each mute state) is already
+    covered above via `fakeamp`; only the *live, continuous* animation
+    against the *real* daemon is unverified by me.
+  - Popup size keys confirmed restored to their pre-run `300`/`342`
+    values after every run via `kreadconfig6`; flag set back to `false`
+    and the plasmoid reinstalled/`plasmashell --replace` afterward,
+    matching 7.3.0/7.4.0's own convention.
+  - Did not touch Phase 7.6.0's section (source selector + footer) -
+    `sectionsPlaceholder` still stands in for it.
 
 - [ ] **Phase 7.6.0 — Source selector (ComboBox) + footer.** Depends
       on 7.5.0 verified solid. Smallest remaining section — least

@@ -1,0 +1,23 @@
+[
+ {"key": "^overlay", "dim": "*", "note": "amp list overlay items exist only while open and change with amp count - state-dependent by design; everything under root/ must stay clean"},
+ {"key": "^(AmpListOverlay|ampListDivider|ampListEmpty|ampNoneRow|ampOption:)", "dim": "list", "note": "overlay-owned items reparent into Overlay.overlay and appear only_in_b while open - same allowlist basis as ^overlay above, just keyed by objectName/type instead of path prefix"},
+
+ {"key": "^(dbValueLabel|dbUnitLabel|dbValueRow)$", "dim": "vol", "note": "the dB value's own text length legitimately varies with vol (e.g. \"0.0\" vs \"-40.0\") - dbUnitLabel's x rides along as dbValueLabel's sibling in the same self-contained, height-pinned row (finding 1). Confined to dbValueRow - never leaks into the header/list/sliderRow/action-row above or below."},
+ {"key": "^(dbValueLabel|dbUnitLabel|dbValueRow)$", "dim": "amp", "note": "0known/1none/2none collapse volumeDb to undefined, so this row falls back to its \"—\" placeholder width - same self-contained reflow as the vol-dim rule above, different trigger."},
+
+ {"key": "^(sourceChip|sourceChipLabel)$", "dim": "src", "note": "the source chip's own width/x legitimately varies with source-name length - finding 2's elide+maximumWidth fix caps it, doesn't freeze it. The fillWidth spacer to its left absorbs the delta, so nothing outside dbSourceRow moves."},
+ {"key": "^(sourceChip|sourceChipLabel)$", "dim": "amp", "note": "0known/1none/2none collapse ActiveSourceName to \"\", so the chip falls back to its \"—\" placeholder width - same self-contained reflow as the src-dim rule above, different trigger."},
+
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "vol", "note": "the fillWidth spacer between the dB block and the source chip - its whole job is absorbing dbValueRow's width delta (see finding 2's comment on the spacer)"},
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "src", "note": "same spacer, absorbing sourceChip's width delta instead"},
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "amp", "note": "same spacer, absorbing the combined dbValueRow+sourceChip placeholder-width delta when amp collapses to not-connected"},
+
+ {"key": "QQuickRowLayout\\[1\\]/Slider\\[0\\]/QQuickRectangle", "dim": "vol", "note": "the slider's own background fill Rectangle (visualPosition-driven width) and handle Rectangle (visualPosition-driven x) move with the slider's own value by design - not a layout leak, see finding 8"},
+ {"key": "QQuickRowLayout\\[1\\]/Slider\\[0\\]/QQuickRectangle", "dim": "amp", "note": "same slider fill/handle Rectangles, moving to the floor position when amp collapses to not-connected - not a layout leak"},
+
+ {"key": "ActionRow\\[0\\]", "dim": "mute", "note": "the mute button's own label swaps \"Mute\"/\"Unmute\" (different text length), and since both mute/power buttons are plain Layout.fillWidth GridLayout columns with no minimum/preferred pin (unchanged from FullRepresentation.qml's original, pre-rebuild GridLayout), the two columns trade width against each other - confined entirely to ActionRow's own subtree (background Rectangles, spacer Items, icon/label), never leaks into the header/volume-block above or the placeholder below"},
+ {"key": "ActionRow\\[0\\]", "dim": "pow", "note": "the power button's own label swaps between \"Power On\"/\"Power Off\"/\"Powering on…\" and its icon<->spinner visibility swaps (§4 point 2's own trigger) - same self-contained column-width trade as the mute-dim rule above, plus the icon/label's own x shifting as the spinner enters/leaves the row's flow. Confined to ActionRow's own subtree."},
+ {"key": "ActionRow\\[0\\]", "dim": "amp", "note": "0known/1none/2none collapse Power to false, which can change the power button's label text (\"Power Off\" -> \"Power On\") - same self-contained column-width trade as the mute/pow-dim rules above, different trigger."},
+
+ {"key": "ActionRow\\[0\\]/Button\\[1\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[1\\]", "dim": "*", "note": "powerSpinner and its two anonymous children (the static ring Rectangle, the rotating-arc Shape) - confirmed via the raw coords dump (vis: false on both sides of every non-pow pair) that this Item is invisible in every state these moves were caught in. An invisible RowLayout child's own computed x/y is incidental Qt Layout output, not something this file's QML controls or something a viewer can ever see - its real, on-screen position while actually visible (powerState === \"Booting\") is already covered and asserted by the pow-dim rule above. Scoped to this one Item's own subtree only, not a blanket rule."}
+]
