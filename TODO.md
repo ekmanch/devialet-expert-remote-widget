@@ -3418,15 +3418,155 @@ architecture decisions; this file is just sequencing and status.
   - Did not touch Phase 7.6.0's section (source selector + footer) -
     `sectionsPlaceholder` still stands in for it.
 
-- [ ] **Phase 7.6.0 — Source selector (ComboBox) + footer.** Depends
+- [x] **Phase 7.6.0 — Source selector (ComboBox) + footer.** Depends
       on 7.5.0 verified solid. Smallest remaining section — least
       flagged in the investigation, but still part of the full
       rebuild and still gated the same way as every other section.
-  - Apply §4 point 5 (reserve width for the longest expected string)
-    to any label using the existing "—" placeholder convention here.
-  - Verify: 7.2.0's harness across source (short/long/none), confirm
-    nothing above shifted. Closes out the section-by-section pass —
-    every row in the new build now exists.
+  - **New components**: `SourceSelector.qml` (SOURCE eyebrow + the
+    ComboBox) and `Footer.qml` (connection-status line), split rather
+    than folded into one file (task item 1's "your call") - the
+    selector is interactive with its own model/command/signal surface,
+    the footer is purely presentational (`online`/`ampIp` only, no
+    signal), a genuinely different concern. `sectionsPlaceholder` is
+    now **fully consumed** - confirmed by `grep -rn
+    "sectionsPlaceholder" plasmoid/` turning up only historical
+    comments in prior phases' files, no actual `Item` left anywhere
+    (task item 5).
+  - **Task item 2, confirmed against the current file rather than
+    assumed**: `org.kde.plasma.components.ComboBox` (PlasmaComponents3),
+    not QtQuick.Controls' base ComboBox - ported verbatim, including
+    FullRepresentation.qml's own extensive QTBUG-66446 justification
+    comment. Popup/delegate internals genuinely untouched (confirmed by
+    the harness: zero unexpected moves on any of `sourceCombo`'s own
+    visible elements across every `src` state - see below); only
+    background/contentItem/indicator are restyled, exactly as before.
+  - **Task item 3 (§4 point 5), investigated rather than assumed**: the
+    task's own premise ("likely...using the existing '—' placeholder
+    convention") does not hold here - checked directly
+    (`grep '"—"' plasmoid/contents/ui/*.qml`), the literal em-dash
+    convention only exists in VolumeBlock.qml (already handled in
+    7.4.0) and the toast/tooltip files (not part of this rebuild).
+    This section's own placeholder is `sourceCombo.displayText`'s
+    `"No source"` fallback (ported from the Android app's
+    `no_source_label`), not a dash. Confirmed no new width-reservation
+    fix is needed: `sourceComboLabel` is already `Layout.fillWidth:
+    true` + `elide: Text.ElideRight` inside a ComboBox whose own outer
+    width is fixed (`Layout.fillWidth: true` spans the row,
+    content-independent) - "No source" <-> a real source name (up to
+    the protocol's 16-char slot maximum) can't nudge the icon badge
+    (fixed 24x24, first) or the indicator caret (absolutely positioned
+    off `sourceCombo.width`) either inside or outside the row. §4 point
+    5's actual goal (no nudging across a placeholder<->real-value
+    transition) is achieved via containment (fillWidth + elide), the
+    same technique already proven for VolumeBlock's dB-value row and
+    source chip - confirmed empirically too: the harness's `--vary src`
+    run showed **zero** moves on any of `sourceSelector`'s own visible
+    elements (only the ComboBox's own hidden internal cursor artifact
+    and VolumeBlock's already-allowlisted source chip moved - see
+    below).
+  - **Architecture**: pure signal-up
+    (`SourceSelector.sourceChosen(index, name)`), matching every prior
+    section. `sources`/`activeSourceIndex` added to FlyoutContent
+    (array-of-struct, identical `unwrapSources`/`fetchSourcesFresh`
+    treatment `knownAmps` already established) plus `selectSource()`.
+    `activeSourceName` (added 7.4.0 as an always-trusted scalar) now
+    shares `ActiveSourceIndex`'s debounce guard
+    (`lastSourceChangeAtMs`) - the identical "gains a guard once it
+    gains a local writer" pattern Power/PowerState followed in 7.5.0.
+  - **New `tools/flyout-harness/expected-7.6.0.json`**, extending
+    7.5.0's file with: (a) a narrow rule for
+    `SourceSelector[0]/ComboBox[0]/MobileCursor[0]` (PlasmaComponents3's
+    own internal mobile text-selection-cursor handle, part of the
+    untouched popup/delegate internals) - confirmed via the raw coords
+    dump (`vis: false` in every flagged pair) that it never renders
+    while the popup is closed, same precedent as 7.5.0's `powerSpinner`
+    rule; (b) a `dim: "amp"` rule for `footer`/`footerDot`/
+    `footerLabel` - see the discovery below.
+  - **Real finding during verification, not assumed clean**: the
+    footer's own `RowLayout` carries `Layout.fillWidth: true` +
+    `Layout.alignment: Qt.AlignHCenter` together (ported verbatim from
+    FullRepresentation.qml). Initial documentation in `Footer.qml`
+    assumed this combination was inert (fillWidth forcing full width
+    makes centering moot) and concluded no §4 point 5 concern existed
+    there. The harness's own `--set smoke` run (dim `amp`,
+    0known vs 1auto-short) proved that assumption wrong: `footer`'s
+    measured width tracks its own content, not mainColumn's width, and
+    the row visibly recenters (window-space x shifts) as the
+    connection-status text's length changes. Corrected: `footerDot`/
+    `footerLabel`'s own x *relative to `footer`* never moves (confirmed
+    via the raw coords dump) - only the parent row's position as a
+    whole. Not a master-finding risk (last row in mainColumn, nothing
+    below to cascade into, own height never changes) and not a §4
+    point 5 case either (none of "Connected"/"Not connected"/"Not
+    responding" is a placeholder form) - allowlisted as a confirmed-
+    harmless, inherited-unchanged cosmetic wobble, not silently
+    ignored. `Footer.qml`'s header comment corrected to the empirically
+    verified explanation before committing.
+  - **Second real finding during verification, more significant**: the
+    very first `--set smoke` eyeball screenshot was missing the footer
+    entirely. Investigated rather than dismissed as a crop error:
+    the coords dump's own `begin.mainItem` record showed `ih: 373`
+    (the real content's implicit height) against an actual `h: 342` -
+    the popup was rendering **31px short of its own content**. Root
+    cause: CLAUDE.md's already-documented AppletPopup size-key
+    collision (`popupWidth`/`popupHeight` persisted in the applet's
+    KConfig group from an earlier session, read back and applied
+    verbatim at construction, overriding the content-driven implicit
+    size). This was already known/documented policy for *manual*
+    testing, but had gone unnoticed across 7.3.0-7.6.0's own harness
+    runs specifically because every phase's own "popup geometry" check
+    only asserts *stability across states within one run* (a real,
+    still-valid check), never *`h` equals `ih`* - so a stale/stuck size
+    would pass that check silently every time, which is exactly what
+    happened here. Fixed per CLAUDE.md's documented remedy
+    (`kwriteconfig6 --delete` on both keys + `plasmashell --replace`);
+    re-verified the popup then grew to the correct 300x373 (316x388
+    window) and the footer rendered correctly. **All of this phase's
+    verification runs were re-run after the fix** - the results
+    reported above are from the corrected geometry, not the clipped
+    one. Not re-verified retroactively for 7.3.0-7.5.0 (their own
+    coordinate-based regression checks remain valid regardless of
+    window clipping - Qt still computes item geometry correctly even
+    when the containing window is too short to show all of it - so
+    nothing there is known to be wrong, only unconfirmed by an explicit
+    `h`-vs-`ih` check at the time). Worth folding an explicit `h == ih`
+    assertion into the harness itself before 7.7.0's full gate, so this
+    can't silently recur - flagging for that phase, not fixed here
+    (out of this phase's own scope).
+  - **Verified live (Plasma 6.7.4, Wayland/KWin), flag on, harness
+    driving via D-Bus (no input automation), all against
+    `expected-7.6.0.json`, after the popup-size-key fix above**:
+    - `run --set smoke`: **exit 0**, 0 unexpected moves, 0 warnings,
+      control identical, single popup-geometry row (316×388/300×373,
+      correctly grown from 7.5.0's 316×357/300×342 by this phase's real
+      content).
+    - `run --vary src` (the task's own narrow run - short/long/none):
+      **exit 0**, 0 unexpected moves, 0 warnings. Every allowed move's
+      key confined to `SourceSelector`'s hidden `MobileCursor` artifact
+      or `VolumeBlock`'s already-allowlisted `sourceChip` (since
+      `activeSourceName` feeds both) - zero coordinate drift on
+      `AmpHeader`/`VolumeBlock`'s own visible elements/`ActionRow`,
+      confirming 7.3.0-7.5.0's guarantee held. `SourceSelector`'s own
+      visible elements (`sourceComboLabel`/`sourceIconBadge`/indicator)
+      showed **zero** moves at all across every `src` state - empirical
+      confirmation of the item-3 investigation above.
+    - Settle floor: `--vary src` and `--set smoke` at 600ms (default)
+      vs `--settle-ms 1200` → `harness.py compare` on both: `--vary
+      src` identical; `--set smoke` showed only the already-documented
+      (7.5.0) invisible-`powerSpinner` noise, nothing new. 600ms holds
+      for this section too.
+    - `--set full` explicitly not run this phase, reserved for 7.7.0.
+  - **Eyeballed** (`shots/*.png`, inspected directly, post-fix): base
+    state renders the full flyout - header, volume block, action row,
+    "SOURCE" + "Optical 1" combo, divider, "● Connected" footer - all
+    matching the mockup; `src=long`'s "Chromecast Audio" fits the combo
+    without eliding; the not-connected (`0known`) state shows the whole
+    selector dimmed, "No source", and "Not connected" in the footer.
+  - Popup size keys confirmed restored to empty (their pre-fix,
+    pre-this-phase-testing state) after every run via `kreadconfig6`;
+    flag set back to `false` and the plasmoid reinstalled/
+    `plasmashell --replace` afterward, matching every prior phase's
+    convention.
 
 - [ ] **Phase 7.7.0 — Full-suite verification gate.** Depends on
       7.3.0-7.6.0 all landed. Not a repeat of each section's own local

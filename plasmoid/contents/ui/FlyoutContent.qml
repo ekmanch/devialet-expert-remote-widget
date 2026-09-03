@@ -6,12 +6,11 @@
 // Phase 7.3.0 built the amp header (AmpHeader.qml, in-flow) + the amp list
 // (AmpListOverlay.qml, pulled out of flow per §4 point 4 option (b)).
 // Phase 7.4.0 added the volume block (VolumeBlock.qml - dB/unit readout,
-// source chip, -/slider/+). Phase 7.5.0 adds the action row (ActionRow.qml
-// - mute/power buttons). Everything below it - source selector, footer -
-// remains a declared placeholder spacer (`sectionsPlaceholder`) that
-// 7.6.0 replaces; it exists so the popup's height stays realistic (the
-// overlay would otherwise be clipped by a too-short popup). Do not port
-// 7.6.0's section here.
+// source chip, -/slider/+). Phase 7.5.0 added the action row
+// (ActionRow.qml - mute/power buttons). Phase 7.6.0 adds the source
+// selector (SourceSelector.qml) and footer (Footer.qml), fully consuming
+// `sectionsPlaceholder` - every row in this file is now real content, no
+// placeholder spacer remains anywhere.
 //
 // State/functions below were the header-only subset ported verbatim from
 // FullRepresentation.qml through 7.3.0 (online/deviceName/ampIp/power/
@@ -24,18 +23,24 @@
 // local mirror, they're read from `pendingAmpState` (the required
 // property already forwarded in) per Phase 5's shared, daemon-resolved
 // architecture - see VolumeBlock.qml's header comment for the full
-// reasoning. Phase 7.5.0 adds the mute/power command surface
+// reasoning. Phase 7.5.0 added the mute/power command surface
 // (toggleMute/togglePower/beginPowerOnBoot): mute follows the same
 // pendingAmpState.muted pattern volume already established (no local
 // mirror, no debounce - Phase 5.0.2 Step B's daemon-resolved shape).
 // Power/PowerState are different - PendingAmpState deliberately doesn't
 // cover them (see its own header comment), so they stay in this file's
 // own D-Bus mirror (already present since 7.3.0 for the header), which
-// gains its first writer this phase and therefore its first debounce
-// guard (`lastPowerChangeAtMs`, ported from FullRepresentation.qml -
-// still genuinely needed here, unlike volume/mute, since no daemon-owned
-// pending-command state exists for Power). Sources handling for the
-// source selector is still not ported - that's 7.6.0.
+// gained its first writer in 7.5.0 and therefore its first debounce guard
+// (`lastPowerChangeAtMs`, ported from FullRepresentation.qml). Phase
+// 7.6.0 adds `sources`/`activeSourceIndex` (array-of-struct, same
+// "don't trust the PropertiesChanged delta, re-fetch on signal"
+// treatment `knownAmps` already has - `unwrapSources`/
+// `fetchSourcesFresh`) plus `selectSource()`. `activeSourceName` (added
+// in 7.4.0 as an always-trusted scalar, since nothing wrote it locally
+// back then) now shares `ActiveSourceIndex`'s debounce guard
+// (`lastSourceChangeAtMs`) alongside it, for the identical reason Power/
+// PowerState gained one in 7.5.0: this phase gives it its first local
+// writer.
 
 pragma ComponentBehavior: Bound
 
@@ -89,11 +94,85 @@ Item {
     property var knownAmps: []
     property string selectedAmpIp: ""
 
-    // ---- Phase 7.4.0: volume block state ----
-    // Plain scalar mirror, trusted directly like online/deviceName/ampIp
-    // above (no array-of-struct fetch-fresh workaround needed - same basis
-    // as FullRepresentation.qml's own header comment on ActiveSourceName).
+    // ---- Phase 7.4.0/7.6.0: source state ----
+    // activeSourceName: plain scalar mirror (added 7.4.0), trusted like
+    // online/deviceName/ampIp - but see the Phase 7.6.0 debounce guard on
+    // it below now that selectSource() writes it locally.
     property string activeSourceName: ""
+    // Phase 7.6.0: ActiveSourceIndex is a scalar too (`y`/byte, confirmed
+    // via FullRepresentation.qml's own busctl-checked header comment), no
+    // fetch-fresh workaround needed. `sources` (a(sybb)) IS array-of-
+    // struct like KnownAmps, so it gets the identical treatment -
+    // unwrapSources()/fetchSourcesFresh() below, ported from
+    // FullRepresentation.qml.
+    property int activeSourceIndex: -1
+    property var sources: []
+    property double lastSourceChangeAtMs: 0
+
+    property bool sourcesFetchInFlight: false
+
+    function unwrapSources(raw) {
+        if (raw === undefined || raw === null) return [];
+        var result = [];
+        for (var i = 0; i < raw.length; i++) {
+            var t = raw[i];
+            result.push({
+                name: root.unwrap(t[0], ""),
+                index: root.unwrap(t[1], i),
+                enabled: t[2],
+                selected: t[3]
+            });
+        }
+        return result;
+    }
+
+    // Sources' PropertiesChanged delta payload is not trustworthy on
+    // repeat updates (see FullRepresentation.qml's own fetchSourcesFresh
+    // doc for the wire-level finding, same basis as fetchKnownAmpsFresh
+    // above) - re-fetch via an explicit Get on the signal rather than
+    // trusting `changed.Sources`.
+    function fetchSourcesFresh() {
+        if (root.sourcesFetchInFlight) return;
+        root.sourcesFetchInFlight = true;
+        Dbus.SessionBus.asyncCall(
+            new Dbus.dbusMessage({
+                service: "com.ekmanch.DevialetRemote",
+                path: "/com/ekmanch/DevialetRemote/Amp",
+                interface: "org.freedesktop.DBus.Properties",
+                member: "Get",
+                arguments: ["com.ekmanch.DevialetRemote.Amp1", "Sources"]
+            }),
+            function (reply) {
+                root.sourcesFetchInFlight = false;
+                if (reply.isError) {
+                    console.log("[WARN] explicit Get(Sources) returned a D-Bus error:", JSON.stringify(reply.error));
+                    return;
+                }
+                const unwrapped = root.unwrapSources(root.unwrap(reply.value, []));
+                if (unwrapped.length > 0) {
+                    root.sources = unwrapped;
+                } else {
+                    console.log("[WARN] explicit Get(Sources) resolved but produced no usable data:", JSON.stringify(reply.value).substring(0, 200));
+                }
+            },
+            function (reply) {
+                root.sourcesFetchInFlight = false;
+                console.log("[WARN] explicit Get(Sources) call failed:", JSON.stringify(reply.error));
+            }
+        );
+    }
+
+    // Called from SourceSelector's sourceChosen signal - index/name are
+    // already validated against the component's own model (see
+    // SourceSelector.qml's onActivated), so no bounds check needed here,
+    // matching FullRepresentation.qml's original onActivated body.
+    function selectSource(index, name) {
+        if (root.ampIp === "") return;
+        root.activeSourceIndex = index;
+        root.activeSourceName = name;
+        root.lastSourceChangeAtMs = root.now();
+        root.runCtl("source " + index);
+    }
 
     readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
     readonly property real volumeCeilingDb: -15.0
@@ -322,6 +401,11 @@ Item {
             root.power = root.unwrap(properties.Power, false);
             root.powerState = root.unwrap(properties.PowerState, "Off");
             root.activeSourceName = root.unwrap(properties.ActiveSourceName, "");
+            root.activeSourceIndex = root.unwrap(properties.ActiveSourceIndex, -1);
+            const initialSources = root.unwrapSources(root.unwrap(properties.Sources, []));
+            if (initialSources.length > 0) {
+                root.sources = initialSources;
+            }
             const initialKnownAmps = root.unwrapKnownAmps(root.unwrap(properties.KnownAmps, []));
             if (initialKnownAmps.length > 0) {
                 root.knownAmps = initialKnownAmps;
@@ -349,7 +433,17 @@ Item {
                     root.powerState = root.unwrap(changed.PowerState, root.powerState);
                 }
             }
-            if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
+            // Phase 7.6.0: debounce guard added now that selectSource()
+            // writes both of these optimistically - same reasoning as the
+            // Power/PowerState guard above (one guard, one click drives
+            // both), ported from FullRepresentation.qml's identical
+            // treatment.
+            if (("ActiveSourceIndex" in changed || "ActiveSourceName" in changed)
+                && !root.within(root.lastSourceChangeAtMs, root.debounceMs)) {
+                if ("ActiveSourceIndex" in changed) root.activeSourceIndex = root.unwrap(changed.ActiveSourceIndex, root.activeSourceIndex);
+                if ("ActiveSourceName" in changed) root.activeSourceName = root.unwrap(changed.ActiveSourceName, root.activeSourceName);
+            }
+            if ("Sources" in changed) root.fetchSourcesFresh();
             if ("SelectedAmpIp" in changed) root.selectedAmpIp = root.unwrap(changed.SelectedAmpIp, root.selectedAmpIp);
             if ("KnownAmps" in changed) root.fetchKnownAmpsFresh();
         }
@@ -417,17 +511,34 @@ Item {
             onPowerToggleRequested: root.togglePower()
         }
 
-        // Stand-in for 7.6.0's remaining section (source selector,
-        // footer). Height is an estimate of that combined content so the
-        // popup is a realistic size and the overlay isn't clipped; 7.6.0
-        // replaces it and it is gone. Not a binding to any real content -
-        // purely a spacer. Shrunk from 7.4.0's 156 by ActionRow's own
-        // measured contribution now that it's real content instead of
-        // part of this estimate.
-        Item {
-            objectName: "sectionsPlaceholder"
+        SourceSelector {
+            id: sourceSelector
+            theme: root.theme
+            ampIp: root.ampIp
+            sources: root.sources
+            activeSourceIndex: root.activeSourceIndex
+            activeSourceName: root.activeSourceName
+            onSourceChosen: (index, name) => root.selectSource(index, name)
+        }
+
+        // Plain, unconditional section divider between the source
+        // selector and the footer - lives directly in mainColumn, not
+        // owned by either component, matching FullRepresentation.qml's
+        // own structure exactly (a bare Rectangle sibling of the source
+        // ColumnLayout and footer RowLayout there too, not nested inside
+        // either).
+        Rectangle {
+            objectName: "sourceFooterDivider"
             Layout.fillWidth: true
-            Layout.preferredHeight: 100
+            height: 1
+            color: root.theme.divider
+        }
+
+        Footer {
+            id: footer
+            theme: root.theme
+            ampIp: root.ampIp
+            online: root.online
         }
     }
 
