@@ -4628,6 +4628,104 @@ architecture decisions; this file is just sequencing and status.
     `FullRepresentation.qml`, and no lingering flags from either the
     original spike or the corrected one.
 
+- [x] **Phase 7.14.0 — Restyle AmpListOverlay/SourceSelector to match
+      the updated mockup.** Done 2026-09-05 (second pass; the first,
+      Sonnet 5 auto-mode attempt was fully reverted after three live
+      failures restyling the `PlasmaComponents3.ComboBox` dropdown -
+      nothing from it survived in git). Reference:
+      `design/mockups/flyout/Devialet flyout mockup v2.html`
+      (`.overlay-popup`, `.amp-option`, `.source-row`, `.source-option`).
+  - **Architecture decision (investigated before any code, plan
+    approved by the owner)**: `SourceSelector.qml` no longer uses a
+    ComboBox at all. The "required per QTBUG-66446" rule was re-examined:
+    the bug (fetched from Qt's Jira: "Popup's contentItem isn't mirrored
+    if no Window exists", Quick Controls 2, unresolved since 5.10) is an
+    RTL `LayoutMirroring` bug filed against Popup in general - it applies
+    to `AmpListOverlay.qml`'s Popup just as much, is moot for this
+    LTR-only UI, and was never a reason to prefer ComboBox. The real
+    Phase 3 failure was `QtQuick.Controls.ComboBox`'s qqc2-desktop-style
+    popup being a QStyle-drawn `Menu` (`/usr/lib/qt6/qml/org/kde/
+    desktop/ComboBox.qml`), which a plain Popup never touches. And the
+    three-times-failed restyle is structural: PC3 ComboBox's popup
+    ListView only gets its model once `popup.visible` is true and its
+    height chases delegates as they land while the positioner shrinks it
+    to fit - any outside height/background customization races that.
+    Recorded as a settled Architecture note in CLAUDE.md.
+  - **New `SourceListOverlay.qml`**: a `QtQuick.Controls.Popup` cloned
+    from `AmpListOverlay.qml`'s shape (owner-driven `open()/close()`,
+    `closed` signal, never binds `visible`, `ColumnLayout` + `Repeater`
+    content so height is known before open). Parented to the source row
+    (so `x:0`/parent width is the mockup's 16px inset for free), opens
+    UPWARD (`y: -height - 6`; the 6px gap is a reading of the mockup's
+    `bottom:72px`, not a measured value - see soak list), capped at 252px
+    and at the live space above the row (a plain Popup has no fit logic
+    of its own; the old dropdown's upward flip came from ComboBox's
+    positioner). Rows: 20px icon chip, 13px name, copper text + ✓ on the
+    active source, hover `surface2`, pinned 36px height. Bounds check on
+    the chosen index lives here (it owns the model), as it did in the
+    old `onActivated`. Side benefit: PC3 ComboBox's built-in wheel
+    handler that cycled sources on scroll over the closed row (each
+    switch forcing -40 dB) is gone. Trade-off, stated: ComboBox's free
+    arrow-key navigation is gone too; the amp list never had it and the
+    mockup specifies none.
+  - **`SourceSelector.qml` rebuilt as the closed row only** (mockup
+    `.source-row`): icon chip (follows the ACTIVE source's glyph - owner
+    decision; the mockup JS's static ◉ was a shortcut) + "SOURCE"
+    eyebrow and name stacked inside the row (the eyebrow used to be a
+    separate Label above the ComboBox) + caret that rotates/turns copper
+    while open. Same `listOpen`/`toggleRequested()` contract as
+    `AmpHeader.qml`; exposes `rowItem` for the Popup's parent. Row
+    height pinned per the AlignBaseline house rule to a measured 32 + 18
+    = 50 (label stack is 32 in every state - "Optical 1", 16-char
+    "Chromecast Audio", "No source" - from the smoke run's coords dump;
+    a first guess of 31 was corrected from the measurement, not kept).
+    The flyout window is 300×363 now (was 300×362).
+  - **`AmpListOverlay.qml`**: floating card (inset 16px, 13px radius,
+    border, gradient, shadow) with 8px inner padding and 9px row radius;
+    None row / divider / empty label kept (Android-port behaviour; no
+    mockup version ever drew the None row; this phase is visual-only).
+    Connected-dot glow skipped, matching AmpHeader's own dot.
+  - **New `OverlayCardBackground.qml`** (shared by both cards):
+    `Kirigami.ShadowedRectangle` (what qqc2-desktop-style's own Popup
+    uses) + an inset gradient Rectangle (ShadowedRectangle has no
+    gradient property). **`Theme.qml`**: `radiusOverlay: 13` (explicit
+    constant, NOT `Kirigami.Units.cornerRadius` - owner decision, that
+    one exists for the Darkly frame match on the flyout's outer corner),
+    `radiusOverlayRow: 9`, the card colours, and `sourceGlyph(name)`
+    (keyword match on the amp-broadcast name → ◉ ◫ ◍ ◈ ◐ ◇, ◉ fallback;
+    all six verified present in DejaVu Sans, the fontconfig fallback).
+  - **`FlyoutContent.qml`**: `sourceListOpen` alongside `ampListOpen`,
+    identical imperative pattern; both reset on flyout hide; mutual
+    exclusion enforced explicitly in the two change handlers (opening
+    one clears the other, mirroring the mockup's `toggleAmpList()`/
+    `toggleSourceList()`) rather than left to the press-outside close
+    policies happening to fire. `selectSource()` now fed by the overlay.
+  - **Harness**: new `slist` dimension (closed/open → `sourceListOpen`
+    in UiState; collapses to `-` for not-connected amps since the row
+    is disabled there), in `smoke` and `--set source`; new
+    `expected-7.14.0.json` (drops the dead `MobileCursor` rule, adds the
+    `SourceListOverlay|sourceOption:` rule on `slist`); README updated.
+  - **Verified (harness, all against `expected-7.14.0.json`)**: `--set
+    smoke` (8 states, run 20260905-182810), `--vary amp,list` (14
+    states, 20260905-182951) and `--vary src,slist` (6 states,
+    20260905-183022) all **PASS** - control stable, mainItem size ==
+    implicit size in every state, zero unexpected moves. Screenshots
+    checked by eye: both cards inset with rounded corners and shadow;
+    source card floats above the row with all six sources, glyphs and ✓;
+    amp card with None/divider/two amps and the 31-char UDP name
+    eliding; `src=long` (16 chars) and `src=none` fit the closed row;
+    not-connected shows the dimmed "No source" row. journal clean of QML
+    errors from every changed file across three shell restarts.
+  - **Owner soak (real pointer, 2026-09-05) - passed, phase closed.**
+    Owner's report: everything "exactly as it should"; dismiss behaviour
+    confirmed live in both directions: with either list expanded, a
+    click outside the flyout entirely closes the whole flyout
+    (`hideOnWindowDeactivate`), while a click elsewhere inside the
+    flyout closes only the expanded list and leaves the flyout open -
+    judged the desired behaviour. No follow-ups from the soak; the 6px
+    card gap and the one-click-vs-two exclusivity question raised no
+    complaint.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -4681,43 +4779,6 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Phase 7.14.0 — Restyle AmpListOverlay/SourceSelector to match
-      the updated mockup.** Depends on 7.13.0. Visual polish only, no
-      architectural or behavioral changes — both components' existing
-      self-contained boundaries (visibility, positioning, dismiss, the
-      ampChosen(ip)/open signal contracts) stay exactly as they are.
-  - Reference: `Devialet_flyout_mockup_v1.html`, "MOCKUP · POPUP/
-    COMBOBOX OVERLAY BEHAVIOR" section — a newer, more polished design
-    pass than what Phase 7.3.0 originally implemented against.
-  - Both `AmpListOverlay.qml` and `SourceSelector.qml`'s popups should
-    read as floating cards inset from the flyout's own edges, with
-    visible rounded corners (`Kirigami.Units.cornerRadius`, per the
-    existing house rule) — not flush/full-width against the flyout
-    container the way they currently render.
-  - `AmpListOverlay.qml`: confirm row padding/spacing matches the
-    mockup's visual density; selected-amp styling (copper dot/text +
-    checkmark) already matches, just needs the card treatment above.
-  - `SourceSelector.qml` — the bigger gap: the mockup shows a small
-    icon chip per source row (distinct glyphs for Optical/UPnP/Roon
-    Ready/AirPlay/Spotify) and copper text + checkmark for the selected
-    row, replacing the current flat gray highlight bar and plain text
-    rows. This uses `org.kde.plasma.components.ComboBox` (required per
-    CLAUDE.md's QTBUG-66446 house rule) — first confirm its
-    delegate/popup/background properties actually support this level
-    of customization before implementing; report back if there's a
-    real constraint rather than assuming it'll just work. Check the
-    mockup's HTML for the actual per-source glyphs and whether this
-    project has an existing icon convention to match, rather than
-    inventing a new one.
-  - Verify live across every existing test state (0/1/2+ known amps,
-    empty source list, long source/amp names). Pure styling — run the
-    Phase 7.2.0 harness's `--vary amp,list` and confirm zero unexpected
-    moves outside the overlay prefix, since everything in `mainColumn`
-    should stay completely unaffected.
-  - Do not touch `AmpHeader.qml`, `VolumeBlock.qml`, `ActionRow.qml`,
-    or `FlyoutContent.qml`'s own structure — scoped entirely to the two
-    overlay components' internal visual content.
-    
 - [ ] Phase 8.0.0 — Rust: hard-limit clamp in the shared protocol crate.
   The safety backstop, independent of any UI/mockup work, so this can
   start immediately. Any function in the dependency-free protocol

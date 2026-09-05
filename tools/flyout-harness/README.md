@@ -55,7 +55,12 @@ python3 $H compare runs/<a> runs/<b>            # coordinate diff across two run
 
 Selection: `--set smoke|amp|volume-mute|power|source|full`, or `--vary
 dim,dim` (others held at the base state `1auto-short / -40.0 / off / On /
-short / closed`), plus `--fix dim=value` filters. Dimensions and values are
+short / closed / closed`), plus `--fix dim=value` filters. Dimensions:
+`amp`, `vol`, `mute`, `pow`, `src`, `list` (amp list overlay open/closed)
+and, since Phase 7.14.0, `slist` (source list overlay open/closed, driven
+through `FlyoutContent.sourceListOpen`; collapses to `-` for
+not-connected amp values like `src` does, since the source row is
+disabled there). Dimensions and values are
 in `scenarios.py`; not-connected amp values (`0known`, `1none`, `2none`)
 collapse vol/mute/pow/src to `-` because the daemon's None branch zeroes
 them — those states carry no inner product.

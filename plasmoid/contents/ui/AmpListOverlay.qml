@@ -5,14 +5,13 @@
 // TODO.md's Phase 7.3.0 entry and the plan it cites.
 //
 // Implemented as a QtQuick.Controls Popup, not a second PlasmaCore.Dialog:
-// PlasmaComponents3.ComboBox drives its own dropdown this exact way inside
-// the same AppletPopup window (/usr/lib/qt6/qml/org/kde/plasma/components/
-// ComboBox.qml), so the Popup's content is reparented into the flyout
-// window's own Overlay - no new native window, and so nothing that could
-// trip the flyout's hideOnWindowDeactivate / requestActivate focus relay
-// (investigation document §3's named risk). Verified live in Phase 7.3.0
-// (window count unchanged on open, flyout stays active, no
-// setWindowState warning - see TODO.md).
+// the Popup's content is reparented into the flyout window's own Overlay -
+// no new native window, and so nothing that could trip the flyout's
+// hideOnWindowDeactivate / requestActivate focus relay (investigation
+// document §3's named risk). Verified live in Phase 7.3.0 (window count
+// unchanged on open, flyout stays active, no setWindowState warning - see
+// TODO.md). Phase 7.14.0: SourceListOverlay.qml is built on exactly this
+// same shape (see its header for why the ComboBox went away).
 //
 // Self-containment boundary (so reverting option (b) later is a targeted
 // change to this file + one line in FlyoutContent.qml): inputs are
@@ -29,6 +28,17 @@
 // Finding 4: the old silent clip-at-220 (Item{clip:true} +
 // Math.min(...,220)) becomes a real ScrollView + ScrollBar; height changes
 // stay inside the overlay by construction.
+//
+// Phase 7.14.0 restyle (mockup v2 `.overlay-popup` / `.amp-option`): the
+// list is now a floating card inset 16px from the flyout's edges (was
+// flush/full-width with a bare bottom line), with the shared
+// OverlayCardBackground (13px radius, border, gradient, shadow), 8px
+// inner padding (`.amp-list-inner{padding:8px}`, replacing the per-row
+// 10px side margins + hand-placed 8px spacers) and 9px row radius. The
+// None row / divider / empty label are Android-port behaviour no mockup
+// version ever drew - kept as-is (Phase 7.14.0 is visual-only). The
+// connected dot's glow (`box-shadow`) is skipped, matching AmpHeader's
+// own dot which never drew its glow either.
 
 pragma ComponentBehavior: Bound
 
@@ -46,39 +56,26 @@ Popup {
 
     signal ampChosen(string ip)
 
-    // Flush, full-width, directly under the header (parent), exactly where
-    // the inline list used to sit - the mockup's look preserved, geometry
-    // out of flow.
-    x: 0
+    // Inset card directly under the header (parent): `.overlay-popup
+    // {left:16px; right:16px}` + `#ampList{top:64px}` (the header's own
+    // bottom edge in the mockup).
+    readonly property int inset: 16
+    x: overlay.inset
     y: parent ? parent.height : 0
-    width: parent ? parent.width : 0
+    width: parent ? parent.width - 2 * overlay.inset : 0
     // Finding 4: capped height with a real scroll affordance, replacing
-    // the old silent clip. 8px top/bottom inner padding (mockup's
-    // `.amp-list-inner{padding:8px 10px}`; left/right handled per-row).
-    padding: 0
-    readonly property int maxListHeight: 220
-    height: Math.min(listColumn.implicitHeight + 16, overlay.maxListHeight)
+    // the old silent clip. Popup padding is the card's inner padding
+    // (`.amp-list-inner{padding:8px}`); height = content + 2*padding.
+    padding: 8
+    readonly property int maxListHeight: 230
+    height: Math.min(listColumn.implicitHeight + 2 * overlay.padding, overlay.maxListHeight)
 
     modal: false
     dim: false
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-    // Opaque surface (the list now floats over the volume block below) with
-    // a 1px bottom edge only - finding 6. The mockup's only-when-open
-    // divider was `.amp-list.open{border-bottom-color:var(--divider)}`,
-    // i.e. the list's own bottom edge, so it belongs here. No top border:
-    // the header's own bottom divider sits directly above.
-    background: Rectangle {
-        color: overlay.theme.surface
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: overlay.theme.divider
-        }
-    }
+    background: OverlayCardBackground { theme: overlay.theme }
 
     contentItem: ScrollView {
         clip: true
@@ -86,7 +83,7 @@ Popup {
 
         ColumnLayout {
             id: listColumn
-            width: overlay.width
+            width: overlay.availableWidth
             spacing: 2
 
             // ---- "None" row (Android port, verbatim) ----
@@ -96,11 +93,8 @@ Popup {
                 readonly property bool isCurrent: overlay.ampIp === ""
 
                 Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 10
-                Layout.rightMargin: 10
                 implicitHeight: ampNoneRow.implicitHeight + 16
-                radius: overlay.theme.radiusSm
+                radius: overlay.theme.radiusOverlayRow
                 color: ampNoneArea.containsMouse ? overlay.theme.surface2 : "transparent"
 
                 RowLayout {
@@ -171,8 +165,8 @@ Popup {
             Rectangle {
                 objectName: "ampListDivider"
                 Layout.fillWidth: true
-                Layout.topMargin: 6
-                Layout.bottomMargin: 4
+                Layout.topMargin: 4
+                Layout.bottomMargin: 2
                 Layout.leftMargin: 4
                 Layout.rightMargin: 4
                 height: 1
@@ -202,10 +196,8 @@ Popup {
                     readonly property string displayName: modelData.modelName !== "" ? modelData.modelName : modelData.deviceName
 
                     Layout.fillWidth: true
-                    Layout.leftMargin: 10
-                    Layout.rightMargin: 10
                     implicitHeight: ampOptionRow.implicitHeight + 16
-                    radius: overlay.theme.radiusSm
+                    radius: overlay.theme.radiusOverlayRow
                     color: ampOptionArea.containsMouse ? overlay.theme.surface2 : "transparent"
 
                     RowLayout {
@@ -273,10 +265,6 @@ Popup {
                     }
                 }
             }
-
-            // Bottom padding inside the scroll content (matches the
-            // mockup's `.amp-list-inner` 8px bottom).
-            Item { Layout.preferredHeight: 8; Layout.fillWidth: true }
         }
     }
 }

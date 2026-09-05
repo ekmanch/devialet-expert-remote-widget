@@ -15,7 +15,7 @@ for such states and carry no inner product.
 
 import itertools
 
-DIMS = ["amp", "vol", "mute", "pow", "src", "list"]
+DIMS = ["amp", "vol", "mute", "pow", "src", "list", "slist"]
 
 AMP_VALUES = ["0known", "1auto-short", "1auto-long", "1none", "2none", "2sel-short", "2sel-long"]
 VOL_VALUES = ["-40.0", "-15.0", "0.0"]
@@ -23,6 +23,10 @@ MUTE_VALUES = ["off", "on"]
 POW_VALUES = ["Off", "Booting", "On"]
 SRC_VALUES = ["short", "long", "none"]
 LIST_VALUES = ["closed", "open"]
+# Phase 7.14.0: the source list overlay (SourceListOverlay.qml), driven
+# through FlyoutContent.sourceListOpen exactly like `list` drives
+# ampListOpen.
+SLIST_VALUES = ["closed", "open"]
 
 VALUES = {
     "amp": AMP_VALUES,
@@ -31,9 +35,10 @@ VALUES = {
     "pow": POW_VALUES,
     "src": SRC_VALUES,
     "list": LIST_VALUES,
+    "slist": SLIST_VALUES,
 }
 
-BASE = {"amp": "1auto-short", "vol": "-40.0", "mute": "off", "pow": "On", "src": "short", "list": "closed"}
+BASE = {"amp": "1auto-short", "vol": "-40.0", "mute": "off", "pow": "On", "src": "short", "list": "closed", "slist": "closed"}
 
 WILD = "-"
 
@@ -102,7 +107,11 @@ def normalize(dims):
     """Collapse the inner dimensions to WILD for not-connected amp values."""
     d = dict(dims)
     if not is_connected(d["amp"]):
-        for k in ("vol", "mute", "pow", "src"):
+        # `slist` collapses too: the source row is disabled while not
+        # connected (no amp / no enabled sources), so an open source list
+        # is unreachable there - unlike the amp list, which is exactly
+        # what you open in those states.
+        for k in ("vol", "mute", "pow", "src", "slist"):
             d[k] = WILD
     return d
 
@@ -135,7 +144,10 @@ def build_props(dims):
 
 
 def build_ui(dims):
-    return {"ampListOpen": "true" if dims["list"] == "open" else "false"}
+    return {
+        "ampListOpen": "true" if dims["list"] == "open" else "false",
+        "sourceListOpen": "true" if dims["slist"] == "open" else "false",
+    }
 
 
 def make_state(dims):
@@ -173,6 +185,7 @@ def smoke():
     base = make_state(BASE)
     variants = [
         dict(BASE, list="open"),
+        dict(BASE, slist="open"),
         dict(BASE, vol="0.0"),
         dict(BASE, mute="on"),
         dict(BASE, pow="Booting"),
@@ -187,7 +200,7 @@ SETS = {
     "amp": lambda: vary(["amp", "list"]),
     "volume-mute": lambda: vary(["vol", "mute"]),
     "power": lambda: vary(["pow", "mute"]),
-    "source": lambda: vary(["src"]),
+    "source": lambda: vary(["src", "slist"]),
     "full": full,
 }
 

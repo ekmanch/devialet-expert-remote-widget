@@ -122,6 +122,29 @@ all three.
   `&[u8] -> Result<Status, Error>` functions covering packet building,
   CRC16, `dbConvert`, and the source remap table. Both the daemon and the
   command CLI depend on this crate as thin I/O shims around it.
+- **Flyout overlay lists are `QtQuick.Controls.Popup`, not ComboBox
+  (settled in Phase 7.14.0, do not re-derive).** Both the amp picker
+  (`AmpListOverlay.qml`) and the source picker (`SourceListOverlay.qml`)
+  are plain Popups the widget owns, parented to their trigger row and
+  reparented by Qt into the flyout window's `Overlay.overlay` when open
+  (no second native window), with content in a synchronous
+  `ColumnLayout` + `Repeater` so their height is known before `open()`.
+  `FlyoutContent.qml` owns one bool per list (`ampListOpen`,
+  `sourceListOpen`), drives `open()/close()` imperatively, listens to
+  `closed`, never binds `visible`, and clears the other flag when one
+  opens (mutual exclusion is explicit, not left to press-outside
+  policies). The source list used `PlasmaComponents3.ComboBox` through
+  Phase 7.13.0 under a "required per QTBUG-66446" rule; that rule was
+  re-examined in 7.14.0 and does not hold: QTBUG-66446 is "Popup's
+  contentItem isn't mirrored if no Window exists" — an RTL
+  `LayoutMirroring` bug filed against Popup in general (it applies to
+  these Popups too and is moot for this LTR-only UI). The real Phase 3
+  failure was `QtQuick.Controls.ComboBox`'s qqc2-desktop-style popup
+  being a QStyle-drawn `Menu`, which a plain Popup never touches. Do not
+  restyle the open dropdown by overriding a ComboBox's `popup:` — its
+  ListView only gets its model once visible and its height chases
+  delegates as they land, which broke live three times before the Popup
+  rebuild.
 - **In-process alternative (cxx-qt) considered and rejected**: the listener
   could in principle run inside plasmashell's own process via a cxx-qt QML
   plugin instead of as a standalone daemon, eliminating the need for a

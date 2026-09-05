@@ -148,9 +148,9 @@ Item {
         );
     }
 
-    // Called from SourceSelector's sourceChosen signal - index/name are
-    // already validated against the component's own model (see
-    // SourceSelector.qml's onActivated), so no bounds check needed here,
+    // Called from SourceListOverlay's sourceChosen signal - index/name are
+    // already validated against the overlay's own model (see
+    // SourceListOverlay.qml's onClicked), so no bounds check needed here,
     // matching FullRepresentation.qml's original onActivated body.
     function selectSource(index, name) {
         if (root.ampIp === "") return;
@@ -293,21 +293,40 @@ Item {
         }
     }
 
-    // The single UI-state hook (harness `uiTarget` points here). Writers
-    // are all imperative - see the header of this file's plan; no binding
-    // touches it, so the header->overlay->Popup chain can't loop.
+    // The UI-state hooks (harness `uiTarget` points here). Writers are all
+    // imperative - see the header of this file's plan; no binding touches
+    // them, so the trigger->overlay->Popup chains can't loop.
     property bool ampListOpen: false
+    // Phase 7.14.0: the source list is a second owner-driven Popup
+    // (SourceListOverlay.qml) with the identical contract.
+    property bool sourceListOpen: false
 
-    // Reset the list when the flyout hides, so it isn't already expanded on
-    // the next open (neither the old flyout nor a QtQuick Popup resets on
-    // window hide on its own).
-    onPopupVisibleChanged: if (!root.popupVisible) root.ampListOpen = false
+    // Reset both lists when the flyout hides, so neither is already
+    // expanded on the next open (neither the old flyout nor a QtQuick
+    // Popup resets on window hide on its own).
+    onPopupVisibleChanged: {
+        if (!root.popupVisible) {
+            root.ampListOpen = false;
+            root.sourceListOpen = false;
+        }
+    }
 
-    // Drive the overlay Popup imperatively off ampListOpen. close() on an
-    // already-closed Popup is a no-op emitting nothing, so the re-entrant
-    // path (overlay dismiss -> onClosed sets false -> here calls close())
-    // terminates safely.
-    onAmpListOpenChanged: root.ampListOpen ? ampListOverlay.open() : ampListOverlay.close()
+    // Drive each overlay Popup imperatively off its own flag. close() on
+    // an already-closed Popup is a no-op emitting nothing, so the
+    // re-entrant path (overlay dismiss -> onClosed sets false -> here
+    // calls close()) terminates safely. Mutual exclusion (mockup v2's
+    // toggleAmpList()/toggleSourceList(): opening one closes the other)
+    // is enforced here explicitly rather than left to the two Popups'
+    // press-outside close policies happening to fire: clearing the other
+    // flag when it's already false emits nothing, so no ping-pong.
+    onAmpListOpenChanged: {
+        if (root.ampListOpen) root.sourceListOpen = false;
+        root.ampListOpen ? ampListOverlay.open() : ampListOverlay.close();
+    }
+    onSourceListOpenChanged: {
+        if (root.sourceListOpen) root.ampListOpen = false;
+        root.sourceListOpen ? sourceListOverlay.open() : sourceListOverlay.close();
+    }
 
     function unwrap(prop, fallback) {
         if (prop === undefined || prop === null) return fallback;
@@ -529,7 +548,8 @@ Item {
             sources: root.sources
             activeSourceIndex: root.activeSourceIndex
             activeSourceName: root.activeSourceName
-            onSourceChosen: (index, name) => root.selectSource(index, name)
+            listOpen: root.sourceListOpen
+            onToggleRequested: root.sourceListOpen = !root.sourceListOpen
         }
 
         // Plain, unconditional section divider between the source
@@ -566,6 +586,25 @@ Item {
         ampIp: root.ampIp
         onClosed: root.ampListOpen = false
         onAmpChosen: ip => root.selectAmpByIp(ip)
+    }
+
+    // Source list overlay (Phase 7.14.0) - parented to SourceSelector's
+    // row so it opens upward from it (Popup positions relative to
+    // `parent`); same owner-driven contract as AmpListOverlay above.
+    // Index/name arrive already validated against the overlay's own model
+    // (SourceListOverlay's onClicked), matching selectSource()'s existing
+    // "no bounds check here" doc.
+    SourceListOverlay {
+        id: sourceListOverlay
+        parent: sourceSelector.rowItem
+        theme: root.theme
+        enabledSources: sourceSelector.enabledSources
+        activeSourceIndex: root.activeSourceIndex
+        onClosed: root.sourceListOpen = false
+        onSourceChosen: (index, name) => {
+            root.sourceListOpen = false;
+            root.selectSource(index, name);
+        }
     }
 
     // ---- settings trigger, ported from FullRepresentation.qml:772-801 ----

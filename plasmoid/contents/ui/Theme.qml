@@ -129,4 +129,39 @@ QtObject {
     readonly property int radiusLg: 16
     readonly property int radiusMd: 11
     readonly property int radiusSm: 8
+
+    // ---- Phase 7.14.0: overlay cards (mockup v2 `.overlay-popup`) ----
+    // Both AmpListOverlay.qml and SourceListOverlay.qml render as floating
+    // cards inset from the flyout's edges. Their corner radius is an
+    // explicit constant, NOT Kirigami.Units.cornerRadius - that one exists
+    // to match Darkly's window-frame SVG under the flyout's own outer
+    // corner (FlyoutContent's tint Rectangle) and has nothing to do with
+    // these self-drawn inner cards (owner decision, Phase 7.14.0).
+    readonly property int radiusOverlay: 13
+    // `.amp-option` / `.source-option` border-radius: 9px.
+    readonly property int radiusOverlayRow: 9
+    // `.overlay-popup` background gradient + border.
+    readonly property color overlayGradientTop: "#1e1e21"
+    readonly property color overlayGradientBottom: "#19191c"
+    readonly property color overlayBorder: Qt.rgba(1, 1, 1, 0.10)
+
+    // Per-source icon glyph (mockup v2 `sources[]` icons). Keyed on the
+    // name the amp itself broadcasts (docs/devialet_source_mapping.md:
+    // "Optical 1", "UPnP", "Roon Ready", "AirPlay", "Spotify", "Air"),
+    // matched case-insensitively by keyword so an "Optical 2" or a
+    // renamed slot still resolves; "airplay" is tested before "air".
+    // Unknown names fall back to the generic ◉ the closed row always
+    // showed before this phase. Same centralization rationale as
+    // volumeIconKindForFraction() above. All six glyphs verified present
+    // in DejaVu Sans, the fontconfig fallback for the bundled fonts.
+    function sourceGlyph(name) {
+        const n = String(name || "").toLowerCase();
+        if (n.indexOf("optical") >= 0) return "◉";
+        if (n.indexOf("upnp") >= 0) return "◫";
+        if (n.indexOf("roon") >= 0) return "◍";
+        if (n.indexOf("airplay") >= 0) return "◈";
+        if (n.indexOf("spotify") >= 0) return "◐";
+        if (n.indexOf("air") >= 0) return "◇";
+        return "◉";
+    }
 }
