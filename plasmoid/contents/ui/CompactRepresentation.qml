@@ -116,13 +116,30 @@ MouseArea {
         const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
         const stepped = base + direction * root.volumeStepDb;
         const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // Scrolling on the panel icon while muted now unmutes for real,
+        // matching KDE's own Audio Devices applet convention - a scroll
+        // must always produce audible sound at the new volume, not just
+        // silently update a number the user can't hear until they open
+        // the flyout. Checked once, before either D-Bus write below, so
+        // this single scroll notch drives one real UDP unmute command
+        // (devialet-ctl mute off) alongside the volume command - not
+        // just an internally-tracked unmute.
+        if (root.pendingAmpState.muted) {
+            exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute off");
+            root.pendingAmpState.notifyMute(false);
+        }
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
         // Tells the daemon directly, so FullRepresentation (and anything
         // else reading pendingAmpState) sees this as authoritative
         // without waiting for the real amp broadcast - see
         // PendingAmpState.qml/TODO.md.
         root.pendingAmpState.notifyVolume(clamped);
-        volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction);
+        // pendingAmpState.muted is already false by this point (written
+        // synchronously above, same as notifyVolume()'s own volumeDb) -
+        // one showVolume() call reflects both the unmute and the new
+        // volume together, not two separate toast triggers racing/
+        // flickering against each other.
+        volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction, root.pendingAmpState.muted);
     }
 
     // Phase 4.5.2: same mute-toggle logic as the flyout's own Mute button

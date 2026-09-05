@@ -192,6 +192,17 @@ Item {
         const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
         const stepped = base + direction * root.volumeStepDb;
         const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // Mirrors CompactRepresentation.qml's stepVolume() - a volume
+        // change from any input (panel-icon scroll or the flyout's own
+        // +/- buttons/slider) auto-unmutes for real, matching KDE's own
+        // Audio Devices applet convention. Deliberately applied
+        // consistently across every volume-adjusting input in the
+        // widget, not just scroll - explicit scope decision, not an
+        // oversight.
+        if (root.pendingAmpState.muted) {
+            root.runCtl("mute off");
+            root.pendingAmpState.notifyMute(false);
+        }
         root.runCtl("volume " + clamped);
         root.pendingAmpState.notifyVolume(clamped);
     }
@@ -200,6 +211,12 @@ Item {
     // (computed inside VolumeBlock from its own live value), sent as-is.
     function releaseVolume(value) {
         if (root.ampIp === "") return;
+        // Same auto-unmute-on-volume-change as stepVolume() above - a
+        // slider drag counts as a volume-adjusting input too.
+        if (root.pendingAmpState.muted) {
+            root.runCtl("mute off");
+            root.pendingAmpState.notifyMute(false);
+        }
         root.runCtl("volume " + value);
         root.pendingAmpState.notifyVolume(value);
     }

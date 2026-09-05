@@ -3853,8 +3853,6 @@ architecture decisions; this file is just sequencing and status.
     **Phase 7.9.0** is the transparency-goal fix this whole rebuild was
     originally for.
 
-## Up next
-
 - [x] **Phase 7.9.0 — Dialog + Overlay.overlay spike (investigation,
       gates 7.10.0).** Depends on 7.8.0. Corrects the mistake documented
       on Phase 7.0.0's own entry above: the rebuild's whole stated
@@ -4359,6 +4357,8 @@ architecture decisions; this file is just sequencing and status.
       in place (the Bugs-section clip) was not stated either way; the
       Bugs entry stays open until the owner says so.
 
+## Up next
+
 - [ ] **Phase 7.11.0 — Full re-verification pass.** Depends on 7.10.0.
   - Run the existing Phase 7.2.0 harness's full suite against the
     `Dialog`-hosted flyout. `LayoutProbe.qml`'s own `Overlay.overlay`
@@ -4419,6 +4419,65 @@ architecture decisions; this file is just sequencing and status.
     actually gone (not just unused) — matches Phase 5.0.2 Step B's own
     "only delete once the cutover itself is already verified solid"
     ordering.
+    
+- [ ] Phase 8.0.0 — Rust: hard-limit clamp in the shared protocol crate.
+  The safety backstop, independent of any UI/mockup work, so this can
+  start immediately. Any function in the dependency-free protocol
+  library crate that constructs/sends a volume-set command clamps to
+  the configured hard limit internally — structural, not a check any
+  particular caller (devialet-ctl, the daemon's D-Bus handler, a future
+  client) has to remember to apply. Add cargo tests covering: command
+  at/above/below the limit, limit unset (unbounded), and the boundary
+  value itself. No QML changes this phase.
+
+- [ ] Phase 8.1.0 — Persistence + ConfigDialog settings UI.
+  Depends on the updated ConfigDialog mockup. Add soft-limit/hard-limit
+  dB fields to the widget's KConfig schema (main.xml, alongside
+  whatever Phase 4.3.0's settings page already defines), both unset/
+  unbounded by default. Build the actual settings-page UI per the
+  mockup. Confirm the daemon can read the persisted hard-limit value
+  and pass it into Phase 8.0.0's clamp — this phase is what actually
+  wires the Rust safety net to a real, user-set value instead of
+  testing it against a hardcoded one.
+
+- [ ] Phase 8.2.0 — QML: slider bounds + soft-limit visual treatment.
+  Depends on 8.1.0. The volume slider's max (`to`) becomes the hard
+  limit, not a fixed constant — dragging to the end of the track means
+  "at the ceiling," never past it. Render the track segment between
+  soft and hard limit in a distinct warning color; the numeric dB
+  readout picks up the same treatment once in that zone. Purely
+  informational, no gesture-gating (per the decision to keep this
+  simple for now). Apply to every volume-adjusting surface: the
+  flyout's VolumeBlock slider AND the +/- buttons/panel-icon-scroll
+  step logic (all three currently share a common step/clamp path per
+  Phase 4/5's architecture — confirm this and wire once, not three
+  times).
+
+- [ ] Phase 8.3.0 — Immediate clamp on settings change.
+  Depends on 8.1.0 (needs the setting to exist) — can be built
+  alongside or after 8.2.0. When a newly-set hard limit is below the
+  amp's current live volume, the daemon immediately sends a real
+  volume-set command dropping the amp to the new limit, rather than
+  waiting for the next user-initiated volume change. Verify this
+  interacts correctly with Phase 5's pending-command architecture (the
+  daemon-initiated drop needs to update PendingAmpState/be reflected in
+  the UI the same way a user-initiated change is, not bypass it) and
+  with multiple known amps (does changing the setting affect only the
+  currently-selected/connected amp, or every known amp regardless of
+  connection state? — decide explicitly, don't default silently).
+
+- [ ] Phase 8.4.0 — Full verification pass.
+  Depends on 8.0.0-8.3.0. Live-verify: hard limit genuinely
+  unbypassable via devialet-ctl direct invocation and via rapid
+  scroll/slider-drag bursts (Phase 5.0.2's rapid-repeat concern applies
+  here too — confirm several fast steps near the ceiling can't
+  overshoot it even transiently); soft-limit visual zone renders
+  correctly across the full range including boundary values; settings
+  UI round-trips correctly (set, close ConfigDialog, reopen, value
+  persisted); immediate-clamp-on-lower-limit fires correctly and is
+  visible in flyout/tooltip/OSD simultaneously per Phase 7's
+  consistency guarantees; unbounded (unset) behaves identically to
+  today's widget with no limits configured at all.
 
 ## Bugs
 
