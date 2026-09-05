@@ -234,7 +234,7 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
-## Real flyout renders truncated (324×180) after a reload — the AppletPopup size-key collision (Phase 7.1.0/7.2.0, applies until Phase 7.8.0's cutover)
+## Real flyout renders truncated (324×180) after a reload — the AppletPopup size-key collision (Phase 7.1.0/7.2.0; NOT cleared by 7.8.0 as first claimed — closed by Phase 7.10.0, see the last paragraph)
 
 **Symptom**: after `plasmashell --replace`, the real, shell-managed flyout
 opens cut off after the volume block - no action row, source selector or
@@ -283,9 +283,33 @@ may already be the corruption - Phase 7.2.0's first report did exactly
 that (324×180 before and after, rewritten with identical values) and
 missed it; compare against absence after a restart instead.
 
-**Goes away at Phase 7.8.0** (cutover removes the shell-managed popup, so
-only one `AppletPopup` writes the group). Phase 7.7.0's size pinning does
-not fix it - it changes what gets written, not that it gets written.
+**Did not go away at Phase 7.8.0**, contrary to this section's original
+claim ("cutover removes the shell-managed popup, so only one `AppletPopup`
+writes the group"). 7.8.0's cutover only stopped *opening* the
+shell-managed popup; `main.qml`'s `fullRepresentation:` binding and the
+shell's `CompactApplet.qml` popup around it stay instantiated until Phase
+7.13.0 deletes them, and the cut-over `FlyoutPopup.qml` was itself an
+`AppletPopup` with `appletInterface` set - so both writers survived. Phase
+7.9.0 measured the consequence directly: a plain `plasmashell --replace`
+with nothing ever opened rewrote the keys to 284×358 (the never-shown
+popup's `hideEvent()` firing at shell teardown, window minus frame
+margins). Phase 7.7.0's size pinning does not fix it either - it changes
+what gets written, not that it gets written.
+
+**Closed by Phase 7.10.0 from the other side**: the rebuilt
+`FlyoutPopup.qml` is a `PlasmaCore.Dialog` that deliberately does not set
+`appletInterface`. `Dialog::hideEvent()` only writes the keys when it is
+set, and with the size pinned (`Layout.minimum* == Layout.maximum*`)
+`Dialog` never reads them back anyway (`dialog.cpp`
+`updateSizeFromAppletInterface()` returns early when min == max), so
+setting it would have bought one KConfig write per close and nothing
+else. Verified per this section's own rule (absence after a restart, not
+value comparison): both keys deleted, then ~20 open/close cycles, a
+harness smoke run and four `plasmashell --replace` - keys still absent.
+The shell's dead popup around `FullRepresentation.qml` did not write in
+that test either; if the keys ever do reappear before 7.13.0 removes it,
+they are harmless to the pinned Dialog flyout (nothing reads them), and
+the cleanup commands above still apply.
 
 ## Settings ConfigDialog (Plasma-provided default — settled, do not re-derive)
 
@@ -760,3 +784,10 @@ Phase 7.9.0+ for the fix in progress (`PlasmaCore.Dialog`, which - unlike
 `PlasmaWindow` - has a real, code-enforced `NoBackground` value, confirmed
 directly in `dialog.cpp`, and is what `VolumeHoverTooltip.qml`/
 `VolumeToast.qml` already use successfully).
+Phase 7.10.0 (2026-09-05) then shipped that rebuild — `FlyoutPopup.qml`
+on `PlasmaCore.Dialog` with `NoBackground` — and measured real
+transparency on the real flyout for the first time (same-patch
+closed-vs-open capture: blend error 0.35 at α 0.82 vs 7.08 for opaque
+paint; wallpaper visible through the panel). So the "infeasible" verdict
+above stands only for the shell-managed popup class; this widget's own
+flyout window is no longer in that class.

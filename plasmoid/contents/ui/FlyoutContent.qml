@@ -47,7 +47,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import org.kde.ksvg as KSvg
 import org.kde.plasma.plasmoid
 import org.kde.plasma.workspace.dbus as Dbus
 import org.kde.plasma.plasma5support as P5Support
@@ -71,19 +70,6 @@ Item {
 
     implicitWidth: theme.panelWidth
     implicitHeight: mainColumn.implicitHeight
-
-    // ---- box-in-box / inset math for the background tint, ported from
-    // FullRepresentation.qml (see its own long comment for the full
-    // reasoning; unchanged here). ----
-    KSvg.FrameSvgItem {
-        id: dialogBg
-        visible: false
-        imagePath: "dialogs/background"
-    }
-    readonly property real insetLeft: dialogBg.fixedMargins.left - dialogBg.inset.left
-    readonly property real insetTop: dialogBg.fixedMargins.top - dialogBg.inset.top
-    readonly property real insetRight: dialogBg.fixedMargins.right - dialogBg.inset.right
-    readonly property real insetBottom: dialogBg.fixedMargins.bottom - dialogBg.inset.bottom
 
     // ---- amp state (header subset) ----
     property bool online: false
@@ -449,14 +435,22 @@ Item {
         }
     }
 
-    // ---- background tint, ported from FullRepresentation.qml:740-754
-    // (bled outward by the inset margins - the box-in-box fix; see there).
+    // ---- background tint, ported from FullRepresentation.qml:740-754.
+    // Phase 7.10.0: this is now the flyout's entire visible surface. The
+    // host window (FlyoutPopup.qml) is a PlasmaCore.Dialog with
+    // backgroundHints: NoBackground, so there is no Plasma frame SVG
+    // around this content any more - and with it went the box-in-box
+    // inset math this Rectangle used to bleed outward by (a FrameSvgItem
+    // measuring dialogs/background's fixedMargins minus its inset, to
+    // fill the frame's transparent inner margin). Under NoBackground
+    // mainItem is the whole window (Dialog's frame margins are 0 when the
+    // frame image path is empty, dialog.cpp updateTheme(); measured
+    // window == mainItem in the 7.9.0 spike), so a negative margin here
+    // would only push the rounded corners outside the window and clip
+    // them square. Edge to edge, radius as before (Phase 7.12.0 owns the
+    // corner-radius question).
     Rectangle {
         anchors.fill: parent
-        anchors.leftMargin: -root.insetLeft
-        anchors.topMargin: -root.insetTop
-        anchors.rightMargin: -root.insetRight
-        anchors.bottomMargin: -root.insetBottom
         radius: Kirigami.Units.cornerRadius
         antialiasing: true
         border.width: 1

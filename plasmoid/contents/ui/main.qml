@@ -89,10 +89,19 @@ PlasmoidItem {
     // `FullRepresentation.qml` and this flag.
     readonly property bool appletPopupSpikeEnabled: false
 
+    // Phase 7.9.0 spike toggle (throwaway, not a feature, do not wire to
+    // config.qml/main.xml): when true, CompactRepresentation.qml's
+    // left-click opens DialogSpike.qml (a bare PlasmaCore.Dialog with
+    // NoBackground) instead of the real flyout, so a human can exercise
+    // it for real. tools/dialog-spike/spike.py drives the same spike over
+    // D-Bus regardless of this flag. Deleted with the spike in 7.13.0.
+    readonly property bool dialogSpikeEnabled: false
+
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
         appletPopupSpikeEnabled: root.appletPopupSpikeEnabled
+        dialogSpikeEnabled: root.dialogSpikeEnabled
     }
 
     fullRepresentation: FullRepresentation {

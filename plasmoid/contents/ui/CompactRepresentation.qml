@@ -51,6 +51,9 @@ MouseArea {
     // per that phase's "leave the flag itself in place but unused until
     // 7.9.0" discipline. Do not wire this back into onClicked.
     property bool appletPopupSpikeEnabled: false
+    // Phase 7.9.0 spike toggle, forwarded from main.qml - see that file's
+    // comment and DialogSpike.qml's header. Throwaway; default false.
+    property bool dialogSpikeEnabled: false
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
@@ -155,7 +158,15 @@ MouseArea {
             // in place but unused - Phase 7.9.0's job to delete, once
             // this cutover has been soak-tested solid over real use (see
             // TODO.md's Phase 7.8.0 entry).
-            flyoutPopup.visible = !flyoutPopup.visible;
+            // Phase 7.9.0 spike (throwaway): with main.qml's
+            // dialogSpikeEnabled flag on, left-click opens the bare
+            // PlasmaCore.Dialog spike instead, for a human to click/type
+            // at for real. Off by default - the real flyout is unaffected.
+            if (root.dialogSpikeEnabled) {
+                dialogSpike.visible = !dialogSpike.visible;
+            } else {
+                flyoutPopup.visible = !flyoutPopup.visible;
+            }
         } else if (mouse.button === Qt.MiddleButton) {
             root.toggleMute();
         }
@@ -259,6 +270,25 @@ MouseArea {
         // or the tooltip would silently start appearing on top of it.
         onVisibleChanged: {
             if (flyoutPopup.visible) {
+                hoverShowTimer.stop();
+                hoverHideTimer.stop();
+                hoverTooltip.visible = false;
+            }
+        }
+    }
+
+    // Phase 7.9.0 spike (throwaway) - see DialogSpike.qml's header. Inert
+    // unless main.qml's dialogSpikeEnabled flag is on or
+    // tools/dialog-spike/spike.py owns its bus name. Same tooltip-
+    // suppression as flyoutPopup above, so a hover tooltip can't sit on
+    // top of the spike during a manual test.
+    DialogSpike {
+        id: dialogSpike
+        spikeVisualParent: root
+        tooltipRef: hoverTooltip
+        flyoutRef: flyoutPopup
+        onVisibleChanged: {
+            if (dialogSpike.visible) {
                 hoverShowTimer.stop();
                 hoverHideTimer.stop();
                 hoverTooltip.visible = false;

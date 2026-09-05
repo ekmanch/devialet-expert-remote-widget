@@ -3855,7 +3855,7 @@ architecture decisions; this file is just sequencing and status.
 
 ## Up next
 
-- [ ] **Phase 7.9.0 — Dialog + Overlay.overlay spike (investigation,
+- [x] **Phase 7.9.0 — Dialog + Overlay.overlay spike (investigation,
       gates 7.10.0).** Depends on 7.8.0. Corrects the mistake documented
       on Phase 7.0.0's own entry above: the rebuild's whole stated
       reason for existing was real desktop transparency, matching
@@ -3895,9 +3895,237 @@ architecture decisions; this file is just sequencing and status.
     mechanism (`visualParent` + `location`).
   - If genuinely broken (not just a rough edge) — stop and report back
     before 7.10.0, same as Phase 7.0.0's own go/no-go gate.
+  - **Built (throwaway, deleted in 7.13.0)**: `DialogSpike.qml` — a bare
+    `PlasmaCore.Dialog` (`type: AppletPopup`, `backgroundHints:
+    NoBackground`, `location: Plasmoid.location`, `visualParent` = the
+    panel icon, `hideOnWindowDeactivate: true`, `visible: false` initial
+    value, Dialog's own default `flags` kept — *not* VolumeHoverTooltip/
+    VolumeToast's `WindowDoesNotAcceptFocus` — and deliberately **no**
+    `appletInterface`, since `Dialog::hideEvent()` (dialog.cpp 1456-1467)
+    writes `popupWidth`/`popupHeight` on every hide whenever it is set)
+    hosting `MouseEventListener{focus:true}` with the same
+    `Keys.onEscapePressed` + window-scoped `Shortcut` + focus relay as
+    `FlyoutPopup.qml`, a `PlasmaComponents3.ComboBox` (the exact type
+    `SourceSelector.qml` uses; its popup is a `T.Popup`, i.e.
+    Overlay-hosted, same as `AmpListOverlay.qml`'s), a `TextField` and a
+    55%-alpha card with a 12px fully transparent band around it as the
+    transparency probe. Wired the 7.0.0 way: `main.qml` flag
+    `dialogSpikeEnabled` (default `false`, forwarded to
+    `CompactRepresentation.qml`, whose left-click opens the spike instead
+    of the flyout only when it is `true`) plus a `DialogSpike` instance in
+    `CompactRepresentation.qml` given `tooltipRef: hoverTooltip` and
+    `flyoutRef: flyoutPopup` for side-by-side measurement. `FlyoutPopup.
+    qml`, `FlyoutContent.qml` and every section component untouched (`git
+    status`: only `main.qml`/`CompactRepresentation.qml` modified, the
+    rest new files).
+  - **How it was driven — no hands, no guesses.** No Wayland input
+    automation exists on this machine (Phase 7.0.0's finding, re-checked:
+    no xdotool/ydotool/wtype/kdotool), so `DialogSpikeDriver.qml` (loaded
+    by a `Loader` only while `tools/dialog-spike/spike.py serve` owns
+    `com.ekmanch.DevialetRemote.DialogSpike` — the LayoutProbe/fakeamp
+    pattern; inert otherwise, and its `import QtTest` is only ever loaded
+    into plasmashell during a run) executes D-Bus-delivered commands and
+    logs a JSON result per command. Synthetic input is QtTest's
+    `TestEvent` (`QuickTestEvent`, `/usr/lib/qt6/qml/QtTest`), whose
+    `mouseClick`/`keyClick`/`keyClickChar` go through QTest →
+    `QWindowSystemInterface`, the same in-process path a real compositor
+    event takes once it is inside Qt — enough for everything decided
+    inside Qt (Popup/Overlay handling, focus, `Keys`/`Shortcut`). The
+    compositor half ("clicked elsewhere") was done for real from KWin:
+    `tools/dialog-spike/kwin-activate.js` hands activation to another
+    normal window via `workspace.activeWindow`, and `kwin-geom.js` reads
+    back KWin's own `frameGeometry`/`minSize`/`maxSize`/`resizeable`/
+    `appletPopup` for the spike window. Screenshots via `spectacle -b -n
+    -f` with `QT_QPA_PLATFORM=wayland` forced (CLAUDE.md), analysed with
+    PIL/numpy. As an A/B control the driver ran the *identical*
+    synthetic-click sequence against the real `FlyoutPopup.qml`
+    (`PlasmaCore.AppletPopup`) — opening `SourceSelector`'s dropdown and
+    clicking empty flyout space only, never picking a source, so nothing
+    was sent to the amp.
+  - **Real transparency: YES, measured, not eyeballed.** Screen 1920×1080
+    @2x. Full-screen captures closed vs open, spike at (1568,32) 300×260
+    over a text-editor window. Card interior (text-free block) mean RGB
+    open = 39/37/36; predicted 0.55·card + 0.45·behind = 41.6/40.2/38.8
+    (mean abs error 2.84); an opaque card would be 30.6/28/25.5 (error
+    9.28); untouched background (error 17.67). The 12px band: every pixel
+    identical to the closed capture except a uniform −5.5 shift that is
+    also present 30px *outside* the spike window and absent below it — the
+    editor window behind dimming as it lost activation, not paint. The
+    open capture shows the editor's title-bar icons and text through the
+    band and the card. This is the look the whole rebuild was for.
+  - **KWin blur-behind: NOT present, and not expected.** The text line
+    behind the card stays legible and sharp; high-frequency energy ratio
+    open/closed = 0.54 against 0.45 expected for an unblurred 55% overlay
+    (blur would drive it far lower). Consistent with `dialog.cpp`
+    `updateTheme()` calling `KWindowEffects::enableBlurBehind(q, false)`
+    for `NoBackground`. `VolumeHoverTooltip.qml`/`VolumeToast.qml` use
+    `theme.osdGradientTop/Bottom` at alpha 0.94, so their "solid" look is
+    near-opaque paint, not blur either. Expectation for 7.10.0/7.11.0: a
+    `NoBackground` flyout gets true alpha blending over the desktop and
+    nothing else; blur would need a mechanism this project already found
+    unavailable from QML (Phase 4.0's `KWindowEffects` investigation).
+  - **Overlay.overlay hosting: works — after a Qt 6.11 overlay-placement
+    bug is worked around (the one genuinely new finding).** Confirmed
+    empirically, not reasoned: the dropdown's `contentItem` parent chain
+    is `QQuickListView → QQuickPopupItem → QQuickOverlay`, the
+    `QQuickOverlay` is a child of `QQuickRootItem` and a *sibling* of
+    `mainItem` (`overlayIsSiblingOfMainItem: true`), sized to the window
+    once a popup is open, `popupType` 0 (`Popup.Item`, not a native
+    window), and the window stays `active: true` throughout. Clicking a
+    delegate selected it (`currentIndex` 0→3, `activated` fired, popup
+    closed) with the Dialog still visible and active. **But** on first
+    open the overlay itself sat at **(−150, −130)** — exactly −(w/2, h/2)
+    — so the dropdown rendered 130px above where QQC2 placed it, clipped
+    by the window's top edge (screenshot: only "Phono…Line 2" visible,
+    overlapping the panel), and press-outside-to-close was dead for
+    presses outside the shifted rect (two `click-inside` presses at
+    (60,185) left it open; a press on the `TextField` closed it, but via
+    `QQuickComboBox::focusOutEvent`, not press-outside). Root cause,
+    read from the real Qt 6.11.2 source (`qquickoverlay.cpp` 340-352,
+    fetched from code.qt.io): `QQuickOverlayPrivate::updateGeometry()`
+    positions the overlay at `-(contentItem.size − window.size)/2` and
+    only re-runs on a contentItem geometry/rotation change; `Dialog`
+    resizes its `contentItem` **before** its window
+    (`DialogPrivate::syncToMainItemSize()`, dialog.cpp 646
+    `contentItem()->setSize(s)` then 651 `adjustGeometry(geom)`), so the
+    overlay is computed against the stale window size (0×0 on first
+    show) and the later window resize changes nothing on the contentItem,
+    so it is never recomputed. Every subsequent resize repeats it: the
+    driver logged offsets (−150,−130), (−30,0), (0,−80), (+30,0),
+    (0,+80), (−100,0), (+100,0) across the size changes. **A/B, same
+    Qt, same click path**: the `AppletPopup` flyout's overlay reads
+    (0,0) 316×388 while open, its dropdown sat at (24,121) inside the
+    window, and one `click-inside` closed it — so this is Dialog-specific
+    (window-before-content ordering in `PlasmaWindow`), and it is why
+    7.8.0's soak never saw it. **Workaround, verified live**: reset
+    `Overlay.overlay.x/y` to 0 from `onWidthChanged`/`onHeightChanged`/
+    `onVisibleChanged` of the Dialog (`DialogSpike.qml` `fixOverlay()`).
+    With it the overlay reads (0,0) after every open and resize, the
+    dropdown lands where QQC2 puts it ((26,30) in the 260-tall window,
+    (26,78) directly under the ComboBox in the 420-tall one — same
+    fit-inside-window behaviour the AppletPopup flyout shows, whose
+    dropdown also flips upward for lack of room), `click-inside`/
+    `click-at:150,380` close it, and `click-popup:2` selects. **7.10.0
+    must carry this reset into `FlyoutPopup.qml`**; `LayoutProbe.qml`'s
+    overlay walk needs no change (its coordinates are overlay-relative,
+    which equals window-relative once the overlay is at (0,0) — and the
+    harness will independently show any residual offset as a moved
+    `overlay/...` element).
+  - **Dismiss-on-click-outside distinguishes correctly, confirmed live
+    (not from `focusOutEvent()` source reading this time).** Compositor
+    half: with the dropdown open, KWin activating another normal window
+    closed the Dialog (`visible: false`, `windowDeactivated` emitted —
+    the `hideOnWindowDeactivate` path in `Dialog::focusOutEvent()`);
+    same with the dropdown closed. In-window half: clicks into the open
+    dropdown (select) and clicks elsewhere inside the window (close
+    dropdown only) never deactivated the Dialog — `active: true` in every
+    dump, no `windowDeactivated`. "Clicked into the open ComboBox popup,
+    stay open; clicked elsewhere, close" behaves exactly as the source
+    reading predicted.
+  - **Escape: works, same two-stage shape as the real flyout.** Dropdown
+    open + Escape → dropdown closes (`CloseOnEscape`), Dialog stays.
+    Escape again → `window Shortcut(Escape) activated` → Dialog hides.
+    With focus in the `TextField`, Escape → Shortcut → hides.
+    `Keys.onEscapePressed` on `mainItem` never fired (focus sits on the
+    ComboBox, exactly the 7.8.0 fragility) — the window-scoped Shortcut
+    is what does the work, so 7.10.0 must keep it.
+  - **Keyboard focus reaches the real controls.** Immediately after
+    `open`: `activeFocusItem` = the ComboBox (via `mainItem` →
+    `combo.forceActiveFocus()` relay, logged `mainItem activeFocus: true`
+    → `false` → `combo activeFocus: true`). Down arrow twice →
+    `currentIndex` 3→4→5 with `activated` fired each time. Click on the
+    TextField → it takes focus; `type:hello` → `text: "hello"`. KWin
+    reports the window `active: true`, `appletPopup: true`
+    (`role_appletpopup` from `applyType()`), and `setTakesFocus(true)`
+    from the default flags evidently holds.
+  - **Positioning at the real panel icon: correct, including the edge
+    clamp.** Icon centre x = 1718 (panel top edge, 36px tall). Every open
+    landed at (1568,32) 300×260 — centred on the icon; 360 wide →
+    (1538,32); **500 wide → (1420,32) = 1920 − 500**, the right-edge
+    clamp in `popupPosition()` (dialog.cpp 1112-1120), KWin's
+    `frameGeometry` agreeing on every reading; shrinking re-centres. The
+    Dialog re-positions on every `mainItem` size change while open
+    (`updateLayoutParameters()` → `popupPosition()`), the mechanism the
+    tooltip bug was suspected to lack. **`VolumeHoverTooltip.qml`'s clip
+    bug did not reproduce**: the spike never clipped in ~15 opens across
+    three sizes, and the tooltip itself, shown at the same anchor by
+    setting `visible = true` directly, came up at (1632,32) 172×98 —
+    centred, fully on screen — in both QML's and KWin's geometry.
+    Caveat stated plainly: that is the same statement the hover timer
+    runs, but with no pointer over the icon; the bug's real trigger
+    (an actual hover) was not exercised, so the bug stays open, just
+    with one more data point that the `visualParent` + `location` maths
+    is not the problem.
+  - **Sizing finding for 7.10.0: `Dialog` does not follow `mainItem`'s
+    implicit size after show — the `Layout` hints are the sizing
+    mechanism, not just the resize pin.** With no hints, `grow:true`
+    (implicit 300×260 → 360×420) left the window at 300×260 and KWin
+    reported `minSize` 20×20, `resizeable: true`. Dialog sizes the window
+    from `mainItem`'s *actual* size at show and then owns it
+    (`updateLayoutParameters()` calls `mainItem->setSize()` from the
+    window); what it listens to are `Layout.minimum*/maximum*`
+    (`getSizeHints()`, `updateMinimumWidth()` & co.). With the four
+    hints bound to the implicit size — the exact 7.7.0 pin — `grow` →
+    360×420 and `wide` → 500×260 followed immediately, and KWin read
+    `minSize = maxSize = 300×260` / `500×260`, **`resizeable: false`**:
+    the pin holds under Dialog, re-verified compositor-side as 7.7.0
+    required (physical drag not done — no input automation; same
+    three-pronged gap as 7.7.0 closed by the user's own drag).
+    **Danger found the hard way**: switching the max hints to 0 while
+    shown (`pin:false`) killed plasmashell instantly — "The Wayland
+    connection experienced a fatal error: Protocol error" /
+    kwin_wayland_wrapper "error in client communication (pid …)", no
+    coredump. Never let those hints go to 0/invalid on a visible Dialog;
+    bind them to the content size from the start and leave them.
+  - **Housekeeping proven**: no auto-open (no `visible -> true` without a
+    preceding `open` across five shell restarts); no `QWindow::
+    setWindowState does not accept Qt::WindowActive` warning; no
+    "trying to show an empty dialog" warning even though the first
+    `visible -> true` logs geometry 1718,32 0×0 before the size lands;
+    the only Dialog-related warning in the journal ("Member visible of
+    the object PlasmaQuick::Dialog overrides a member of the base
+    object") predates this session (present at 21:15, before the spike
+    existed). Popup size keys: the spike (no `appletInterface`) never
+    wrote them; they *did* drift 300/373 → 284/358 during the session,
+    and one real flyout open/close wrote 300/373 back — the writer is
+    `AppletPopup::hideEvent()` on a never-shown `FlyoutPopup` at
+    `plasmashell --replace` time (window = config size, `mainItem` =
+    window − frame margins 16×15), i.e. CLAUDE.md's "writes on every
+    close" note also covers shell replacement, harmless while the pin
+    re-forces the size on show. Cleaned up per CLAUDE.md: both keys
+    deleted, `plasmashell --replace`, keys confirmed absent, real daemon
+    active, driver unloaded (`spike.py quit`), flag left `false`.
+  - **Not tested**: a human on the `dialogSpikeEnabled` flag path (real
+    pointer/keys — the synthetic path covers Qt-internal behaviour, the
+    KWin script covers activation, but nobody physically clicked this
+    session); panel move / monitor change while open (the same gap 7.0.0
+    carried); a real hover over the icon for the tooltip bug.
+  - **Verdict: GO for Phase 7.10.0, with conditions written into its
+    entry below** — nothing genuinely broken, one real Qt bug with a
+    verified two-line workaround, one sizing mechanism difference that
+    the existing 7.7.0 pin already satisfies, one 4px positioning
+    difference to decide on. Awaiting the project owner's explicit
+    go-ahead before any 7.10.0 work, per this phase's own gate.
 
-- [ ] **Phase 7.10.0 — Rebuild FlyoutPopup.qml on PlasmaCore.Dialog.**
-      Depends on 7.9.0's spike coming back clean.
+- [x] **Phase 7.10.0 — Rebuild FlyoutPopup.qml on PlasmaCore.Dialog.**
+      Depends on 7.9.0's spike coming back clean. Done 2026-09-05 — see
+      the "Results" bullets at the end of this entry; not committed (the
+      project owner commits after checking it by hand).
+  - **Conditions from 7.9.0's findings (see that entry for the proof)**:
+    (1) carry the `Overlay.overlay` (0,0) reset into `FlyoutPopup.qml`
+    (Qt 6.11 `QQuickOverlayPrivate::updateGeometry()` vs Dialog's
+    content-before-window resize order — without it every
+    Overlay-hosted popup renders offset and press-outside dies);
+    (2) keep the four `Layout.minimum*/maximum*` hints bound to the
+    content size from the start — on Dialog they are the sizing
+    mechanism as well as the pin, and setting them to 0 while shown
+    crashes plasmashell via a Wayland protocol error;
+    (3) keep the window-scoped Escape `Shortcut` (the `Keys` handler
+    never fires with focus on the ComboBox); (4) decide the 4px: Dialog
+    positions against the icon item's own bottom (y=32) not the panel's
+    bottom edge (y=36) that AppletPopup used — a top margin/inset or an
+    accepted 4px overlap; (5) expect no KWin blur — `NoBackground` is
+    plain alpha over the desktop.
   - Rebuild `FlyoutPopup.qml` around `PlasmaCore.Dialog`
     (`backgroundHints: NoBackground`), reusing `FlyoutContent.qml` and
     every section component (`AmpHeader`, `AmpListOverlay`,
@@ -3943,6 +4171,193 @@ architecture decisions; this file is just sequencing and status.
   - Do not touch `AmpListOverlay.qml`, `SourceSelector.qml`, or any
     other section component's own content — this phase is the host
     window only.
+  - **Results (2026-09-05).** Four explicit requirements carried in from
+    the go-ahead, each answered below: (1) never zero the pin hints
+    while shown, (2) apply and re-verify the overlay reset in the real
+    build, (3) test the tooltip clip bug under real hover trigger
+    conditions, (4) correct CLAUDE.md's stale "goes away at 7.8.0".
+  - **What changed.** `FlyoutPopup.qml` rewritten around
+    `PlasmaCore.Dialog` (`type: AppletPopup`, `backgroundHints:
+    NoBackground`, `location: Plasmoid.location`,
+    `hideOnWindowDeactivate: plasmoidItem.hideOnWindowDeactivate`, no
+    `flags` override, no `appletInterface` — see below). Everything
+    generic ported verbatim: `MouseEventListener{focus:true}` +
+    `onActiveFocusChanged` relay, `enabled: visible`, `requestActivate()`,
+    `visible: false` initial value, `Keys.onEscapePressed` + window
+    `Shortcut{Escape}`, the four `Layout` hints, `LayoutProbe`,
+    `FlyoutContent`. `CompactRepresentation.qml` unchanged (its
+    `flyoutPopup.visible = !flyoutPopup.visible` contract holds).
+    `FlyoutContent.qml` got the one "minimal change" this entry allowed
+    for: its tint Rectangle no longer bleeds outward by the Darkly frame
+    insets (the `KSvg.FrameSvgItem` measuring `dialogs/background` and
+    the four `inset*` properties are gone, `org.kde.ksvg` import
+    dropped) — under `NoBackground` mainItem IS the window (measured
+    window 300×373 == mainItem 300×373 == contentItem), so a negative
+    margin would only have clipped the rounded corners square. Section
+    components untouched.
+  - **(1) Pin hints — hard rule applied.** The four hints are bound
+    permanently to `flyoutContent.implicitWidth/Height` from
+    construction; nothing in the file can set them to 0 or unbind them
+    while shown. Written into `FlyoutPopup.qml`'s header as a HARD RULE
+    with the 7.9.0 crash as the reason. Re-verified under `Dialog` with
+    the entry's three prongs minus the physical drag: harness geometry
+    300×373 in every state (7/7, control identical); KWin script
+    readback `minSize [300,373] == maxSize [300,373]`, `resizeable:
+    false`, `appletPopup: true`; a physical edge drag could not be
+    performed (no input automation, see (3)) — KWin's own `resizeable:
+    false` is the compositor-level statement that the drag has nothing
+    to act on, the same evidence 7.9.0 accepted.
+  - **(2) Overlay reset — reproduced in the real build, then fixed by
+    the port.** First open after a fresh shell logged
+    `[FlyoutPopup] overlay offset -150 -186.5 (width 300) -> reset to
+    0,0` — the exact Qt 6.11 `QQuickOverlayPrivate::updateGeometry()`
+    symptom from the spike, at the real flyout's own size (half of
+    300×373). After the reset the driver measured `overlayGeom [0,0,
+    300,373]` on every subsequent open (the offset only occurs once,
+    on the first show; later opens log nothing). Both Overlay-hosted
+    popups verified in place via `tools/dialog-spike/` driving the
+    real flyout with QtTest synthetic input: the source ComboBox
+    dropdown renders as overlay child at (16,114) 268×168 (flipped
+    upward above the combo at y=282 because 168px does not fit below
+    inside the 373px window — QQC2's own fit logic, same window height
+    as before, not a regression) and matches the screenshot; a click
+    into the footer closes it and leaves the window open; Escape #1
+    closes the dropdown, Escape #2 the window (window Shortcut path,
+    as in the spike); `AmpListOverlay` opens as overlay child at
+    (0,72) 300×145, renders in place (screenshot), closes on a click
+    into the footer. Press-outside on both works because the overlay
+    now covers the window. KWin handing activation to another window
+    closed the flyout (`hideOnWindowDeactivate` through
+    `plasmoidItem`'s value, `true` here). Focus lands on
+    `FlyoutContent` → `sourceCombo` on open, as before.
+  - **Positioning: the 4px decided, plus a 1px Dialog quirk found.**
+    Decision: flush with the panel edge, exactly where `AppletPopup`
+    put it (y=36), no transparent strip and no size change. Mechanism:
+    `visualParent` is a new invisible `panelSpan` Item, declared in
+    `FlyoutPopup.qml` but reparented into the icon item, spanning the
+    icon's extent along the panel and the panel window's full
+    thickness across it, with a live ancestor-walk binding for its
+    position. First measurement landed at y=35: `popupPosition()` uses
+    `QRect::bottom()`/`right()`, which are inclusive (top+height−1) —
+    also why the 7.9.0 spike anchored to a 3..33 icon sat at y=32, not
+    33. Fixed by extending the span by 1px on the far side only
+    (near edges use `top()`/`left()` and are exact). Final: window
+    (1568,36) 300×373 from QML, KWin and the harness alike; x centred
+    on the icon (1718−150). `DialogSpikeDriver.qml`'s `flyoutInfo()`
+    now logs `visualParent`/`panelSpan` window+global rects and
+    `dialogVisualParentIsSpan` so this stays checkable.
+  - **(3) Tooltip clip bug under real hover trigger conditions.**
+    Attempt A — a real compositor pointer: built a throwaway Wayland
+    client (session scratchpad, Rust, `wayland-protocols-plasma`'s
+    `org_kde_kwin_fake_input`) that KWin would let move the actual
+    pointer, but KWin only offers that global to clients whose
+    `.desktop` entry lists it in `X-KDE-Wayland-Interfaces` (kwin
+    6.7.4 `allowInterface()`, message "not in X-KDE-Wayland-Interfaces
+    of"), and registering such an entry was blocked by the session's
+    permission classifier as a system change needing the owner's OK —
+    not attempted again; the binary is throwaway and the entry was
+    never installed. Attempt B — the real hover *code path* with a
+    synthetic pointer: QtTest `TestEvent.mouseMove(item,x,y,delay,
+    buttons,modifiers)` (six arguments in 6.11; fewer throws
+    "Insufficient arguments" silently inside the driver — found and
+    fixed) on the panel window → `MouseArea.onEntered` →
+    `hoverShowTimer` (real 700ms) → `hoverTooltip.visible = true`,
+    i.e. every line of the real trigger except the compositor's
+    pointer focus. 21 shows across: 3× first-show after a fresh shell,
+    6× before opening the flyout, 6× after closing it (the bug report's
+    "both before and after"), 6× flyout-open-while-shown (tooltip hid
+    every time), all with hover-away hides in between. Every one of
+    the 21 positioned at (1632,32) 172×98 — centred on the icon,
+    fully on screen — in QML *and* in KWin's `frameGeometry` (the
+    first one read back live: `tooltip: true`, x 1632, y 32), with a
+    screenshot showing it rendered in place. One unscripted real hover
+    also happened mid-run (someone at the machine hovered and clicked
+    the icon between two driver commands, opening the real flyout);
+    the tooltip geometry recorded right after was the same (1632,32)
+    172×98. Verdict: the clip did NOT reproduce through the real hover
+    code path, 21/21 — but the compositor pointer was never over the
+    icon in the scripted runs, so this entry does not claim the bug
+    cleared; it narrows the remaining suspect to something only a real
+    pointer does (KWin-side pointer focus/placement interplay, or the
+    icon's real hover-enter timing). A single hand hover in the
+    owner's soak, screenshot if it clips, is the remaining test.
+    Separate observation, pre-existing and untouched: the tooltip's
+    own `visualParent` is the icon item, so it sits at y=32, 4px into
+    the 36px panel — the same anchor quirk this phase fixed for the
+    flyout via `panelSpan`; `VolumeHoverTooltip.qml` is not this
+    phase's file.
+  - **Transparency on the real flyout — measured, real.** Same-patch
+    closed-vs-open pixel test on full-screen captures: a tint patch
+    with wallpaper behind it reads open=(28.1,26.3,29.8) vs the
+    α=0.82 blend prediction (28.1,25.4,29.7) — mean error 0.35 — vs
+    7.08 from opaque paint; a patch outside the window is identical
+    closed/open (44.2 from the blend, i.e. nothing painted there). The
+    wallpaper is visible through the flyout in the screenshots, rounded
+    corners intact edge to edge. No blur, as expected.
+  - **`appletInterface` — verified, deliberately not set.** From
+    `dialog.cpp`: `hideEvent()` writes popupWidth/popupHeight on every
+    hide when set; `updateSizeFromAppletInterface()` (the only reader)
+    returns before reading when min == max; `updateResizableEdges()`
+    likewise yields no edges. So on this pinned window it is one KConfig
+    write per close for nothing. Verified by absence: keys deleted,
+    then ~20 open/close cycles, the harness run and four
+    `plasmashell --replace` (the last at cleanup) — still absent each
+    time. Before the rebuild the *old* shell wrote 300×373 at the
+    upgrade's own `--replace`, the last write those keys will see from
+    this flyout.
+  - **Harness.** `tools/flyout-harness/harness.py run --set smoke
+    --label phase7.10.0-smoke` → run
+    `20260905-123825-phase7.10.0-smoke`: 7 states, control identical
+    (0 differing pixels), one geometry 300×373 (300×373 mainItem) in
+    all 7, 0 unexpected moves against `expected-7.6.0.json` (113
+    allowed hits on 73 elements, all the known state-driven ones),
+    verdict PASS. Crop box now `[3136,72,3736,818]` = mainItem at the
+    window origin (no frame). `LayoutProbe.qml`'s `Overlay.overlay`
+    walk needed no change (7.11.0's open question): the `list=open`
+    state logged 115 items vs 74, the extra 41 being the amp list
+    under the `overlay` prefix, after the overlay reset. The full
+    438-state gate is 7.11.0's.
+  - **(4) CLAUDE.md corrected** — the size-key section's title and its
+    last paragraph now say it did not go away at 7.8.0 (why: the
+    shell-managed popup stays instantiated until 7.13.0 and the
+    cut-over popup was itself an AppletPopup with appletInterface) and
+    how 7.10.0 closed it; the Known-issues transparency note points at
+    this phase as delivered.
+  - **Not done / carried forward.** Physical edge-drag and a real-
+    pointer hover (both need input the session could not inject, see
+    (3)); panel move / monitor change while open (same gap 7.0.0 and
+    7.9.0 carried); left/right/bottom panel locations — `panelSpan`'s
+    axis logic covers them by construction but only the top edge was
+    run; soak under normal use (7.11.0). `tools/dialog-spike/`,
+    `DialogSpike.qml`, `DialogSpikeDriver.qml` stay until 7.13.0 as
+    the only way to script this window; the fake-input client lives in
+    the session scratchpad only.
+  - **Owner's soak (2026-09-05, real use, hands on).** Reported working:
+    mute/unmute; expanding the source list and the amp list; no amp
+    selected and a real amp selected; several sources (Roon Ready,
+    Spotify, Optical 1); power on/off and the powering-on state; the
+    settings gear still opens the ConfigDialog; a range of volumes; the
+    hover tooltip shows on hover and stays away while the flyout is
+    expanded; the volume OSD shows on volume change whether or not the
+    flyout is open. Closes two of the "not done" items above:
+    - Physical edge drag: the pointer no longer turns into a resize
+      cursor at the flyout's edges/corners at all — "genuinely not
+      resizable", and the owner notes the old cursor-change-without-
+      resize was itself a confusing bit of UI. Mechanism, from
+      `dialog.cpp`: `updateMouseCursor()` only sets the resize cursors
+      for edges in `resizableEdges`, and `updateResizableEdges()`
+      yields none when `appletInterface` is unset or min == max — both
+      true here — whereas `AppletPopup` ran its own edge gesture with
+      its own cursor. So not setting `appletInterface` fixed the cursor
+      as a side effect; worth keeping in mind if anyone is ever tempted
+      to set it "for persistence".
+    - Real-pointer hover: exercised by the owner by hand; the tooltip
+      appears. The owner explicitly does not want a scripted real-
+      pointer test (no `.desktop` fake-input grant) — a manual soak as
+      an actual user is the accepted evidence for pointer-driven
+      behaviour from here on. Whether the hover tooltip rendered fully
+      in place (the Bugs-section clip) was not stated either way; the
+      Bugs entry stays open until the owner says so.
 
 - [ ] **Phase 7.11.0 — Full re-verification pass.** Depends on 7.10.0.
   - Run the existing Phase 7.2.0 harness's full suite against the
@@ -3950,7 +4365,9 @@ architecture decisions; this file is just sequencing and status.
     walk (`dump()`'s `const ov = Overlay.overlay; if (ov) {
     session.walk(ov, "overlay"); }`) may need adjusting depending on
     7.9.0's findings — check this explicitly, don't assume it
-    transfers unchanged.
+    transfers unchanged. (7.10.0: transferred unchanged — the smoke
+    run's `list=open` state walked the amp list under the `overlay`
+    prefix, 115 vs 74 items; re-confirm on the full set.)
   - Confirm real transparency renders correctly (the actual goal)
     alongside the existing coordinate/pixel-diff checks — a screenshot
     comparison against `VolumeHoverTooltip.qml`/`VolumeToast.qml`'s
@@ -4030,6 +4447,29 @@ architecture decisions; this file is just sequencing and status.
       specific to this session's display setup (1920×1080 logical @ 2x
       scale, icon near the panel's right end), not a regression from
       the pending-state architecture work. Worth its own investigation.
+  - Phase 7.9.0 data point: shown at the same anchor by setting
+    `visible = true` directly (no pointer over the icon), the tooltip
+    positioned correctly — (1632,32) 172×98, centred on the icon, in
+    both QML's and KWin's geometry — and the Dialog spike never clipped
+    across ~15 opens at three sizes, including a 500px-wide window that
+    the right-edge clamp placed at x = 1920 − 500. So the `visualParent`
+    + `location` maths itself is fine; whatever triggers the clip is
+    specific to the real hover path (pointer over the panel icon while
+    the tooltip first appears), which no automated check here can
+    exercise. Still open.
+  - Phase 7.10.0 data point: the real hover *code path* was exercised
+    with a synthetic pointer (QtTest `mouseMove` on the panel window →
+    `onEntered` → the real 700ms `hoverShowTimer` → `visible = true`),
+    21 shows including first-show after a fresh shell and before/after
+    flyout cycles: all at (1632,32) 172×98, on screen, KWin agreeing.
+    One unscripted real hover during the same run gave the same
+    geometry. What has still never been exercised under instrumentation
+    is the compositor's own pointer being over the icon (KWin would not
+    offer `org_kde_kwin_fake_input` without a `.desktop` grant, which
+    needs the owner's OK). Not cleared — narrowed: if it reproduces
+    by hand, the difference is on the compositor/pointer-focus side,
+    not in `popupPosition()` or the QML trigger chain. See Phase
+    7.10.0's results for the details.
 
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
