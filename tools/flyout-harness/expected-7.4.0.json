@@ -1,0 +1,17 @@
+[
+ {"key": "^overlay", "dim": "*", "note": "amp list overlay items exist only while open and change with amp count - state-dependent by design; everything under root/ must stay clean"},
+ {"key": "^(AmpListOverlay|ampListDivider|ampListEmpty|ampNoneRow|ampOption:)", "dim": "list", "note": "overlay-owned items reparent into Overlay.overlay and appear only_in_b while open - same allowlist basis as ^overlay above, just keyed by objectName/type instead of path prefix"},
+
+ {"key": "^(dbValueLabel|dbUnitLabel|dbValueRow)$", "dim": "vol", "note": "the dB value's own text length legitimately varies with vol (e.g. \"0.0\" vs \"-40.0\") - dbUnitLabel's x rides along as dbValueLabel's sibling in the same self-contained, height-pinned row (finding 1). Confined to dbValueRow - never leaks into the header/list/sliderRow/action-row above or below."},
+ {"key": "^(dbValueLabel|dbUnitLabel|dbValueRow)$", "dim": "amp", "note": "0known/1none/2none collapse volumeDb to undefined, so this row falls back to its \"—\" placeholder width - same self-contained reflow as the vol-dim rule above, different trigger."},
+
+ {"key": "^(sourceChip|sourceChipLabel)$", "dim": "src", "note": "the source chip's own width/x legitimately varies with source-name length - finding 2's elide+maximumWidth fix caps it, doesn't freeze it. The fillWidth spacer to its left absorbs the delta, so nothing outside dbSourceRow moves."},
+ {"key": "^(sourceChip|sourceChipLabel)$", "dim": "amp", "note": "0known/1none/2none collapse ActiveSourceName to \"\", so the chip falls back to its \"—\" placeholder width - same self-contained reflow as the src-dim rule above, different trigger."},
+
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "vol", "note": "the fillWidth spacer between the dB block and the source chip - its whole job is absorbing dbValueRow's width delta (see finding 2's comment on the spacer)"},
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "src", "note": "same spacer, absorbing sourceChip's width delta instead"},
+ {"key": "VolumeBlock\\[0\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[0\\]$", "dim": "amp", "note": "same spacer, absorbing the combined dbValueRow+sourceChip placeholder-width delta when amp collapses to not-connected"},
+
+ {"key": "QQuickRowLayout\\[1\\]/Slider\\[0\\]/QQuickRectangle", "dim": "vol", "note": "the slider's own background fill Rectangle (visualPosition-driven width) and handle Rectangle (visualPosition-driven x) move with the slider's own value by design - not a layout leak, see finding 8"},
+ {"key": "QQuickRowLayout\\[1\\]/Slider\\[0\\]/QQuickRectangle", "dim": "amp", "note": "same slider fill/handle Rectangles, moving to the floor position when amp collapses to not-connected - not a layout leak"}
+]

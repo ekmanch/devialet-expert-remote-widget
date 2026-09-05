@@ -103,13 +103,30 @@ MouseArea {
         const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
         const stepped = base + direction * root.volumeStepDb;
         const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // Scrolling on the panel icon while muted now unmutes for real,
+        // matching KDE's own Audio Devices applet convention - a scroll
+        // must always produce audible sound at the new volume, not just
+        // silently update a number the user can't hear until they open
+        // the flyout. Checked once, before either D-Bus write below, so
+        // this single scroll notch drives one real UDP unmute command
+        // (devialet-ctl mute off) alongside the volume command - not
+        // just an internally-tracked unmute.
+        if (root.pendingAmpState.muted) {
+            exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute off");
+            root.pendingAmpState.notifyMute(false);
+        }
         exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
         // Tells the daemon directly, so FullRepresentation (and anything
         // else reading pendingAmpState) sees this as authoritative
         // without waiting for the real amp broadcast - see
         // PendingAmpState.qml/TODO.md.
         root.pendingAmpState.notifyVolume(clamped);
-        volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction);
+        // pendingAmpState.muted is already false by this point (written
+        // synchronously above, same as notifyVolume()'s own volumeDb) -
+        // one showVolume() call reflects both the unmute and the new
+        // volume together, not two separate toast triggers racing/
+        // flickering against each other.
+        volumeToast.showVolume(root.tooltipAmpName, root.activeSourceName, clamped, root.volumeFraction, root.pendingAmpState.muted);
     }
 
     // Phase 4.5.2: same mute-toggle logic as the flyout's own Mute button
@@ -133,7 +150,12 @@ MouseArea {
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton
     onClicked: mouse => {
         if (mouse.button === Qt.LeftButton) {
-            root.plasmoidItem.expanded = !root.plasmoidItem.expanded;
+            // FlyoutPopup/FlyoutContent is the only thing left-click
+            // opens - unconditionally. Nothing in this file sets
+            // `plasmoidItem.expanded` (see main.qml's comment on why
+            // that's safe even though the shell's own auto-generated
+            // per-applet activation shortcut can still flip it).
+            flyoutPopup.visible = !flyoutPopup.visible;
         } else if (mouse.button === Qt.MiddleButton) {
             root.toggleMute();
         }
@@ -153,17 +175,16 @@ MouseArea {
     // icon.
     //
     // Phase 4.5.3 item 2 fix (follow-up round): the earlier fix only
-    // reacted to the expanded->true *transition* (the Connections block
-    // below), which left a gap - leaving and re-entering the icon while
-    // already expanded restarted hoverShowTimer with nothing to stop it,
-    // so the tooltip could reappear on top of an already-open flyout.
-    // Guarding the trigger itself (both here and in hoverShowTimer's own
-    // onTriggered, in case expanded flips true during the pending delay)
-    // means it never shows at all while expanded, regardless of how many
-    // times the mouse re-enters - not just once at the moment it opens.
+    // reacted to a one-shot transition, which left a gap - leaving and
+    // re-entering the icon while the flyout was already open restarted
+    // hoverShowTimer with nothing to stop it, so the tooltip could
+    // reappear on top of it. Guarding the trigger itself (both here and
+    // in hoverShowTimer's own onTriggered) means it never shows at all
+    // while the flyout is open, regardless of how many times the mouse
+    // re-enters - not just once at the moment it opens.
     onEntered: {
         hoverHideTimer.stop();
-        if (!hoverTooltip.visible && !root.plasmoidItem.expanded) {
+        if (!hoverTooltip.visible && !flyoutPopup.visible) {
             hoverShowTimer.restart();
         }
     }
@@ -183,11 +204,12 @@ MouseArea {
         // the Kirigami property rather than reading that KConfig group
         // ourselves, since it's the standard path to the same value.
         interval: Kirigami.Units.toolTipDelay
-        // Re-checked here too, not just in onEntered - expanded could
-        // flip true during the pending delay itself (flyout opened via
-        // some other path while the timer was already running).
+        // Re-checked here too, not just in onEntered - flyoutPopup could
+        // have opened via some other path while the timer was already
+        // running, and showing this hover tooltip on top of it would be
+        // the same Phase 4.5.3 bug back.
         onTriggered: {
-            if (!root.plasmoidItem.expanded) {
+            if (!flyoutPopup.visible) {
                 hoverTooltip.visible = true;
             }
         }
@@ -196,6 +218,35 @@ MouseArea {
         id: hoverHideTimer
         interval: 200
         onTriggered: hoverTooltip.visible = false
+    }
+
+    // Phase 7.1.0: promoted from the Phase 7.0.0 spike
+    // (AppletPopupSpike.qml, now removed) into the real flyout popup
+    // shell - see FlyoutPopup.qml's own header comment for the real-build
+    // deltas (appletInterface, hideOnWindowDeactivate) applied this
+    // phase. Phase 7.8.0 Step A: this is now the *only* thing onClicked
+    // above opens - toggled unconditionally, no flag gating it anymore.
+    // Always instantiated (cheap, matches how hoverTooltip/volumeToast
+    // below are always-instantiated-but-usually-hidden too).
+    FlyoutPopup {
+        id: flyoutPopup
+        flyoutVisualParent: root
+        plasmoidItem: root.plasmoidItem
+        // Phase 7.3.0: forwarded so FlyoutContent can hand it to the
+        // volume section in 7.4.0 (Phase 5's shared pending-state
+        // consumer). Same instance CompactRepresentation already holds.
+        pendingAmpState: root.pendingAmpState
+
+        // Phase 4.5.3 item 4's fix, flyout-side: hides the hover tooltip
+        // whenever this popup opens, or the tooltip would silently start
+        // appearing on top of it.
+        onVisibleChanged: {
+            if (flyoutPopup.visible) {
+                hoverShowTimer.stop();
+                hoverHideTimer.stop();
+                hoverTooltip.visible = false;
+            }
+        }
     }
 
     VolumeHoverTooltip {
@@ -217,32 +268,6 @@ MouseArea {
         // Muted D-Bus mirror VolumeToast.showMute() already reacts to
         // (see the Dbus.Properties block below), just never wired here.
         muted: root.pendingAmpState.muted
-    }
-
-    // Phase 4.5.3 item 4 fix: the tooltip stayed open over the flyout if
-    // the mouse was still hovering the icon when it opened, since nothing
-    // ever told it to hide on expand - only real mouse-leave (onExited)
-    // did. Target is root.plasmoidItem (a direct PlasmoidItem reference),
-    // not the `Plasmoid` attached property - tried that first, matching
-    // FullRepresentation.qml's own existing `Connections { target:
-    // Plasmoid; function onExpandedChanged() {...} }`, but that produced
-    // the exact same "no signal of the target matches the name" warning
-    // already present (and apparently never fixed) at FullRepresentation.
-    // qml:216 - the attached-property wrapper doesn't forward
-    // expandedChanged the same way the real PlasmoidItem instance does.
-    // root.plasmoidItem is that real instance (already used directly for
-    // reads/writes elsewhere in this file, e.g. onClicked's
-    // `root.plasmoidItem.expanded = ...`), and connecting to it directly
-    // resolves the signal correctly - confirmed live, no warning.
-    Connections {
-        target: root.plasmoidItem
-        function onExpandedChanged() {
-            if (root.plasmoidItem.expanded) {
-                hoverShowTimer.stop();
-                hoverHideTimer.stop();
-                hoverTooltip.visible = false;
-            }
-        }
     }
 
     property int wheelDelta: 0

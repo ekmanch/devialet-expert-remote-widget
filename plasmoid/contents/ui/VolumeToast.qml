@@ -103,14 +103,25 @@ PlasmaCore.Dialog {
     backgroundHints: PlasmaCore.Dialog.NoBackground
     hideOnWindowDeactivate: false
 
-    function showVolume(ampName, sourceName, volumeDb, fraction) {
+    function showVolume(ampName, sourceName, volumeDb, fraction, muted) {
         toast.ampName = ampName;
         toast.sourceName = sourceName;
-        toast.muted = false;
-        toast.isWordValue = false;
-        toast.valueText = volumeDb.toFixed(1);
+        toast.muted = muted;
+        // Matches VolumeHoverTooltip.qml's own rule (isWordValue: hasAmp &&
+        // muted, "Muted" swapped in for the dB reading) - scrolling while
+        // muted must keep showing "Muted", not the numeric value the amp
+        // would move to if it weren't muted. The earlier fix only chased
+        // toast.muted itself (icon/border/progress-bar color); the value
+        // label reads isWordValue/valueText independently and needs the
+        // same muted-aware branch, not just a correct toast.muted flag.
+        toast.isWordValue = muted;
+        toast.valueText = muted ? "Muted" : volumeDb.toFixed(1);
         toast.fraction = fraction;
-        toast.iconKind = toast.theme.volumeIconKindForFraction(fraction);
+        // Mirrors showMute()'s own icon selection below - scrolling while
+        // muted must keep showing the mute glyph, not a volume-level one,
+        // now that toast.muted correctly reflects the real state instead
+        // of being hardcoded false (see this function's own history).
+        toast.iconKind = muted ? "mute" : toast.theme.volumeIconKindForFraction(fraction);
         dismissTimer.restart();
         toast.visible = true;
     }

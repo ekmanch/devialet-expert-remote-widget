@@ -234,6 +234,83 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
+## Real flyout renders truncated (324×180) after a reload — the AppletPopup size-key collision (Phase 7.1.0/7.2.0; NOT cleared by 7.8.0 as first claimed — closed by Phase 7.10.0, see the last paragraph)
+
+**Symptom**: after `plasmashell --replace`, the real, shell-managed flyout
+opens cut off after the volume block - no action row, source selector or
+footer - at exactly 324×180 logical px, the placeholder `FlyoutPopup.qml`
+mainItem's size (18×10 grid units). Nothing in the flyout's own QML is
+wrong; do not debug `FullRepresentation.qml` for this.
+
+**Mechanism** (read from libplasma 6.7.4's `appletpopup.cpp`, fetched
+from invent.kde.org, and confirmed empirically): `AppletPopup::hideEvent()`
+writes `popupWidth`/`popupHeight` into
+`appletInterface->applet()->config()` **unconditionally on every close** -
+no user resize involved - and `setAppletInterface()` reads them back at
+construction (`m_sizeExplicitlySetFromConfig` → `resize`). On the
+`spike/flyout-appletpopup-rebuild` branch, `FlyoutPopup.qml` binds
+`appletInterface` to the same `PlasmoidItem` as the shell's own
+`CompactApplet.qml` popup around `FullRepresentation.qml`, so both write
+and read the **same** KConfig group
+(`[Containments][46][Applets][128][Configuration]` on the dev machine;
+find yours via the `plugin=com.ekmanch.devialetremote` line in
+`~/.config/plasma-org.kde.plasma.desktop-appletsrc`). Any single
+open/close of the spike popup - a harness run, or a manual click with
+`appletPopupSpikeEnabled` on - persists its size; the real flyout applies
+it the next time its popup is constructed, i.e. after the next
+`plasmashell --replace`. Phase 7.1.0's note blamed only resize-testing;
+Phase 7.2.0 found it is every close.
+
+**Cleanup, required after any manual spike-popup test** (the harness
+does this itself - `tools/flyout-harness/harness.py run` snapshots both
+keys before a run and restores/deletes them at teardown, logged in
+`run.json`):
+
+```
+F=plasma-org.kde.plasma.desktop-appletsrc
+G="--group Containments --group 46 --group Applets --group 128 --group Configuration"
+kwriteconfig6 --file $F $G --key popupWidth --delete
+kwriteconfig6 --file $F $G --key popupHeight --delete
+plasmashell --replace &
+```
+
+**Verifying this needs a fresh shell.** `KConfigGroup::writeEntry` only
+marks the group dirty when the value differs from the shell's in-memory
+copy; an external `kwriteconfig6 --delete` doesn't invalidate that cache,
+so a test against a still-running shell shows no write at all and looks
+like a pass. And never verify "keys unchanged" by comparing values that
+may already be the corruption - Phase 7.2.0's first report did exactly
+that (324×180 before and after, rewritten with identical values) and
+missed it; compare against absence after a restart instead.
+
+**Did not go away at Phase 7.8.0**, contrary to this section's original
+claim ("cutover removes the shell-managed popup, so only one `AppletPopup`
+writes the group"). 7.8.0's cutover only stopped *opening* the
+shell-managed popup; `main.qml`'s `fullRepresentation:` binding and the
+shell's `CompactApplet.qml` popup around it stay instantiated until Phase
+7.13.0 deletes them, and the cut-over `FlyoutPopup.qml` was itself an
+`AppletPopup` with `appletInterface` set - so both writers survived. Phase
+7.9.0 measured the consequence directly: a plain `plasmashell --replace`
+with nothing ever opened rewrote the keys to 284×358 (the never-shown
+popup's `hideEvent()` firing at shell teardown, window minus frame
+margins). Phase 7.7.0's size pinning does not fix it either - it changes
+what gets written, not that it gets written.
+
+**Closed by Phase 7.10.0 from the other side**: the rebuilt
+`FlyoutPopup.qml` is a `PlasmaCore.Dialog` that deliberately does not set
+`appletInterface`. `Dialog::hideEvent()` only writes the keys when it is
+set, and with the size pinned (`Layout.minimum* == Layout.maximum*`)
+`Dialog` never reads them back anyway (`dialog.cpp`
+`updateSizeFromAppletInterface()` returns early when min == max), so
+setting it would have bought one KConfig write per close and nothing
+else. Verified per this section's own rule (absence after a restart, not
+value comparison): both keys deleted, then ~20 open/close cycles, a
+harness smoke run and four `plasmashell --replace` - keys still absent.
+The shell's dead popup around `FullRepresentation.qml` did not write in
+that test either; if the keys ever do reappear before 7.13.0 removes it,
+they are harmless to the pinned Dialog flyout (nothing reads them), and
+the cleanup commands above still apply.
+
 ## Settings ConfigDialog (Plasma-provided default — settled, do not re-derive)
 
 `Plasmoid.internalAction("configure")` is **not** null in a real installed
@@ -532,6 +609,20 @@ re-discovered a fourth time after the rebuild ships.
     changes `devialet-ctl` (a release build, or real packaging later,
     would install directly to a proper PATH location instead and replace
     this symlink workflow entirely).
+- **`spectacle -b -f` from a non-interactive shell needs
+  `QT_QPA_PLATFORM=wayland`** (found in Phase 7.2.0): launched from a tool/
+  script shell in this Wayland session it otherwise picks the xcb backend,
+  and an XWayland grab of a Wayland session is a fully transparent
+  3840×2160 PNG with exit code 0 - no error, just empty pixels. Interactive
+  terminals don't hit this. `tools/flyout-harness/harness.py` forces the
+  variable and fails hard on an all-transparent capture; do the same in any
+  other screenshot-driven check rather than trusting a zero exit code.
+- **D-Bus `a{ss}` (and any array-of-struct, e.g. `Sources`/`KnownAmps`)
+  reaches QML's `Plasma.DBusProperties` as an opaque `QDBusArgument`** with
+  no visible keys/length - re-confirmed in Phase 7.2.0 for a dict, not just
+  the array case `test-scaffold/watch.qml` documents. Scalars round-trip
+  fine; for structured control data prefer a JSON string (`s`) property
+  (what the harness's `UiState` does) over a dict type.
 - Package manager / tooling: `pacman` (system Rust, Qt6, zbus/socket2/
   async-io via Cargo from crates.io). Qt6 dev tooling (`qmake6`,
   `qt6-base`, `qt6-declarative`) and a C++ compiler are present on this
@@ -634,6 +725,34 @@ Do not re-open this as a fresh bug investigation without reading this
 note first — it's been root-caused and the remaining artifact is an
 accepted trade-off, not an unexplained regression.
 
+**Update (Phase 7.12.0, 2026-09-05, closed)**: the paragraphs above
+describe the pre-Dialog (`AppletPopup`-hosted) flyout, where Darkly's
+own frame SVG was still drawn underneath our tint Rectangle — the seam
+was two different corner curves layered on top of each other (our
+`Rectangle.radius`'s true circular arc vs Darkly's real frame SVG's
+cubic-Bezier corner). Phase 7.10.0's rebuild onto `PlasmaCore.Dialog`
+with `backgroundHints: NoBackground` removes that second curve
+entirely — `NoBackground` clears Darkly's frame SVG's own image path
+(`dialogBackground->setImagePath(QString())`, confirmed in
+`dialog.cpp`), so there is nothing left underneath for our own corner
+radius to seam against. Phase 7.12.0 verified this live rather than
+assuming it from the header change alone: the project owner opened the
+real flyout against a solid dark background (the same high-contrast
+condition this section originally named as where the seam was
+visible) and reported no corner artifacts; independently re-verified
+by locating the flyout's exact pixel bounds via a raw pixel scan (the
+panel tint and that particular dark background were close enough in
+value that the edge wasn't obvious by eye) and inspecting all four
+corners at 12x zoom — each shows one single smooth anti-aliased curve,
+no double-border, no box-within-box artifact. No code change was made
+or needed; the setting/toggle investigation this trade-off's own
+"if this is ever revisited" clause anticipated is now moot, since
+there's no seam left to bypass. This closes the seam as a live issue
+on the current `Dialog`-based flyout — the mechanism/history above
+stays accurate as an explanation of the old `AppletPopup`-era
+behavior, and would still apply if the flyout were ever hosted in a
+popup class with a real background frame again.
+
 ***  real transparency was investigated and found infeasible from applet code (settled, do not re-attempt without new evidence) ***
 
 Investigated on the now-deleted `experiment/real-transparency` branch.
@@ -675,3 +794,28 @@ entirely (see TODO.md). Do not re-attempt without first confirming a
 fundamentally different Plasma API is available (e.g. a future
 `PlasmaWindow::BackgroundHints` value, or migration back to a window
 class that does expose `NoBackground`).
+
+**Update (Phase 7.9.0+, follow-up correction)**: the conclusion above is
+still accurate for what it actually tested - the *shell-managed* popup
+(`CompactApplet.qml`'s own `AppletPopup`), which has no `NoBackground`
+option. It was never a conclusion that a *hand-built* popup couldn't do
+better - escaping exactly that limitation was the stated reason Phase 7.x's
+flyout rebuild exists at all, and this section's own last sentence already
+named the escape hatch ("migration back to a window class that does expose
+`NoBackground`"). Phase 7.0.0-7.8.0 then built a hand-rolled popup, but
+chose `PlasmaCore.AppletPopup` for it - the same `PlasmaWindow`-family class
+already confirmed above to have no `NoBackground` value, reproducing the
+identical limitation this section describes. That choice was made on
+dismiss/focus/positioning-risk grounds without re-checking it against the
+transparency goal; see TODO.md's Phase 7.0.0 entry for the correction and
+Phase 7.9.0+ for the fix in progress (`PlasmaCore.Dialog`, which - unlike
+`PlasmaWindow` - has a real, code-enforced `NoBackground` value, confirmed
+directly in `dialog.cpp`, and is what `VolumeHoverTooltip.qml`/
+`VolumeToast.qml` already use successfully).
+Phase 7.10.0 (2026-09-05) then shipped that rebuild — `FlyoutPopup.qml`
+on `PlasmaCore.Dialog` with `NoBackground` — and measured real
+transparency on the real flyout for the first time (same-patch
+closed-vs-open capture: blend error 0.35 at α 0.82 vs 7.08 for opaque
+paint; wallpaper visible through the panel). So the "infeasible" verdict
+above stands only for the shell-managed popup class; this widget's own
+flyout window is no longer in that class.
