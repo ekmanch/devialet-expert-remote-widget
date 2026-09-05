@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet Flyout Mockup v10</title>
+<title>Devialet Flyout Mockup v11</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -219,9 +219,6 @@
     font-family:var(--font-mono); font-size:10px; color:var(--text-faint);
     margin:9px 0 0; text-align:center; letter-spacing:0.01em;
   }
-  .scroll-hint.warning-hint{
-    color:var(--danger); display:none;
-  }
 
   .action-row{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:14px 16px 4px;}
   .action-btn{
@@ -335,7 +332,6 @@
           <div class="step-btn" onclick="stepVol(0.5)">+</div>
         </div>
         <p class="scroll-hint" id="scrollHint">Scroll over volume slider to adjust</p>
-        <p class="scroll-hint warning-hint" id="warningHint">⚠ High volume — above soft limit</p>
       </div>
 
       <div class="action-row">
@@ -398,15 +394,13 @@
   let muted = false;
   let poweredOn = true;
   let vol = -25.0;
-  // Volume limits — in the real widget these come from the ConfigDialog
-  // (General tab: "Volume limits" section). Defaults shown there:
-  // floor -50 dB, soft limit -20 dB, hard limit -10 dB.
+  // Volume range — in the real widget floor/hard limit come from the
+  // ConfigDialog. No soft limit in this version: the slider and hint
+  // text look identical across the whole range.
   const FLOOR_DB = -50;   // slider left edge
-  const SOFT_DB = -20;    // boundary between "normal" and "high volume" zones
   const HARD_DB = -10;    // slider right edge — amp is never sent above this
   const MIN_DB = FLOOR_DB, MAX_DB = HARD_DB;
   const RANGE_DB = HARD_DB - FLOOR_DB;
-  const SOFT_PCT = ((SOFT_DB - FLOOR_DB) / RANGE_DB) * 100;
 
   function onVolInput(v){ vol = Number(v); updateVolDisplay(); }
   function stepVol(delta){
@@ -416,15 +410,8 @@
   }
   function updateVolDisplay(){
     const fillPct = ((vol - FLOOR_DB) / RANGE_DB) * 100;
-    const inDanger = vol > SOFT_DB;
-
     document.getElementById('volValue').textContent = vol.toFixed(1);
-    document.getElementById('scrollHint').style.display = inDanger ? 'none' : 'block';
-    document.getElementById('warningHint').style.display = inDanger ? 'block' : 'none';
 
-    // Slider and numeric readout stay copper regardless of the soft
-    // limit — only the hint text below switches to the red warning
-    // line once you're past it. Subtler than coloring the slider itself.
     const stops = `var(--copper) 0%, var(--copper) ${fillPct}%, var(--surface-3) ${fillPct}%, var(--surface-3) 100%`;
     document.getElementById('volSlider').style.background = `linear-gradient(90deg, ${stops})`;
   }
