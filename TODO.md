@@ -4505,6 +4505,129 @@ architecture decisions; this file is just sequencing and status.
     TODO-only pass — scoped to TODO.md per the project owner's explicit
     request.
 
+- [x] **Phase 7.13.0 — Cleanup.** Depends on 7.12.0. Done 2026-09-05 —
+      final phase of the whole Phase 7.0.0-7.13.0 flyout rebuild; see
+      this entry's own closing summary below for the full arc.
+  - **Grepped the whole repo first**, per this phase's own instruction,
+    before deleting anything. `AppletPopupSpike.qml` was already gone
+    (renamed into `FlyoutPopup.qml` back in 7.1.0). Confirmed still
+    present and safe to delete: `DialogSpike.qml`, `DialogSpikeDriver.qml`
+    (only ever loaded by each other/`CompactRepresentation.qml`), and
+    `tools/dialog-spike/` (`kwin-geom.js`, `kwin-activate.js`,
+    `spike.py`, referenced nowhere else). `FullRepresentation.qml`'s many
+    cross-file mentions (`VolumeBlock.qml`, `PendingAmpState.qml`,
+    `Theme.qml`, `SourceSelector.qml`, `FlyoutContent.qml`,
+    `ActionRow.qml`, `Footer.qml`, `AmpHeader.qml`, `AmpListOverlay.qml`,
+    `ConfigGeneral.qml`) are all historical "ported/extracted from"
+    attribution comments, not live dependencies — checked each one
+    individually, none touched (this project already keeps this kind of
+    comment for other deleted files, e.g. `AppletPopupSpike.qml, now
+    removed`). Deleted: `FullRepresentation.qml`, `DialogSpike.qml`,
+    `DialogSpikeDriver.qml`, `tools/dialog-spike/` entire.
+  - **`CompactRepresentation.qml` cleanup**: removed the dead
+    `appletPopupSpikeEnabled`/`dialogSpikeEnabled` properties, the
+    `DialogSpike { … }` instantiation, `onClicked`'s dead
+    `dialogSpikeEnabled` branch (now an unconditional
+    `flyoutPopup.visible = !flyoutPopup.visible`), and every
+    `!root.plasmoidItem.expanded` check (`onEntered`, `hoverShowTimer.
+    onTriggered`, and a whole `Connections { onExpandedChanged }` block)
+    — see the investigation below for why removing these was safe here.
+  - **Investigated rather than assumed (task's explicit instruction) —
+    and it caught a real, reproducible regression the initial attempt
+    missed.** Read libplasma's real source (`plasmoiditem.cpp`, fetched
+    from invent.kde.org) to answer whether deleting `main.qml`'s
+    `fullRepresentation:` binding actually neutralizes the shell's
+    auto-generated per-applet "Activate Devialet Remote Widget" global
+    shortcut: confirmed `PlasmoidItem` unconditionally connects
+    `Applet::activated` to `setExpanded(true)` on first activation, with
+    no check for a full representation existing and no property that
+    suppresses it — so `expanded` can still flip `true` via that
+    shortcut (or Enter/Space/accessibility activation on the panel
+    icon) regardless. Reading `CompactApplet.qml`'s own QML (its popup
+    Dialog and Layout hints all null-check `root.fullRepresentation`
+    gracefully) suggested simply omitting `fullRepresentation:` entirely
+    was therefore safe.
+    - **That reasoning was wrong, and the first attempt (deleting the
+      binding outright) shipped it anyway.** Live verification (fresh
+      `kpackagetool6 --upgrade` + `plasmashell --replace`, harness
+      `--set smoke`) showed a probe timeout with zero `[FlyoutProbe]`
+      lines ever logged — and the project owner caught the real,
+      visible symptom directly: **the panel icon had disappeared
+      entirely**, confirmed via their own screenshot. No QML error was
+      ever logged anywhere (checked exhaustively — `journalctl`,
+      `plasmawindowed`, `qmllint`), which is what made this genuinely
+      easy to miss without that live check.
+    - **Root-caused, not patched around**: something requires a truthy
+      `fullRepresentation` for the compact representation to render at
+      all — confirmed by direct bisection (restoring
+      `fullRepresentation: Item {}` alone, with no other change, brought
+      the icon back immediately, verified live by the owner). The exact
+      C++-side mechanism wasn't chased further (out of scope for this
+      cleanup), but the empirical fact is now documented in `main.qml`'s
+      own comment for whoever next touches this.
+    - **Fix**: `main.qml` keeps `fullRepresentation: Item {}` — a
+      trivial placeholder, not a reintroduction of the deleted file's
+      actual content. Documented residual trade-off, deliberately left
+      unhandled: with a truthy `fullRepresentation` restored, the
+      obscure global shortcut above *can* now make the shell's own
+      popup Dialog visible (an empty box sized by its generic Kirigami
+      fallback, not the real flyout) — but this needs a shortcut nobody
+      binds by default, auto-dismisses on any click elsewhere or Escape
+      (`hideOnWindowDeactivate`'s own default plus `CompactApplet.qml`'s
+      `Keys.onEscapePressed`), and never conflicts with the real flyout
+      or hover tooltip (both driven by `flyoutPopup.visible`, not
+      `expanded`, after this phase's cleanup of `CompactRepresentation.
+      qml`). An inherent constraint of the compact/full representation
+      model for any applet with no meaningful full representation, not
+      a regression this cleanup introduced.
+  - **Re-verified clean after the fix**: fresh `kpackagetool6 --upgrade`
+    + `plasmashell --replace`; popup size keys confirmed absent both
+    before and after (`[Containments][46][Applets][128][Configuration]`
+    has only its `ConfigDialog`/`General`/`Shortcuts` subgroups); the
+    real daemon active after teardown; harness `--set smoke` — 7/7
+    states, counts matching the established 74 (closed) / 115 (open)
+    pattern exactly, `report --expected expected-7.6.0.json` → **exit
+    0**. The owner independently confirmed the icon visible and the
+    flyout opening/working live (screenshot: real amp connected,
+    volume/mute/power/source all functioning, transparency intact).
+  - **`tools/flyout-harness/harness.py`**: one stale string fixed in
+    passing (a `ProbeTimeout` hint referencing `appletPopupSpikeEnabled`,
+    a property that no longer exists anywhere after this phase) — not
+    itself spike scaffolding, just a troubleshooting message that would
+    have actively misled a future debugging session.
+  - **Closing summary — the full Phase 7.0.0-7.13.0 arc, for anyone
+    reading this later.** The flyout started this arc hosted in the
+    shell-managed `PlasmaQuick::AppletPopup`/`PlasmaWindow` (the same
+    class the original, pre-rebuild flyout always used), which has no
+    `NoBackground` value at all — genuine desktop transparency was
+    structurally impossible in that class, full stop. Phases 7.0.0-7.8.0
+    built a complete, hand-rolled replacement flyout (own popup shell,
+    amp header, volume block, action row, source selector, footer, amp
+    list overlay) *inside that same constrained class*, reasoning at the
+    time that it was "the exact class already producing today's
+    flyout." That was a real mid-course mistake, not a footnote: 7.8.0's
+    own cutover shipped and soak-tested clean, and the miss was only
+    caught afterward when the project owner directly compared a live
+    screenshot of the new flyout against `VolumeToast.qml`/
+    `VolumeHoverTooltip.qml`'s already-transparent look and noticed the
+    new flyout was still opaque. Phase 7.9.0 corrected course with a
+    real investigation (a `PlasmaCore.Dialog` + `Overlay.overlay` spike,
+    not a leap to implementation), Phase 7.10.0 rebuilt the flyout on
+    that class and measured real, live transparency for the first time,
+    Phase 7.11.0 re-ran the full 438-state verification gate against the
+    new window class and confirmed it clean (with its own detour: a
+    screensaver interruption first misdiagnosed as a compositor fault,
+    corrected by the project owner), Phase 7.12.0 confirmed the
+    long-standing Darkly corner-radius seam had disappeared as a
+    side effect of `NoBackground` removing the theme's frame SVG
+    entirely, and this phase removes the scaffolding and the
+    now-truly-dead original `AppletPopup`-era code both the spike and
+    the mid-course correction left behind. Net result: the flyout is a
+    hand-built `PlasmaCore.Dialog` with real desktop transparency,
+    verified clean at full scale, with no leftover spike files, no dead
+    `FullRepresentation.qml`, and no lingering flags from either the
+    original spike or the corrected one.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -4558,27 +4681,42 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Phase 7.13.0 — Cleanup.** Depends on 7.12.0 — cleanup only
-      happens once the flyout that's actually being kept is the one
-      that's done (renamed/moved from the original Phase 7.9.0, content
-      unchanged; see the correction on Phase 7.0.0's entry above for
-      why cleanup no longer directly follows 7.8.0).
-  - Delete the spike scaffolding: whatever's left of
-    `AppletPopupSpike.qml`'s throwaway pieces and the
-    `appletPopupSpikeEnabled` flag, no longer referenced by anything.
-  - Remove `main.qml`'s now-dead `fullRepresentation:` binding and
-    delete the old `FullRepresentation.qml` — once nothing sets
-    `plasmoidItem.expanded = true` anymore, the shell's own
-    `CompactApplet.qml`-managed `AppletPopup` around it never becomes
-    visible, but it's still wasted memory/dead weight kept alive by
-    `PlasmoidItem`'s opportunistic full-representation preloading (see
-    `CompactRepresentation.qml`'s own header comment on that preload
-    behavior) until this is actually removed.
-  - Verify: fresh `kpackagetool6 --upgrade` + `plasmashell --replace`,
-    confirm the widget still works end to end with the dead files
-    actually gone (not just unused) — matches Phase 5.0.2 Step B's own
-    "only delete once the cutover itself is already verified solid"
-    ordering.
+- [ ] **Phase 7.14.0 — Restyle AmpListOverlay/SourceSelector to match
+      the updated mockup.** Depends on 7.13.0. Visual polish only, no
+      architectural or behavioral changes — both components' existing
+      self-contained boundaries (visibility, positioning, dismiss, the
+      ampChosen(ip)/open signal contracts) stay exactly as they are.
+  - Reference: `Devialet_flyout_mockup_v1.html`, "MOCKUP · POPUP/
+    COMBOBOX OVERLAY BEHAVIOR" section — a newer, more polished design
+    pass than what Phase 7.3.0 originally implemented against.
+  - Both `AmpListOverlay.qml` and `SourceSelector.qml`'s popups should
+    read as floating cards inset from the flyout's own edges, with
+    visible rounded corners (`Kirigami.Units.cornerRadius`, per the
+    existing house rule) — not flush/full-width against the flyout
+    container the way they currently render.
+  - `AmpListOverlay.qml`: confirm row padding/spacing matches the
+    mockup's visual density; selected-amp styling (copper dot/text +
+    checkmark) already matches, just needs the card treatment above.
+  - `SourceSelector.qml` — the bigger gap: the mockup shows a small
+    icon chip per source row (distinct glyphs for Optical/UPnP/Roon
+    Ready/AirPlay/Spotify) and copper text + checkmark for the selected
+    row, replacing the current flat gray highlight bar and plain text
+    rows. This uses `org.kde.plasma.components.ComboBox` (required per
+    CLAUDE.md's QTBUG-66446 house rule) — first confirm its
+    delegate/popup/background properties actually support this level
+    of customization before implementing; report back if there's a
+    real constraint rather than assuming it'll just work. Check the
+    mockup's HTML for the actual per-source glyphs and whether this
+    project has an existing icon convention to match, rather than
+    inventing a new one.
+  - Verify live across every existing test state (0/1/2+ known amps,
+    empty source list, long source/amp names). Pure styling — run the
+    Phase 7.2.0 harness's `--vary amp,list` and confirm zero unexpected
+    moves outside the overlay prefix, since everything in `mainColumn`
+    should stay completely unaffected.
+  - Do not touch `AmpHeader.qml`, `VolumeBlock.qml`, `ActionRow.qml`,
+    or `FlyoutContent.qml`'s own structure — scoped entirely to the two
+    overlay components' internal visual content.
     
 - [ ] Phase 8.0.0 — Rust: hard-limit clamp in the shared protocol crate.
   The safety backstop, independent of any UI/mockup work, so this can

@@ -403,7 +403,7 @@ def cmd_run(args):
                 except ProbeTimeout as e:
                     if attempt == 2:
                         raise ProbeTimeout(
-                            f"{e}\n  hints: is main.qml's appletPopupSpikeEnabled true and the plasmoid reloaded "
+                            f"{e}\n  hints: was the plasmoid reloaded "
                             f"(kpackagetool6 --upgrade + plasmashell --replace)? Did the popup open? "
                             f"journal saw {journal.raw_count} [FlyoutProbe] lines so far.") from None
                     log(f"  probe timeout for {cid}, retrying once with a new Seq")

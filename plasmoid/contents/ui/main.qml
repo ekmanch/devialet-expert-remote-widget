@@ -68,46 +68,48 @@ PlasmoidItem {
         id: pendingAmpState
     }
 
-    // Phase 7.0.0/7.1.0 rebuild toggle (spike/flyout-appletpopup-rebuild
-    // branch, not a real feature, do not wire to config.qml/main.xml).
-    // Originally: when true, CompactRepresentation.qml's left-click
-    // handler opened FlyoutPopup.qml instead of toggling `expanded`/the
-    // shell-managed flyout, letting the rebuild be tested side-by-side
-    // with the still-live original by flipping one line.
-    //
-    // Phase 7.8.0 Step A (cutover): CompactRepresentation.qml's onClicked
-    // no longer reads this property at all - the new flyout is now the
-    // only thing left-click opens, unconditionally, regardless of this
-    // flag's value. Left in place, still `false`, still forwarded below,
-    // purely so this diff (and the eventual deletion diff) stay small and
-    // reviewable in isolation - see TODO.md's Phase 7.8.0/7.9.0 entries.
-    // `fullRepresentation` below is now genuinely dead code (nothing sets
-    // `expanded = true` via the left-click path anymore - see
-    // CompactRepresentation.qml's own onClicked comment for the one
-    // remaining live path, the shell's auto-generated toggle shortcut),
-    // kept only until Phase 7.9.0 deletes it alongside
-    // `FullRepresentation.qml` and this flag.
-    readonly property bool appletPopupSpikeEnabled: false
-
-    // Phase 7.9.0 spike toggle (throwaway, not a feature, do not wire to
-    // config.qml/main.xml): when true, CompactRepresentation.qml's
-    // left-click opens DialogSpike.qml (a bare PlasmaCore.Dialog with
-    // NoBackground) instead of the real flyout, so a human can exercise
-    // it for real. tools/dialog-spike/spike.py drives the same spike over
-    // D-Bus regardless of this flag. Deleted with the spike in 7.13.0.
-    readonly property bool dialogSpikeEnabled: false
-
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
-        appletPopupSpikeEnabled: root.appletPopupSpikeEnabled
-        dialogSpikeEnabled: root.dialogSpikeEnabled
     }
 
-    fullRepresentation: FullRepresentation {
-        plasmoidItem: root
-        pendingAmpState: pendingAmpState
-    }
+    // Phase 7.13.0 cleanup: FullRepresentation.qml itself is deleted, but
+    // `fullRepresentation:` cannot simply be omitted - tried that first,
+    // and it silently removed the panel icon entirely (compactRepresentation
+    // never rendered at all, confirmed live: reinstalled, restarted
+    // plasmashell, no QML errors anywhere in the journal, yet the icon
+    // was gone from the panel). Reading `CompactApplet.qml`'s own QML
+    // (its popup Dialog and Layout hints all null-check `root.
+    // fullRepresentation` gracefully) suggested this should be safe, but
+    // that reasoning was wrong - something requires a full representation
+    // to exist for the compact one to show at all. A trivial placeholder
+    // restores the icon and the flyout both (confirmed live), without
+    // reintroducing any of the deleted file's actual content.
+    fullRepresentation: Item {}
+
+    // CompactRepresentation.qml's left-click unconditionally opens
+    // FlyoutPopup.qml itself; nothing in this package sets `expanded`.
+    // The shell still auto-generates a per-applet "Activate Devialet
+    // Remote Widget" global shortcut (confirmed in libplasma's
+    // plasmoiditem.cpp: PlasmoidItem unconditionally connects `Applet::
+    // activated` to `setExpanded(true)` on first activation - there is no
+    // property that suppresses this, `activationTogglesExpanded` only
+    // changes whether a *second* activation closes it again), so
+    // `expanded` can still flip to `true` via that shortcut/Enter/Space/
+    // accessibility activation on the panel icon. With a real (if empty)
+    // `fullRepresentation` now present, this *can* make the shell's own
+    // popup Dialog (`CompactApplet.qml`: `visible: root.plasmoidItem.
+    // expanded && root.fullRepresentation`) become visible - an empty box
+    // sized by its generic Kirigami fallback, not the real flyout. Left
+    // unhandled deliberately: this requires deliberately configuring and
+    // pressing a shortcut nobody binds by default, it auto-dismisses on
+    // any click elsewhere or Escape (`hideOnWindowDeactivate`'s own
+    // default, plus `CompactApplet.qml`'s `Keys.onEscapePressed`), and it
+    // never conflicts with FlyoutPopup/the hover tooltip (that's driven
+    // entirely by `flyoutPopup.visible` in CompactRepresentation.qml, not
+    // `expanded`). An inherent constraint of the compact/full
+    // representation model for any applet with no meaningful full
+    // representation, not a regression introduced by this cleanup.
 
     // No toolTipItem binding here (Phase 4.5.3 Bug 3 fix, later revision):
     // CompactRepresentation.qml now owns its own hover-triggered
