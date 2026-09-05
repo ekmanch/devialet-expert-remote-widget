@@ -3041,58 +3041,6 @@ architecture decisions; this file is just sequencing and status.
     the settle floor is re-measured per phase by running the phase's set
     at 600 and 1200 ms and comparing, never copied forward.
 
-## Up next
-
-- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
-      real install location for the `devialet-ctl` binary (system-wide
-      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
-      than the current manual symlink, or `cargo install` into
-      `~/.cargo/bin`) and build/place it as part of the install script.
-      Currently a manual `~/.local/bin` symlink per README — fine for
-      dev, not a real install path.
-  - Verify: `devialet-ctl` is invocable from a fresh shell with no
-    manual step, on a machine that hasn't had it built/placed before.
-- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
-      install/upgrade logic the script needs — including handling the
-      "already installed, needs upgrade not install" case cleanly when
-      the script is re-run on a system that already has the widget.
-  - Verify: widget installs cleanly on a fresh system; re-running the
-    script on an already-installed system upgrades cleanly with no
-    `kpackagetool6` errors.
-- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
-      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
-      `enable --now` as part of the script.
-  - Verify: `systemctl --user status` shows the daemon running
-    immediately after install; survives a logout/login.
-- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
-      into one script a user runs after cloning the repo. Must be
-      idempotent — safe to re-run on an already-installed system
-      without duplicating units, breaking an existing install, or
-      erroring out. Sensible failure messages if a step fails partway
-      (don't leave the system in a half-installed state silently).
-  - Verify: a clean clone → run script → fully working widget + daemon
-    + CLI, end to end, no manual steps outside the script.
-  - Note for packaging/install script phase: both the devialet-ctl
-      symlink and the devialet-remote-daemon systemd unit's ExecStart
-      have independently gone stale against pre-own/-move paths on
-      this machine. The install script should generate/verify these
-      paths against wherever the repo actually lives at install time,
-      rather than leaving them as manually sed-substituted
-      placeholders per the current README instructions - this class of
-      bug will keep recurring otherwise.
-- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
-      deliberately whether an uninstall script is in scope for v1.0.0
-      or explicitly deferred — don't let it default to "skipped"
-      silently. If in scope: reverse of 4.6.3 (disable/remove the
-      systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
-      remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
-  - Verify (if implemented): a full uninstall leaves no systemd unit,
-    no installed plasmoid, and no leftover binary.
-- [ ] **Phase 6.0.5 — README install instructions.** Replace the
-      current manual multi-step install instructions with "clone the
-      repo, run install.sh." Keep the manual steps documented separately
-      only if 4.6.4's uninstall is deferred and manual removal
-      instructions are still needed.
 - [x] **Phase 7.3.0 — Amp header + amp list section.** Depends on 7.2.0.
       First real-content section of the FlyoutPopup rebuild. §4 point 4
       option (b) implemented: the amp list is pulled out of in-flow
@@ -4357,46 +4305,258 @@ architecture decisions; this file is just sequencing and status.
       in place (the Bugs-section clip) was not stated either way; the
       Bugs entry stays open until the owner says so.
 
+- [x] **Phase 7.11.0 — Full re-verification pass.** Depends on 7.10.0.
+      Done 2026-09-05 — full-suite gate for the Dialog rebuild, same
+      discipline as Phase 7.7.0.
+  - **Precondition**: popup size keys confirmed absent for real before
+    starting — `kwriteconfig6 --delete` on both keys, then a fresh
+    `plasmashell --replace`, then grepped the config file directly (not
+    just trusted the delete command's own exit code, per this project's
+    own "verify absence after a restart, never compare values" rule) —
+    `[Containments][46][Applets][128][Configuration]` had no
+    `popupWidth`/`popupHeight` keys at all, only its `ConfigDialog`/
+    `General`/`Shortcuts` subgroups. Reconfirmed absent again after the
+    full run below.
+  - **Environment incident, corrected by the project owner — recorded
+    here because it was misdiagnosed in the moment.** The first full
+    run aborted at state 237/438 when `spectacle` returned a fully
+    transparent capture 3 times in a row (exceeding the bounded retry
+    from Phase 7.7.0); a second attempt failed immediately on the very
+    first capture. In the moment this was investigated as a KWin
+    render-pipeline fault — `-a`/active-window capture still worked
+    while `-f`/full-screen capture didn't, and
+    `busctl --user call org.kde.KWin /Compositor org.kde.kwin.Compositing
+    reinitialize` did make full-screen capture start working again,
+    which read as confirmation of that theory. **The owner corrected
+    this directly: it was the screensaver activating during the long
+    hands-off run, not a compositor bug** — this had already happened
+    on a prior session's long run, and the expectation coming in was
+    that it would be prevented this time, not re-diagnosed as something
+    else. `reinitialize` incidentally cleared the symptom but was never
+    the actual cause. Fix applied: `qdbus6 org.freedesktop.ScreenSaver
+    /ScreenSaver org.freedesktop.ScreenSaver.Inhibit` alone does not
+    durably hold (a one-shot CLI call disconnects immediately, and the
+    inhibit is tied to the caller's live bus connection), so a
+    background loop calling `.SimulateUserActivity` every 60s was run
+    for the remainder of the session; the third full run then completed
+    all 438 states with no interruption. The loop was stopped once
+    testing finished. Saved as a standing memory
+    (`inhibit-screensaver-before-long-runs`) so any future long
+    hands-off run on this box inhibits the screensaver *before*
+    starting, unconditionally, rather than waiting to see if it
+    interrupts the run.
+  - **The genuinely clean full pass**
+    (`run --set full --noise-mask --label phase7.11.0-full-take3`,
+    `runs/20260905-144008-phase7.11.0-full-take3`, real amp state via
+    `fakeamp`, screensaver inhibited for the duration): 438 states, 876
+    captures parsed, 2409 single-dimension pairs. `report --expected
+    expected-7.6.0.json` → **exit 0**.
+    - `control_unstable: False` — every control-pair coordinate set
+      identical across all 438 states; 0 states with coordinate diffs.
+    - `size_mismatch: False`, 0 mismatches — **the h == ih / w == iw
+      popup-geometry assertion (added in 7.7.0 after it caught a real
+      silent-clipping bug in 7.6.0) holds cleanly under `Dialog`
+      specifically**, a different window class than what it was
+      originally built against: one geometry row across the entire
+      cross product, `{"win": [300, 373], "mainItem": [300, 373, 300,
+      373]}` — window size equals mainItem's actual size equals
+      mainItem's own implicit size, simultaneously, in every state.
+      (The pre-rebuild `AppletPopup` baseline was `win 316×388 /
+      mainItem 300×373` — `Dialog` carries no extra frame margin, as
+      expected from 7.9.0/7.10.0's own findings.)
+    - `unexpected_moves: 0` against `expected-7.6.0.json`. `allowed_moves:
+      32819` — the exact same count 7.10.0's own full run reported,
+      i.e. the established allowlist categories (`AmpHeader`,
+      `VolumeBlock`, `ActionRow`, `overlay`/`ampOption:<ip>`, `Source
+      Selector`, `footer`, `powerSpinner`) still fully account for
+      every move with nothing foreign sneaking through. `warnings: []`.
+    - Control-pair pixel noise: 144/438 states nonzero, and **100% of
+      those are `pow=Booting` states** (spinner rotation + amp-dot
+      pulse) — 0 non-Booting states show any control-pair pixel
+      difference. Same pattern 7.7.0's full pass established; still
+      holds under `Dialog`.
+  - **`Overlay.overlay` walk — reconfirmed at full scale, not just the
+    smoke sample (task item 2).** Computed item counts per
+    amp/list-state combination across all 438 states directly from the
+    run's `coords/*.json`: `list=closed` is always exactly 74 items
+    regardless of amp/vol/mute/pow/src state (the overlay never leaks
+    into the closed count); `list=open` is exactly 115 items for 0 or 1
+    known amps and exactly 123 for 2 known amps (one amp row ≈ 8 extra
+    items) — zero variance within any category across the full vol ×
+    mute × pow × src cross product. This is the smoke run's "115 vs 74"
+    finding, now confirmed to generalize exactly rather than assumed to.
+  - **Real transparency — measured across the full state set (task item
+    4), not a single screenshot.** Built a full-scale version of
+    7.10.0's same-patch blend check: cropped the run's own
+    `_closed_full.png` (captured once, before any state changes) to the
+    same box used for every state's screenshot, giving a wallpaper
+    reference in the exact same coordinate frame as every shot. Used
+    `Theme.qml`'s actual `panelGradientTop`/`panelGradientBottom` (alpha
+    0.82 — confirmed this is what `FlyoutContent.qml`'s root tint
+    Rectangle uses) to build a per-row predicted-transparent image
+    (`0.82×tint + 0.18×wallpaper`) and a predicted-opaque image
+    (`tint` alone), then derived a discriminating pixel mask directly
+    from the data (wallpaper differs from flat tint by >30 on some
+    channel — 89% of the panel's pixels, i.e. real desktop content is
+    visible through most of the panel, not just one convenient corner)
+    and compared every one of the 438 shots against both hypotheses
+    inside that mask:
+    - predicted-**transparent** mean abs error: 6.37 (max 7.46, min
+      3.19)
+    - predicted-**opaque** mean abs error: 11.38 (max 12.89, min 8.93)
+    - **the transparent hypothesis fit better in 438/438 states — no
+      exceptions.** (Absolute error values run higher than 7.10.0's own
+      single-patch figures of 0.35/7.08 because this mask deliberately
+      covers text/control pixels too, which neither hypothesis models —
+      the discriminating signal is the consistent, large, universal gap
+      between the two hypotheses, not the absolute numbers.)
+    - Directly inspected two representative screenshots (the base
+      not-connected `closed` state, and a `Booting`+`list=open`+long
+      source-name state — chosen for maximum visual difference from
+      each other) — both show the same real window-shaped wallpaper
+      artifact bleeding through the top-right of the panel, confirming
+      this isn't one lucky capture.
+  - **Live pointer-triggered side-by-side against
+    `VolumeHoverTooltip.qml`/`VolumeToast.qml` — closed by the owner's
+    own soak (2026-09-05), not scriptable from this session.**
+    `VolumeToast` only fires from a genuine scroll/click on the panel
+    icon (`CompactRepresentation.qml`'s `stepVolume()`/`toggleMute()`),
+    needing real pointer input this session couldn't inject (matching
+    the same real-pointer-needs-a-human precedent as the hover tooltip
+    in Phase 7.10.0's own soak note above — a synthetic-wheel-event
+    driver for this one comparison would have been new scripted-input
+    scaffolding the project has deliberately avoided elsewhere). The
+    owner instead did the real scroll and screenshotted both the
+    tooltip and the toast live, side by side, both showing "Devialet
+    Expert 140 Pro / Optical 1 / -28.0 dB" simultaneously. Sampled the
+    screenshot's own pixels directly rather than taking the look on
+    faith: the toast panel carries a pixel at `(181,129,88)` — a warm
+    skin tone from the wallpaper's foreground character bleeding
+    straight through the dark tint, impossible under opaque paint — and
+    the tooltip shows the same effect at lower magnitude (~23% of a
+    sampled region measurably pulled off its flat base tint by the room
+    behind it), consistent with its own higher, deliberate alpha (0.94
+    vs the flyout/toast's 0.82, per `Theme.qml` — see below). Confirms
+    in code and now live: all three (`FlyoutPopup.qml`,
+    `VolumeToast.qml`, `VolumeHoverTooltip.qml`) build on the identical
+    `PlasmaCore.Dialog` + `NoBackground` mechanism confirmed in
+    `dialog.cpp`; the only difference is tint alpha
+    (`panelGradientTop`/`Bottom` @ 0.82 for the flyout vs.
+    `osdGradientTop`/`Bottom` @ 0.94 for the toast/tooltip — a
+    deliberate, pre-existing difference documented in `Theme.qml`, not
+    a discrepancy to reconcile). The full-scale blend analysis above
+    used that exact 0.82 value and this live capture is independent
+    confirmation it holds on the real flyout, not just in the harness.
+  - **Scripted checks are not a substitute for a real soak (task item
+    6) — stating this plainly, not treating the harness pass as
+    sufficient on its own.** Phase 7.8.0's own precedent already proved
+    this: its scripted verification passed clean, and it was still a
+    real, hands-on usage session that caught the mute/OSD bug 7.8.0's
+    own harness run never exercised. Everything in this entry is
+    coordinate/pixel-level and D-Bus-driven; it cannot observe real
+    cursor behavior, real hover timing, or a human's subjective read of
+    "does this actually look transparent to me" the way the owner's own
+    eyes can. **A real soak period under normal use is still required
+    before this phase is treated as fully closed**, matching Phase
+    7.8.0's own precedent and the explicit instruction for this phase.
+    The `VolumeToast`/`VolumeHoverTooltip` side-by-side above is now
+    closed by the owner's own capture; still outstanding is a general
+    "does the flyout look and feel right day-to-day" pass now that it's
+    a different window class than the AppletPopup-based flyout users
+    have been living with since Phase 7.8.0.
+
+- [x] **Phase 7.12.0 — Darkly corner-radius mismatch fix.** Depends on
+      7.11.0 verified solid. Done 2026-09-05 — closed as "problem
+      disappeared on its own," exactly the outcome this entry's own
+      pre-implementation note flagged as the thing to check for first.
+  - Verified live, not assumed: the project owner opened the real
+    flyout against a solid dark background (a maximized Dolphin window
+    behind it) — the exact condition CLAUDE.md's original seam writeup
+    named as where the artifact was visible — and reported no corner
+    artifacts at all. Independently re-verified rather than taking the
+    screenshot at face value: found the flyout's actual pixel bounding
+    box via a raw horizontal/vertical pixel scan (x≈1634-1943,
+    y≈39-425 in the supplied screenshot — the flyout tint (~18-20) and
+    Dolphin's own dark background (~12) are close enough in value that
+    the edge isn't obvious by eye, which if anything makes this a
+    *stricter* low-contrast test than a typical dark wallpaper), then
+    cropped and zoomed all four corners 12x with nearest-neighbor
+    scaling. Every corner shows one single, smooth anti-aliased curve —
+    no double-border, no second offset curve, no box-within-box
+    artifact at any of the four corners.
+  - **Root cause confirmed exactly as this entry's own pre-
+    implementation note hypothesized**: `backgroundHints: NoBackground`
+    clears Darkly's real frame SVG entirely
+    (`dialogBackground->setImagePath(QString())`, `dialog.cpp`), which
+    was the *other* curve in the original mismatch (our tint
+    Rectangle's true circular arc vs Darkly's frame SVG's cubic-Bezier
+    corner underneath it, per CLAUDE.md's original writeup). With that
+    second curve gone entirely under `Dialog` + `NoBackground`, there is
+    nothing left underneath for our own corner radius to seam against —
+    confirmed empirically above, not just reasoned from the header.
+  - **No code change made or needed.** The setting/toggle investigation
+    this entry originally scoped (bypassing Darkly's corner adaptation
+    for users who keep the theme) is now moot — there's no seam left to
+    design a bypass for. CLAUDE.md's "Known issues" section still
+    describes the seam as an accepted trade-off from the pre-Dialog
+    (`AppletPopup`) era; flagged as needing its own follow-up
+    correction note (matching the doc's own precedent for this kind of
+    "a later phase closed this" update) but not edited as part of this
+    TODO-only pass — scoped to TODO.md per the project owner's explicit
+    request.
+
 ## Up next
 
-- [ ] **Phase 7.11.0 — Full re-verification pass.** Depends on 7.10.0.
-  - Run the existing Phase 7.2.0 harness's full suite against the
-    `Dialog`-hosted flyout. `LayoutProbe.qml`'s own `Overlay.overlay`
-    walk (`dump()`'s `const ov = Overlay.overlay; if (ov) {
-    session.walk(ov, "overlay"); }`) may need adjusting depending on
-    7.9.0's findings — check this explicitly, don't assume it
-    transfers unchanged. (7.10.0: transferred unchanged — the smoke
-    run's `list=open` state walked the amp list under the `overlay`
-    prefix, 115 vs 74 items; re-confirm on the full set.)
-  - Confirm real transparency renders correctly (the actual goal)
-    alongside the existing coordinate/pixel-diff checks — a screenshot
-    comparison against `VolumeHoverTooltip.qml`/`VolumeToast.qml`'s
-    look, matching how the mismatch was originally caught.
-  - Same discipline as Phase 7.7.0: a genuinely clean full pass, not
-    provisional, before moving on. Real soak period under normal use
-    again, matching Phase 7.8.0's own precedent, since this changes the
-    flyout's underlying window class.
-
-- [ ] **Phase 7.12.0 — Darkly corner-radius mismatch fix.** Depends on
-      7.11.0 verified solid. Sequenced after the Dialog rebuild
-      deliberately (confirmed with the project owner, not assumed):
-      `backgroundHints: NoBackground` clears the real Darkly frame
-      SVG's own image path entirely (`dialogBackground->setImagePath
-      (QString())`, confirmed in `dialog.cpp`), which is the *other*
-      half of the corner-seam bug's root cause per CLAUDE.md's own
-      writeup (two different corner curves layered — our tint
-      Rectangle's true circular arc vs Darkly's real frame SVG's cubic-
-      Bezier corner underneath it). Once that real frame SVG is gone
-      entirely, there may be nothing left underneath to seam against —
-      check whether the seam still exists at all under real
-      `NoBackground` before designing a fix, rather than fixing a
-      problem that may have disappeared on its own.
-  - Own investigation, not resolved here: the project owner wants this
-    solved (not just accepted) despite planning to keep using Darkly,
-    likely via a setting that bypasses Darkly's specific corner
-    adaptation and draws plain/default corners instead — exact
-    mechanism (a config toggle, a different corner-drawing approach,
-    etc.) is an open question for that phase's own investigation.
+- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
+      real install location for the `devialet-ctl` binary (system-wide
+      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
+      than the current manual symlink, or `cargo install` into
+      `~/.cargo/bin`) and build/place it as part of the install script.
+      Currently a manual `~/.local/bin` symlink per README — fine for
+      dev, not a real install path.
+  - Verify: `devialet-ctl` is invocable from a fresh shell with no
+    manual step, on a machine that hasn't had it built/placed before.
+- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
+      install/upgrade logic the script needs — including handling the
+      "already installed, needs upgrade not install" case cleanly when
+      the script is re-run on a system that already has the widget.
+  - Verify: widget installs cleanly on a fresh system; re-running the
+    script on an already-installed system upgrades cleanly with no
+    `kpackagetool6` errors.
+- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
+      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
+      `enable --now` as part of the script.
+  - Verify: `systemctl --user status` shows the daemon running
+    immediately after install; survives a logout/login.
+- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
+      into one script a user runs after cloning the repo. Must be
+      idempotent — safe to re-run on an already-installed system
+      without duplicating units, breaking an existing install, or
+      erroring out. Sensible failure messages if a step fails partway
+      (don't leave the system in a half-installed state silently).
+  - Verify: a clean clone → run script → fully working widget + daemon
+    + CLI, end to end, no manual steps outside the script.
+  - Note for packaging/install script phase: both the devialet-ctl
+      symlink and the devialet-remote-daemon systemd unit's ExecStart
+      have independently gone stale against pre-own/-move paths on
+      this machine. The install script should generate/verify these
+      paths against wherever the repo actually lives at install time,
+      rather than leaving them as manually sed-substituted
+      placeholders per the current README instructions - this class of
+      bug will keep recurring otherwise.
+- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
+      deliberately whether an uninstall script is in scope for v1.0.0
+      or explicitly deferred — don't let it default to "skipped"
+      silently. If in scope: reverse of 4.6.3 (disable/remove the
+      systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
+      remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
+  - Verify (if implemented): a full uninstall leaves no systemd unit,
+    no installed plasmoid, and no leftover binary.
+- [ ] **Phase 6.0.5 — README install instructions.** Replace the
+      current manual multi-step install instructions with "clone the
+      repo, run install.sh." Keep the manual steps documented separately
+      only if 4.6.4's uninstall is deferred and manual removal
+      instructions are still needed.
 
 - [ ] **Phase 7.13.0 — Cleanup.** Depends on 7.12.0 — cleanup only
       happens once the flyout that's actually being kept is the one
@@ -4567,6 +4727,40 @@ architecture decisions; this file is just sequencing and status.
       better by default, but making it a setting means it doesn't need
       to be re-litigated - the person can just tune it. Low priority,
       not blocking any current phase.
+- [ ] **Unify flyout/OSD/tooltip alpha; revisit once transparency
+      toggle + slider is re-scoped (deferred until after Phase 7.x.x).**
+      `Theme.qml` currently defines two separate translucency levels:
+      `panelGradientTop`/`Bottom` at alpha 0.82 (the flyout) and
+      `osdGradientTop`/`Bottom` at alpha 0.94
+      (`VolumeHoverTooltip.qml`/`VolumeToast.qml`). The comment
+      justifying the split says the flyout would get genuine KWin
+      blur-behind to soften a lower alpha, while the OSD/tooltip don't
+      get blur and need higher opacity to read cleanly. This is now
+      known to be false: Phase 7.9.0/7.10.0 confirmed
+      `backgroundHints: NoBackground` disables blur-behind for ALL
+      `PlasmaCore.Dialog` instances (`dialog.cpp`, plus live pixel
+      analysis showing no blur on the flyout) - the flyout never gets
+      blur either, so the stated reason for the split doesn't hold.
+  - Separately, 0.82's own origin is suspect: its comment claims it
+    came from the design mockup, but the mockup's `.flyout` CSS rule is
+    actually fully opaque (`--panel-alpha: 1`) - the claimed source
+    doesn't contain this value. Not yet confirmed via `git log`/`git
+    blame` whether an earlier mockup revision or commit had a real
+    rationale, or whether it was simply invented at implementation time
+    and mis-attributed in the comment.
+  - Project owner's stated preference: keep the OSD's existing 0.94 as
+    the shared default across all three surfaces once unified - this is
+    what originally motivated wanting real transparency on the flyout
+    at all.
+  - When scoped: this should be folded into whatever phase reintroduces
+    the transparency toggle/slider (removed pre-Phase-7 when
+    transparency was infeasible on the old AppletPopup-based flyout,
+    now viable again under `Dialog`), rather than done as a standalone
+    fix - the eventual design should probably eliminate
+    `panelGradientTop`/`Bottom` as separate constants entirely (have
+    the flyout read `osdGradientTop`/`Bottom` directly) so the two
+    can't drift apart again, and the toggle/slider's design will
+    determine whether that's a single shared control or per-surface.
 - [ ] **Future investigation: rebuild the flyout as a custom
       PlasmaCore.Dialog instead of the shell's managed
       expanded-representation popup.** Same underlying idea that

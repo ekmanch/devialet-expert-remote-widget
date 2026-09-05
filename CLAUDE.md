@@ -725,6 +725,34 @@ Do not re-open this as a fresh bug investigation without reading this
 note first — it's been root-caused and the remaining artifact is an
 accepted trade-off, not an unexplained regression.
 
+**Update (Phase 7.12.0, 2026-09-05, closed)**: the paragraphs above
+describe the pre-Dialog (`AppletPopup`-hosted) flyout, where Darkly's
+own frame SVG was still drawn underneath our tint Rectangle — the seam
+was two different corner curves layered on top of each other (our
+`Rectangle.radius`'s true circular arc vs Darkly's real frame SVG's
+cubic-Bezier corner). Phase 7.10.0's rebuild onto `PlasmaCore.Dialog`
+with `backgroundHints: NoBackground` removes that second curve
+entirely — `NoBackground` clears Darkly's frame SVG's own image path
+(`dialogBackground->setImagePath(QString())`, confirmed in
+`dialog.cpp`), so there is nothing left underneath for our own corner
+radius to seam against. Phase 7.12.0 verified this live rather than
+assuming it from the header change alone: the project owner opened the
+real flyout against a solid dark background (the same high-contrast
+condition this section originally named as where the seam was
+visible) and reported no corner artifacts; independently re-verified
+by locating the flyout's exact pixel bounds via a raw pixel scan (the
+panel tint and that particular dark background were close enough in
+value that the edge wasn't obvious by eye) and inspecting all four
+corners at 12x zoom — each shows one single smooth anti-aliased curve,
+no double-border, no box-within-box artifact. No code change was made
+or needed; the setting/toggle investigation this trade-off's own
+"if this is ever revisited" clause anticipated is now moot, since
+there's no seam left to bypass. This closes the seam as a live issue
+on the current `Dialog`-based flyout — the mechanism/history above
+stays accurate as an explanation of the old `AppletPopup`-era
+behavior, and would still apply if the flyout were ever hosted in a
+popup class with a real background frame again.
+
 ***  real transparency was investigated and found infeasible from applet code (settled, do not re-attempt without new evidence) ***
 
 Investigated on the now-deleted `experiment/real-transparency` branch.
