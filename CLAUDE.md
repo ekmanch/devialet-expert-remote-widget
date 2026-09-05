@@ -234,6 +234,79 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
+## `target/` can go missing out from under a running daemon — every widget command then silently no-ops (found live, post-Phase-7.13.0 investigation)
+
+**Symptom**: every widget control (volume, mute, source, power) appears to
+apply optimistically for well under a second, then reverts to whatever the
+amp last actually reported — uniformly across every control type, not just
+one. Looks exactly like a QML/daemon logic regression (e.g. in the Phase
+5.0.0 pending-command masking or the 400ms debounce), but isn't one.
+
+**Root cause**: the whole `target/` build directory (git-ignored, so
+`git status` shows nothing unusual) was deleted from disk at some point
+outside of any command this project's own workflow runs — not by
+`cargo clean` from a documented step here, cause never fully identified.
+Consequences, both silent:
+
+- `~/.local/bin/devialet-ctl` (see this file's own PATH section below) is a
+  symlink into `target/debug/devialet-ctl`. Once that target is gone, the
+  symlink dangles. Every QML `Plasma5Support.DataSource` invocation of
+  `devialet-ctl` then fails with shell exit code **127**
+  (`devialet-ctl: command not found`) — but QML's `onNewData` handler only
+  `console.log()`s the exit code/stderr, it doesn't surface this anywhere a
+  user would see it. The real UDP command is simply never sent.
+- The **daemon keeps running anyway.** Linux keeps a deleted-but-still-
+  mapped executable alive in a process that already started from it
+  (`/proc/<pid>/exe` shows `... (deleted)`), so `systemctl --user status`
+  reports `active (running)` the entire time, giving no hint anything is
+  wrong. The daemon itself doesn't need rebuilding to keep working — only
+  a fresh invocation of the *other* binary (`devialet-ctl`) is affected.
+
+With the real command never sent, the daemon's own Phase 5.0.0
+pending-command mask (`PENDING_COMMAND_TIMEOUT`, 400ms) does exactly what
+it's designed to do: show the optimistic value briefly, then fall back to
+the amp's actual (unchanged) last-reported state once no real broadcast
+confirms it in time. That fallback is what reads as "snaps back" — the
+masking logic is not the bug here, a missing binary upstream of it is.
+
+**How this was actually confirmed**, not just inferred from the symptom —
+don't skip straight to a code fix next time either:
+
+1. `systemctl --user status devialet-remote-daemon.service` looked
+   completely healthy.
+2. `journalctl --user -b | grep devialet-ctl` showed the real widget
+   invocations failing with exit 127 the whole time — the actual smoking
+   gun, found from real usage logs, not a guess.
+3. `ls target/release/ target/debug/` — directory didn't exist at all.
+   `readlink -f ~/.local/bin/devialet-ctl` pointed at a path that also
+   didn't exist. `ls -la /proc/<daemon-pid>/exe` confirmed `(deleted)`.
+
+**Fix, if this happens again**:
+
+```
+cargo build --release   # daemon's systemd unit points at target/release/
+cargo build              # devialet-ctl symlink (see PATH section below) points at target/debug/
+ln -sf "$(pwd)/target/debug/devialet-ctl" ~/.local/bin/devialet-ctl
+systemctl --user restart devialet-remote-daemon.service
+```
+
+Verify the daemon is actually off the fresh binary afterward — status
+alone won't tell you (see point 1 above):
+
+```
+systemctl --user show devialet-remote-daemon.service -p MainPID --value \
+  | xargs -I{} ls -la /proc/{}/exe   # must NOT say "(deleted)"
+devialet-ctl --help                  # must exit 0, not 127
+```
+
+**Before assuming a code regression when every control type reverts
+identically**: that symmetry (volume *and* mute *and* source *and* power
+all failing the same way) is itself a strong signal to check this class of
+cause first — a single shared dependency (the executable engine's command,
+or the daemon's own binary) breaking cleanly explains "everything reverts
+uniformly" far more directly than a coincidental bug independently hitting
+every control's own separate code path at once.
+
 ## Real flyout renders truncated (324×180) after a reload — the AppletPopup size-key collision (Phase 7.1.0/7.2.0; NOT cleared by 7.8.0 as first claimed — closed by Phase 7.10.0, see the last paragraph)
 
 **Symptom**: after `plasmashell --replace`, the real, shell-managed flyout
