@@ -52,6 +52,14 @@ Rectangle {
     Layout.fillWidth: true
     implicitHeight: ampHeaderBg.rowHeight + 26
     color: ampHeaderArea.containsMouse ? Qt.rgba(1, 1, 1, 0.02) : "transparent"
+    // Phase 7.14.0 follow-up: this hover fill is the only thing painted
+    // into the flyout's top corners besides FlyoutContent's tint
+    // Rectangle, so its top corners follow the flyout's own 16px radius
+    // (theme.radiusLg) - otherwise a hover paints square corners over the
+    // rounded ones. Bottom corners stay square (the header ends at its
+    // divider, mid-flyout). Per-corner radii are Qt 6.7+.
+    topLeftRadius: ampHeaderBg.theme.radiusLg
+    topRightRadius: ampHeaderBg.theme.radiusLg
 
     RowLayout {
         id: ampHeaderRow

@@ -483,11 +483,20 @@ Item {
     // frame image path is empty, dialog.cpp updateTheme(); measured
     // window == mainItem in the 7.9.0 spike), so a negative margin here
     // would only push the rounded corners outside the window and clip
-    // them square. Edge to edge, radius as before (Phase 7.12.0 owns the
-    // corner-radius question).
+    // them square. Edge to edge.
+    //
+    // Radius (Phase 7.14.0 follow-up, owner request): the mockup's
+    // `.flyout{border-radius:16px}` (theme.radiusLg), not
+    // Kirigami.Units.cornerRadius any more. That value (5 on this system)
+    // only ever existed to line up with Darkly's dialog frame SVG drawn
+    // underneath the old AppletPopup-hosted flyout (CLAUDE.md "sub-pixel
+    // corner seam"); with NoBackground there is no frame under this
+    // Rectangle, so nothing constrains the radius and the mockup's own
+    // value applies. AmpHeader's hover fill rounds its top corners to the
+    // same radius so it can't paint square corners over these.
     Rectangle {
         anchors.fill: parent
-        radius: Kirigami.Units.cornerRadius
+        radius: root.theme.radiusLg
         antialiasing: true
         border.width: 1
         border.color: root.theme.divider

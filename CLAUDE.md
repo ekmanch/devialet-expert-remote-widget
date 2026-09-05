@@ -789,7 +789,18 @@ Notes:
 
 ***  sub-pixel corner seam under Darkly theme (accepted, not a bug to re-investigate) ***
 
-The flyout's corner radius uses `Kirigami.Units.cornerRadius` (matches
+**Superseded (Phase 7.14.0 follow-up, 2026-09-05)**: the flyout's outer
+corner is now the mockup's own 16px (`theme.radiusLg` in
+`FlyoutContent.qml`), not `Kirigami.Units.cornerRadius`. The paragraphs
+below explain why the Kirigami value was chosen while a Darkly frame SVG
+still sat underneath the flyout; the Phase 7.12.0 update at the end
+records that the frame is gone (`NoBackground`), which is also why
+nothing constrains the radius any more. `AmpHeader.qml`'s hover fill
+rounds its top corners to the same value so it can't paint square
+corners over the flyout's. Overlay cards use their own 13px
+(`theme.radiusOverlay`).
+
+The flyout's corner radius used `Kirigami.Units.cornerRadius` (matches
 Darkly's real Dialog/window corner size, e.g. 5 on this system) rather
 than a hardcoded value — this fixed the original "box within a box"
 and gross corner-artifact bugs (see Phase 4.0/4.1 history).

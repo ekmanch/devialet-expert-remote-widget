@@ -4722,9 +4722,21 @@ architecture decisions; this file is just sequencing and status.
     click outside the flyout entirely closes the whole flyout
     (`hideOnWindowDeactivate`), while a click elsewhere inside the
     flyout closes only the expanded list and leaves the flyout open -
-    judged the desired behaviour. No follow-ups from the soak; the 6px
-    card gap and the one-click-vs-two exclusivity question raised no
-    complaint.
+    judged the desired behaviour. The 6px card gap and the
+    one-click-vs-two exclusivity question raised no complaint.
+  - **Follow-up from the soak (owner request, same day)**: the flyout's
+    OUTER corners were still `Kirigami.Units.cornerRadius` (5px here),
+    visibly more angular than the mockup's `.flyout{border-radius:16px}`.
+    That value only ever existed to line up with Darkly's frame SVG
+    under the old AppletPopup flyout (CLAUDE.md "sub-pixel corner seam");
+    Phase 7.10.0's `NoBackground` removed the frame, so nothing
+    constrained the radius any more. `FlyoutContent.qml`'s tint
+    Rectangle now uses `theme.radiusLg` (16), and `AmpHeader.qml`'s hover
+    fill rounds its top corners (`topLeftRadius`/`topRightRadius`, Qt
+    6.7+) to the same value so a hover can't paint square corners over
+    them. (The 13px discussed earlier is the overlay cards' radius,
+    `theme.radiusOverlay`; the mockup's flyout itself is 16.) CLAUDE.md's
+    seam section carries a superseded note.
 
 ## Up next
 

@@ -149,7 +149,7 @@ Popup {
                         spacing: 9
 
                         Rectangle {
-                            objectName: "sourceOptionChip"
+                            objectName: "sourceOptionChip:" + sourceOption.modelData.index
                             Layout.alignment: Qt.AlignVCenter
                             Layout.preferredWidth: 20
                             Layout.preferredHeight: 20
@@ -164,7 +164,7 @@ Popup {
                         }
 
                         Label {
-                            objectName: "sourceOptionName"
+                            objectName: "sourceOptionName:" + sourceOption.modelData.index
                             Layout.alignment: Qt.AlignVCenter
                             Layout.fillWidth: true
                             text: sourceOption.modelData.name
