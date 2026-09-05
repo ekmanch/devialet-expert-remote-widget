@@ -4791,64 +4791,122 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] Phase 8.0.0 — Rust: hard-limit clamp in the shared protocol crate.
-  The safety backstop, independent of any UI/mockup work, so this can
-  start immediately. Any function in the dependency-free protocol
-  library crate that constructs/sends a volume-set command clamps to
-  the configured hard limit internally — structural, not a check any
-  particular caller (devialet-ctl, the daemon's D-Bus handler, a future
-  client) has to remember to apply. Add cargo tests covering: command
-  at/above/below the limit, limit unset (unbounded), and the boundary
-  value itself. No QML changes this phase.
+- [ ] **Phase 8.0.0 — Persistence + ConfigDialog settings UI.**
+  Depends on the updated ConfigDialog mockup
+  (design/mockups/settings_window/devialet_config_dialog_mockup_v12_single_tab.html).
+  No dependency on the Rust clamp work below — this can start
+  immediately. Add four new dB fields to the widget's KConfig schema
+  (main.xml, alongside whatever Phase 4.3.0's settings page already
+  defines), all unset/unbounded by default except where the mockup
+  shows otherwise: minimum volume (floor), soft limit, hard limit, and
+  startup/source-switch volume. Build the actual settings-page UI per
+  the mockup, including the four dB steppers with hold-to-repeat
+  (100ms cadence after initial delay, matching the flyout's own volume
+  buttons) and real Expert Pro range bounds (−96 to 0 dB) on each
+  stepper.
+  - Investigate before implementing: `devialet-ctl source` currently
+    hardcodes the −40dB post-source-switch volume internally, with no
+    existing route from KConfig into the CLI. Determine how the
+    persisted startup/source-switch value actually reaches it — most
+    likely QML passes it as a CLI argument via the same
+    Plasma5Support.DataSource invocation, but confirm against the real
+    invocation site rather than assuming a mechanism. Report the
+    chosen mechanism before wiring it.
+  - Minimum volume (floor) is explicitly a UI/usability setting, not a
+    safety one (per the mockup's own annotation) — it does NOT feed
+    Phase 8.1.0's Rust clamp below. Keep it purely client-side (slider
+    bounds), and don't conflate it with the hard-limit clamp path.
+  - Verify: all four values round-trip correctly (set, close
+    ConfigDialog, reopen, values persisted); daemon can read the
+    persisted hard-limit value even though nothing consumes it yet
+    (Phase 8.1.0 wires that); startup/source-switch value actually
+    reaches `devialet-ctl source` via whichever mechanism was chosen.
 
-- [ ] Phase 8.1.0 — Persistence + ConfigDialog settings UI.
-  Depends on the updated ConfigDialog mockup. Add soft-limit/hard-limit
-  dB fields to the widget's KConfig schema (main.xml, alongside
-  whatever Phase 4.3.0's settings page already defines), both unset/
-  unbounded by default. Build the actual settings-page UI per the
-  mockup. Confirm the daemon can read the persisted hard-limit value
-  and pass it into Phase 8.0.0's clamp — this phase is what actually
-  wires the Rust safety net to a real, user-set value instead of
-  testing it against a hardcoded one.
+- [ ] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
+  Independent implementation work, but now consumes the setting
+  8.0.0 persisted rather than a hardcoded test value. Any function in
+  the dependency-free protocol library crate that constructs/sends a
+  volume-set command clamps to the configured hard limit internally —
+  structural, not a check any particular caller (devialet-ctl, the
+  daemon's D-Bus handler, a future client) has to remember to apply.
+  This replaces Phase 3's hardcoded MAX_VOLUME_DB ceiling — confirm no
+  leftover hardcoded ceiling remains anywhere in the crate once this
+  lands. Add cargo tests covering: command at/above/below the limit,
+  limit unset (unbounded), and the boundary value itself. No QML
+  changes this phase.
 
-- [ ] Phase 8.2.0 — QML: slider bounds + soft-limit visual treatment.
-  Depends on 8.1.0. The volume slider's max (`to`) becomes the hard
-  limit, not a fixed constant — dragging to the end of the track means
-  "at the ceiling," never past it. Render the track segment between
-  soft and hard limit in a distinct warning color; the numeric dB
-  readout picks up the same treatment once in that zone. Purely
-  informational, no gesture-gating (per the decision to keep this
-  simple for now). Apply to every volume-adjusting surface: the
-  flyout's VolumeBlock slider AND the +/- buttons/panel-icon-scroll
-  step logic (all three currently share a common step/clamp path per
-  Phase 4/5's architecture — confirm this and wire once, not three
-  times).
+- [ ] **Phase 8.2.0 — QML: slider bounds now span floor to hard limit.**
+  Depends on 8.0.0. The volume slider's `from` becomes the configured
+  minimum volume (floor) and `to` becomes the hard limit — both ends of
+  the track are now configurable, not just the ceiling. Dragging to
+  either end of the track means "at that limit," never past it. Apply
+  to every volume-adjusting surface: the flyout's VolumeBlock slider
+  AND the +/- buttons/panel-icon-scroll step logic (confirm these still
+  share Phase 4/5's common step/clamp path and wire once, not
+  separately per surface).
 
-- [ ] Phase 8.3.0 — Immediate clamp on settings change.
-  Depends on 8.1.0 (needs the setting to exist) — can be built
-  alongside or after 8.2.0. When a newly-set hard limit is below the
-  amp's current live volume, the daemon immediately sends a real
-  volume-set command dropping the amp to the new limit, rather than
-  waiting for the next user-initiated volume change. Verify this
-  interacts correctly with Phase 5's pending-command architecture (the
-  daemon-initiated drop needs to update PendingAmpState/be reflected in
-  the UI the same way a user-initiated change is, not bypass it) and
-  with multiple known amps (does changing the setting affect only the
-  currently-selected/connected amp, or every known amp regardless of
-  connection state? — decide explicitly, don't default silently).
+- [ ] **Phase 8.3.0 — Soft-limit hint-text warning (supersedes prior
+  track-coloring plan).**
+  Depends on 8.0.0/8.2.0. Per mockup v10's own annotation, the slider
+  track and numeric dB readout stay their normal copper color
+  regardless of the soft limit — do NOT color the track or readout.
+  Instead, the text hint below the slider swaps between its normal
+  "Scroll over volume slider to adjust" copy and a red "⚠ High volume —
+  above soft limit" warning, based solely on whether the live volume is
+  above the soft-limit threshold. Purely informational, no
+  gesture-gating. Decide explicitly whether this hint-swap also needs
+  to appear on VolumeHoverTooltip/VolumeToast (OSD) per Phase 7's
+  cross-surface consistency guarantee, or whether those compact
+  surfaces have no equivalent hint area and are out of scope — don't
+  default silently either way, state the decision.
 
-- [ ] Phase 8.4.0 — Full verification pass.
-  Depends on 8.0.0-8.3.0. Live-verify: hard limit genuinely
+- [ ] **Phase 8.4.0 — Real validation for limit ordering (min < soft 
+  hard).**
+  Depends on 8.0.0. Mockup v12's inline "Limits should be ordered:
+  minimum < soft < hard" warning is explicitly a placeholder, not real
+  validation. Decide and implement actual behavior: block Apply/OK
+  while out of order, auto-clamp the just-edited stepper against its
+  neighbors, or some other explicit rule — state which was chosen and
+  why. Cover the boundary case where two limits are set equal.
+
+- [ ] **Phase 8.5.0 — Immediate clamp on settings change.**
+  Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the
+  Rust clamp to exist) — can be built alongside or after 8.2.0/8.3.0/
+  8.4.0. Two directions now, not one:
+  - When a newly-set hard limit is below the amp's current live volume,
+    the daemon immediately sends a real volume-set command dropping
+    the amp to the new limit, rather than waiting for the next
+    user-initiated volume change.
+  - Decide explicitly whether raising the minimum volume (floor) above
+    the amp's current live volume should likewise force an immediate
+    bump up to the new floor, or whether the floor only affects future
+    slider drags and leaves current volume alone — don't default
+    silently, state the decision.
+  Verify this interacts correctly with Phase 5's pending-command
+  architecture (the daemon-initiated change needs to update
+  PendingAmpState/be reflected in the UI the same way a user-initiated
+  change is, not bypass it) and with multiple known amps (does changing
+  the setting affect only the currently-selected/connected amp, or
+  every known amp regardless of connection state? — decide explicitly).
+
+- [ ] **Phase 8.6.0 — Full verification pass.**
+  Depends on 8.0.0-8.5.0. Live-verify: hard limit genuinely
   unbypassable via devialet-ctl direct invocation and via rapid
   scroll/slider-drag bursts (Phase 5.0.2's rapid-repeat concern applies
-  here too — confirm several fast steps near the ceiling can't
-  overshoot it even transiently); soft-limit visual zone renders
-  correctly across the full range including boundary values; settings
-  UI round-trips correctly (set, close ConfigDialog, reopen, value
-  persisted); immediate-clamp-on-lower-limit fires correctly and is
-  visible in flyout/tooltip/OSD simultaneously per Phase 7's
-  consistency guarantees; unbounded (unset) behaves identically to
-  today's widget with no limits configured at all.
+  here too — confirm several fast steps near either end of the track
+  can't overshoot it even transiently); floor and hard limit both
+  correctly bound the slider's `from`/`to`; soft-limit hint text swaps
+  correctly across the full range including boundary values, without
+  any track/readout color change; startup/source-switch volume
+  round-trips correctly through whatever mechanism 8.0.0 chose and
+  actually reaches `devialet-ctl source`; ordering validation from
+  8.4.0 behaves as decided; settings UI round-trips correctly (set,
+  close ConfigDialog, reopen, values persisted) for all four dB
+  settings; immediate-clamp behavior from 8.5.0 fires correctly in both
+  directions decided there, visible in flyout/tooltip/OSD
+  simultaneously per Phase 7's consistency guarantees; unbounded
+  (unset) behaves identically to today's widget with no limits
+  configured at all.
 
 ## Bugs
 
