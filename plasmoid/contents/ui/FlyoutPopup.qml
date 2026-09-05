@@ -109,6 +109,9 @@ PlasmaCore.Dialog {
     // Forwarded through to FlyoutContent (Phase 5's shared pending-state
     // consumer).
     required property PendingAmpState pendingAmpState
+    // Forwarded through to FlyoutContent - shared, root-anchored
+    // volume-range config (see VolumeSettings.qml's header comment).
+    required property VolumeSettings volumeSettings
 
     // Window-derived types default to visible:true in QML; without an
     // explicit initial value this popup auto-opens on plasmashell startup
@@ -272,6 +275,7 @@ PlasmaCore.Dialog {
             anchors.fill: parent
             plasmoidItem: flyoutPopup.plasmoidItem
             pendingAmpState: flyoutPopup.pendingAmpState
+            volumeSettings: flyoutPopup.volumeSettings
             popupVisible: flyoutPopup.visible
         }
     }

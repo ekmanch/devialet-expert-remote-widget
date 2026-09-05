@@ -67,9 +67,13 @@ ColumnLayout {
     // undefined | number - see header comment, fed from
     // FlyoutContent's root.pendingAmpState.volumeDb.
     required property var volumeDb
-    required property real volumeFloorDb
-    required property real volumeCeilingDb
-    required property real volumeStepDb
+    // Shared, root-anchored volume-range config (floor/hard-limit/step dB)
+    // - see VolumeSettings.qml's own header comment. Replaces this file's
+    // former 3 separate required real properties (volumeFloorDb/
+    // volumeCeilingDb/volumeStepDb); passed as one object rather than
+    // exploded fields, matching this file's own existing `theme` property
+    // convention.
+    required property VolumeSettings volumeSettings
     required property string activeSourceName
 
     // -1 / +1, one per button click/autoRepeat tick or wheel notch.
@@ -211,9 +215,9 @@ ColumnLayout {
             // buttons' 26px row height - see Phase 4.2.2 (finding 8 is
             // this same, already-clean shape, re-verified here).
             implicitHeight: 26
-            from: volumeBlock.volumeFloorDb
-            to: volumeBlock.volumeCeilingDb
-            stepSize: volumeBlock.volumeStepDb
+            from: volumeBlock.volumeSettings.floorDb
+            to: volumeBlock.volumeSettings.hardLimitDb
+            stepSize: volumeBlock.volumeSettings.stepDb
             enabled: volumeBlock.ampIp !== ""
 
             // External state (the daemon-resolved pending-or-confirmed
@@ -223,7 +227,7 @@ ColumnLayout {
             Binding {
                 target: volumeSlider
                 property: "value"
-                value: (volumeBlock.ampIp !== "" && volumeBlock.volumeDb !== undefined) ? volumeBlock.volumeDb : volumeBlock.volumeFloorDb
+                value: (volumeBlock.ampIp !== "" && volumeBlock.volumeDb !== undefined) ? volumeBlock.volumeDb : volumeBlock.volumeSettings.floorDb
                 when: !volumeSlider.pressed
             }
 

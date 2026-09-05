@@ -19,11 +19,19 @@
 // MouseArea (applet/main.qml) and its VolumeSlider.qml each implement
 // wheel-to-volume separately, with no shared function between them either
 // - both call into the same underlying service, but don't share code.
-// Only Plasmoid.configuration.volumeStepDb (global KConfig, no plumbing
-// needed) and the -15dB ceiling / -60dB floor UI convention (hardcoded
-// here exactly as in FullRepresentation.qml - the real safety ceiling is
-// enforced deeper, in devialet-protocol, regardless of what either file
-// sends) are duplicated in spirit, not by reference.
+//
+// Volume-range configuration (floor/hard-limit/step/startup dB) is the one
+// exception to that independence, and deliberately so: unlike interaction
+// *logic*, that state must not diverge, or the flyout, the OSD toast, and
+// the hover tooltip could each show a different idea of what the volume
+// range even is. It's owned by VolumeSettings (forwarded in below), the
+// same root-anchored-and-forwarded pattern PendingAmpState already uses for
+// VolumeDb/Muted - not "reach into FullRepresentation's state" (still
+// correctly avoided, see above), but "read from the one object main.qml
+// anchors for exactly this reason." This file used to keep its own
+// hardcoded -15.0/-60.0 copy of these three numbers ("duplicated in spirit,
+// not by reference") before VolumeSettings existed - see CLAUDE.md's
+// "Shared cross-view state" note.
 
 pragma ComponentBehavior: Bound
 
@@ -41,6 +49,10 @@ MouseArea {
     // used by anything in this file yet (additive-only this phase, see
     // PendingAmpState.qml's own header comment). Cutover is Phase 5.0.2.
     required property PendingAmpState pendingAmpState
+    // Shared, root-anchored volume-range config (floor/hard-limit/step/
+    // startup dB) - see VolumeSettings.qml's own header comment and this
+    // file's header comment above.
+    required property VolumeSettings volumeSettings
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
@@ -62,9 +74,6 @@ MouseArea {
     // don't have one either.
     property string activeSourceName: ""
 
-    readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
-    readonly property real volumeCeilingDb: -15.0
-    readonly property real volumeFloorDb: -60.0
     readonly property string devialetCtlCommand: "devialet-ctl"
 
     // Exposed for hoverTooltip's bindings below.
@@ -83,9 +92,11 @@ MouseArea {
     // slider Binding), so the only visible effect is the intended one: the
     // toast/tooltip progress bar now catches up via the shared object like
     // everything else, instead of via this file's own local optimism.
-    readonly property real volumeFraction: root.pendingAmpState.volumeDb !== undefined
-        ? Math.min(1, Math.max(0, (root.pendingAmpState.volumeDb - root.volumeFloorDb) / (root.volumeCeilingDb - root.volumeFloorDb)))
-        : 0
+    // Now delegates the actual math to VolumeSettings.fractionFor() - see
+    // that file's header comment - so the OSD/tooltip fill and the
+    // flyout's slider position can never disagree about what "the volume
+    // range" is.
+    readonly property real volumeFraction: root.volumeSettings.fractionFor(root.pendingAmpState.volumeDb)
 
     function unwrap(prop, fallback) {
         if (prop === undefined || prop === null) return fallback;
@@ -99,10 +110,9 @@ MouseArea {
         // not a local copy - safe because PendingAmpState.notifyVolume()
         // writes it synchronously before its D-Bus call, so a rapid
         // second step still reads the value this call is about to set,
-        // not something stale.
-        const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
-        const stepped = base + direction * root.volumeStepDb;
-        const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // not something stale. Step/clamp math now lives in
+        // VolumeSettings.stepped() - see that file's header comment.
+        const clamped = root.volumeSettings.stepped(root.pendingAmpState.volumeDb, direction);
         // Scrolling on the panel icon while muted now unmutes for real,
         // matching KDE's own Audio Devices applet convention - a scroll
         // must always produce audible sound at the new volume, not just
@@ -236,6 +246,9 @@ MouseArea {
         // volume section in 7.4.0 (Phase 5's shared pending-state
         // consumer). Same instance CompactRepresentation already holds.
         pendingAmpState: root.pendingAmpState
+        // Same forwarding, for the shared volume-range config - see
+        // VolumeSettings.qml's header comment.
+        volumeSettings: root.volumeSettings
 
         // Phase 4.5.3 item 4's fix, flyout-side: hides the hover tooltip
         // whenever this popup opens, or the tooltip would silently start

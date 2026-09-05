@@ -61,6 +61,12 @@ Item {
     // call pendingAmpState.notifyVolume() - see VolumeBlock.qml's header
     // comment for why this is deliberately not a new local mirror.
     required property PendingAmpState pendingAmpState
+    // Shared, root-anchored volume-range config (floor/hard-limit/step/
+    // startup dB) - see VolumeSettings.qml's own header comment. Replaces
+    // this file's former local volumeStepDb/volumeCeilingDb/volumeFloorDb
+    // properties, which independently duplicated CompactRepresentation.
+    // qml's own copy of the same three numbers.
+    required property VolumeSettings volumeSettings
     // Bound one-way from FlyoutPopup.visible - drives the amp-list reset on
     // flyout hide below (and is the future binding target for the deferred
     // pop-in animation, 7.7.0 polish).
@@ -160,9 +166,6 @@ Item {
         root.runCtl("source " + index);
     }
 
-    readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
-    readonly property real volumeCeilingDb: -15.0
-    readonly property real volumeFloorDb: -60.0
     readonly property string devialetCtlCommand: "devialet-ctl"
 
     // ---- Phase 7.5.0: action row (mute/power) state ----
@@ -189,9 +192,9 @@ Item {
     // this call is about to set), not a local copy.
     function stepVolume(direction) {
         if (root.ampIp === "") return;
-        const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
-        const stepped = base + direction * root.volumeStepDb;
-        const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // Step/clamp math now lives in VolumeSettings.stepped() - see that
+        // file's header comment.
+        const clamped = root.volumeSettings.stepped(root.pendingAmpState.volumeDb, direction);
         // Mirrors CompactRepresentation.qml's stepVolume() - a volume
         // change from any input (panel-icon scroll or the flyout's own
         // +/- buttons/slider) auto-unmutes for real, matching KDE's own
@@ -207,18 +210,24 @@ Item {
         root.pendingAmpState.notifyVolume(clamped);
     }
 
-    // Slider release - the value is already the authoritative drag result
-    // (computed inside VolumeBlock from its own live value), sent as-is.
+    // Slider release - the value is the drag result computed inside
+    // VolumeBlock from its own live value (bounded by the Slider's own
+    // from/to already), but now also passed through the same shared
+    // clamp() every other volume-adjusting path uses - defense-in-depth so
+    // no dB value this widget sends ever depends solely on the Slider's
+    // own bounds being correct, matching the Rust protocol crate's own
+    // "clamp internally, don't trust the caller" convention.
     function releaseVolume(value) {
         if (root.ampIp === "") return;
+        const clamped = root.volumeSettings.clamp(value);
         // Same auto-unmute-on-volume-change as stepVolume() above - a
         // slider drag counts as a volume-adjusting input too.
         if (root.pendingAmpState.muted) {
             root.runCtl("mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        root.runCtl("volume " + value);
-        root.pendingAmpState.notifyVolume(value);
+        root.runCtl("volume " + clamped);
+        root.pendingAmpState.notifyVolume(clamped);
     }
 
     // Mirrors CompactRepresentation.qml's toggleMute() exactly (Phase
@@ -531,9 +540,7 @@ Item {
             theme: root.theme
             ampIp: root.ampIp
             volumeDb: root.pendingAmpState.volumeDb
-            volumeFloorDb: root.volumeFloorDb
-            volumeCeilingDb: root.volumeCeilingDb
-            volumeStepDb: root.volumeStepDb
+            volumeSettings: root.volumeSettings
             activeSourceName: root.activeSourceName
             onStepRequested: direction => root.stepVolume(direction)
             onSliderReleased: value => root.releaseVolume(value)

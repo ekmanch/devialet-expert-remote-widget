@@ -4738,6 +4738,125 @@ architecture decisions; this file is just sequencing and status.
     `theme.radiusOverlay`; the mockup's flyout itself is 16.) CLAUDE.md's
     seam section carries a superseded note.
 
+- [x] **Phase 8.0.0 — Persistence + ConfigDialog settings UI.** Done
+      2026-09-05 — the three dB settings shipped with full ConfigDialog
+      UI and real KConfig persistence; the `devialet-ctl` CLI-wiring
+      piece was investigated (mechanism decided) but deliberately left
+      unimplemented, now tracked as Phase 8.0.1. Several unplanned
+      follow-ups landed in the same session — see this entry's own
+      closing summary for the full arc.
+  - **KConfig schema** (`main.xml`): `volumeFloorDb` (-45.0),
+    `hardLimitDb` (-10.0), `startupVolumeDb` (-40.0) — all `Double`,
+    defaults read directly from the mockup's own `LIMIT_DEFAULTS` JS,
+    not assumed carried over from an earlier draft.
+  - **Settings-page UI** (`ConfigGeneral.qml`): new `DbStepper.qml`
+    shared +/- component (`contents/config/`) — hold-to-repeat reuses
+    `QtQuick.Controls.Button`'s own `autoRepeat` (300ms delay/100ms
+    interval, matching the flyout's real `VolumeBlock.qml` buttons, not
+    the mockup's own placeholder 400ms/100ms JS timers). Added the
+    "Startup / source-switch volume" row to the Volume section and a
+    new "Volume Limits" section (Volume floor, Volume ceiling, an
+    inline ordering warning as an explicit Phase 8.3.0 placeholder).
+    Range -96..0 dB throughout, per the real Expert Pro line spec.
+  - **Verified directly against the real KConfig file**, not just
+    trusted: wrote test values via `kwriteconfig6`, confirmed the panel
+    scripting API's `readConfig()` reads them back correctly only after
+    a fresh `plasmashell --replace` — the same in-memory-cache
+    staleness this file already documents for the flyout size-key bug
+    (a still-running shell doesn't see an external write) applies here
+    too.
+  - **`devialet-ctl` CLI wiring: investigated, not implemented** (this
+    phase's own explicit gate). Confirmed the one real invocation site
+    (`FlyoutContent.qml`'s `selectSource()` → `runCtl("source " +
+    index)` → `Plasma5Support.DataSource.connectSource()`), and the
+    chosen mechanism: an optional trailing CLI argument,
+    `devialet-ctl --ip <ip> source <index> [<startup-volume-db>]`,
+    falling back to the existing hardcoded `SOURCE_SWITCH_VOLUME_DB`
+    when omitted. Confirmed no conflict with the existing source-switch
+    debounce guard (`lastSourceChangeAtMs` only covers
+    ActiveSourceName/Index, never volume). Tracked as Phase 8.0.1.
+  - **Follow-up (owner request, same session): one shared interface for
+    flyout/OSD/tooltip volume range.** Investigated and found the
+    volume range was not centralized at all, even before this phase —
+    two independent hardcoded `-15.0`/`-60.0` copies
+    (`FlyoutContent.qml`, `CompactRepresentation.qml`), with the OSD
+    toast and hover tooltip never seeing floor/ceiling themselves (only
+    a pre-computed fraction from `CompactRepresentation.qml`). Fixed
+    with a new **`VolumeSettings.qml`** — a plain `QtObject`, same shape
+    as the existing `PendingAmpState.qml` precedent, instantiated once
+    in `main.qml` (bound to `Plasmoid.configuration.volumeFloorDb/
+    hardLimitDb/volumeStepDb/startupVolumeDb`) and forwarded via
+    `required property` down both branches: `CompactRepresentation.qml
+    → FlyoutPopup.qml → FlyoutContent.qml → VolumeBlock.qml`, and
+    directly into `CompactRepresentation.qml`'s own scroll-volume/
+    fraction logic. Centralizes the actual `clamp()`/`stepped()`/
+    `fractionFor()` math too, not just the numbers.
+    `FlyoutContent.qml`'s `releaseVolume()` also gained a `clamp()`
+    call on slider release (owner-approved scope addition — it
+    previously trusted the Slider's own from/to unclamped). Added a
+    "Shared cross-view state" convention note to CLAUDE.md documenting
+    the pattern, contrasted with `Theme.qml`'s deliberate non-sharing.
+    **Side effect: Phase 8.2.0's core ask (slider bounds span floor-to-
+    hard-limit, wired once not per-surface) looks substantially done
+    too** — the flyout's slider `from`/`to` now really is
+    `volumeSettings.floorDb`/`.hardLimitDb`, tracing to the real KConfig
+    entries above, not a hardcoded literal. Not independently
+    owner-verified per 8.2.0's own checklist yet (dragging to the
+    extremes, rapid-repeat overshoot) — flagged there, not marked done
+    here.
+  - **Follow-up: ConfigDialog "Defaults" control.** The mockup's
+    original footer-button placement turned out to be impossible —
+    read the real installed shell (`AppletConfiguration.qml`) directly
+    and confirmed its footer is a hardcoded 3-button row (OK/Apply/
+    Cancel) with no slot for a 4th, since that file is shell-owned
+    (shared by every applet's ConfigDialog on the system), not part of
+    this plasmoid's own package. Investigated a fully-custom settings
+    window as an alternative at the owner's request — confirmed
+    technically feasible (`Plasmoid.configuration` is directly
+    writable from arbitrary QML per real installed precedent,
+    `hasConfigurationInterface = false` can suppress the right-click
+    "Configure..." entry) but a real architecture change with no local
+    precedent; owner chose to keep the standard ConfigDialog. Mockup
+    revised to v14 (Defaults moved into the page content, a new
+    "Reset" section at the bottom) and implemented as such — a
+    "Restore defaults" row whose button resets all six `cfg_*`
+    properties to their shipped values, feeding off the shell's
+    existing generic dirty-tracking with no extra wiring needed.
+  - **Follow-up: Appearance section — UI only, not wired to real
+    rendering.** New `main.xml` entries `transparencyEnabled` (`Bool`,
+    default `true`) and `transparencyPercent` (`Int`, default `90`) —
+    deliberately not named `transparencyLevel`, which collides with a
+    stale orphaned key of that exact name still sitting in real
+    installs' KConfig from the original, removed Phase 4.4.2/4.4.3
+    transparency feature. Toggle + copper-styled slider added as the
+    page's first section, matching mockup v14. Current real alpha
+    values, confirmed for the record: flyout tint 0.82, OSD toast +
+    hover tooltip (shared pair) 0.94 (`Theme.qml`). Owner's decision
+    for the eventual wiring (not done — see Phase 8.0.2): all three
+    surfaces end up on the same alpha (overriding `Theme.qml`'s current
+    documented rationale for keeping OSD/tooltip more opaque), off =
+    fully opaque (alpha 1.0), default 90%.
+  - **Misc fixes found/requested along the way**: General category's
+    sidebar icon now uses the mockup's own dedicated asset
+    (`design/icons/ConfigDialog_tab_general/
+    devialet_config_general_icon_white.svg`, copied into
+    `contents/icons/` — `design/` itself is never shipped); "Launch at
+    login" placeholder now defaults to checked (still not wired to real
+    systemd state — that's Phase 4.4.6, untouched); discovered and
+    fixed a real, pre-existing (not introduced this session) console
+    warning affecting all six `cfg_*` properties — KCMUtils' generic
+    ConfigModule loader expects a `cfg_<name>Default` companion for
+    each one, which none had; added all six, sourced from one
+    `shippedDefaults` object shared with the Reset button.
+  - Verified throughout: `qmllint` clean on every touched file (no new
+    warnings beyond pre-existing false-positive classes already present
+    elsewhere in this codebase); every reload
+    (`kpackagetool6 --upgrade` + `plasmashell --replace`) produced zero
+    QML errors; panel icon screenshot-confirmed rendering correctly
+    after each reload. **Not yet done**: the owner's own hands-on soak
+    (scroll/hover/click, and confirming a ConfigDialog change actually
+    propagates live to all three surfaces).
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -4791,36 +4910,29 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Phase 8.0.0 — Persistence + ConfigDialog settings UI.**
-  Depends on updated ConfigDialog mockup (soft limit removed — see
-  note above; confirm the mockup file has actually been revised before
-  starting). No dependency on the Rust clamp work below — this can
-  start immediately. Add three new dB fields to the widget's KConfig
-  schema (main.xml, alongside whatever Phase 4.3.0's settings page
-  already defines), all unset/unbounded by default except where the
-  mockup shows otherwise: minimum volume (floor), hard limit (ceiling),
-  and startup/source-switch volume. Build the actual settings-page UI
-  per the mockup, including the three dB steppers with hold-to-repeat
-  (100ms cadence after initial delay, matching the flyout's own volume
-  buttons) and real Expert Pro range bounds (−96 to 0 dB) on each
-  stepper.
-  - Investigate before implementing: `devialet-ctl source` currently
-    hardcodes the −40dB post-source-switch volume internally, with no
-    existing route from KConfig into the CLI. Determine how the
-    persisted startup/source-switch value actually reaches it — most
-    likely QML passes it as a CLI argument via the same
-    Plasma5Support.DataSource invocation, but confirm against the real
-    invocation site rather than assuming a mechanism. Report the
-    chosen mechanism before wiring it.
-  - Minimum volume (floor) is explicitly a UI/usability setting, not a
-    safety one — it does NOT feed Phase 8.1.0's Rust clamp below. Keep
-    it purely client-side (slider bounds), and don't conflate it with
-    the hard-limit clamp path.
-  - Verify: all three values round-trip correctly (set, close
-    ConfigDialog, reopen, values persisted); daemon can read the
-    persisted hard-limit value even though nothing consumes it yet
-    (Phase 8.1.0 wires that); startup/source-switch value actually
-    reaches `devialet-ctl source` via whichever mechanism was chosen.
+- [ ] **Phase 8.0.1 — `devialet-ctl` startup-volume CLI wiring.**
+      Depends on 8.0.0 (done — mechanism already investigated and
+      decided there, see its closing summary). Add the optional
+      trailing CLI argument to `devialet-ctl source`, falling back to
+      the existing `SOURCE_SWITCH_VOLUME_DB` constant when omitted;
+      wire `FlyoutContent.qml`'s `selectSource()` to pass
+      `root.volumeSettings.startupVolumeDb`. Verify live: set a
+      non-default startup volume in ConfigDialog, switch sources on the
+      real amp, confirm the post-switch volume matches the configured
+      value, not the old hardcoded -40dB.
+- [ ] **Phase 8.0.2 — Wire Appearance transparency into real
+      rendering.** Depends on 8.0.0 (done — UI/KConfig already exist,
+      `transparencyEnabled`/`transparencyPercent`). Per owner decision
+      (2026-09-05): all three surfaces (flyout, OSD toast, hover
+      tooltip) end up on the same alpha, off = fully opaque (1.0).
+      Requires touching `Theme.qml`'s `panelGradientTop/Bottom` and
+      `osdGradientTop/Bottom` (currently fixed literals, 0.82/0.94) and
+      deciding how a value gets from the shared `VolumeSettings`-style
+      object (or a new one) into `Theme.qml`, which today is
+      deliberately re-instantiated per file, not shared — this will
+      need its own design pass, similar to the `VolumeSettings.qml`
+      one. Explicitly deferred by the owner until after Phase 8.x.x is
+      otherwise done.
 
 - [ ] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
   Independent implementation work, but now consumes the setting
@@ -4836,7 +4948,20 @@ architecture decisions; this file is just sequencing and status.
   changes this phase.
 
 - [ ] **Phase 8.2.0 — QML: slider bounds now span floor to hard limit.**
-  Depends on 8.0.0. The volume slider's `from` becomes the configured
+  Depends on 8.0.0 (done). **Likely already substantially done as a
+  side effect of Phase 8.0.0's own VolumeSettings.qml follow-up** (see
+  that entry's closing summary) — `VolumeBlock.qml`'s Slider `from`/
+  `to` already bind to `volumeSettings.floorDb`/`.hardLimitDb`, which
+  trace to the real `Plasmoid.configuration.volumeFloorDb`/`hardLimitDb`
+  KConfig entries, and the flyout's ±buttons/panel-icon-scroll already
+  share the same object's `stepped()`/`clamp()` (one path, not
+  per-surface, confirmed by reading `CompactRepresentation.qml`/
+  `FlyoutContent.qml` directly). What this phase's own checklist still
+  needs before marking it done: live-verify dragging to either extreme
+  actually lands exactly on the configured floor/hard-limit (not past
+  it, not short of it) and that rapid-repeat steps near either end
+  can't transiently overshoot — neither has been owner-verified yet.
+  The volume slider's `from` becomes the configured
   minimum volume (floor) and `to` becomes the hard limit — both ends of
   the track are now configurable, not just the ceiling. Dragging to
   either end of the track means "at that limit," never past it. Apply

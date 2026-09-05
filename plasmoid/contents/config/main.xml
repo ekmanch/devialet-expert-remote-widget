@@ -13,12 +13,66 @@
       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
   <kcfgfile name="" />
   <group name="General">
+    <!-- Appearance section, per
+         design/mockups/settings_window/devialet_config_dialog_mockup_v14_single_tab.html.
+         UI-only for now, per explicit owner instruction (2026-09-05) -
+         these two entries are not yet read anywhere outside
+         ConfigGeneral.qml; wiring them into the flyout/OSD/tooltip's real
+         alpha (Theme.qml's panelGradientTop/Bottom, osdGradientTop/Bottom)
+         is deferred until after Phase 8.x.x, and will apply to all three
+         surfaces identically (owner's explicit choice, overriding
+         Theme.qml's current distinct flyout-vs-OSD/tooltip alpha
+         baselines - see that file's own comment for the reasoning being
+         overridden).
+
+         transparencyPercent deliberately does NOT reuse the name
+         "transparencyLevel" - a stale orphaned key of exactly that name
+         (value 100) is still sitting in real installs' KConfig group from
+         the original transparency feature (added Phase 4.4.2/4.4.3,
+         removed in e084543 per CLAUDE.md's Known Issues section, real
+         transparency later re-achieved differently in Phase 7.10.0 with
+         no settings UI). Reusing that name would have silently picked up
+         the leftover 100 instead of this entry's own default the moment
+         it was declared - kcfg entries read whatever's already on disk
+         regardless of when the entry was added. -->
+    <entry name="transparencyEnabled" type="Bool">
+      <default>true</default>
+    </entry>
+    <entry name="transparencyPercent" type="Int">
+      <default>90</default>
+    </entry>
+
     <!-- Phase 4.4.2: volume step size used by the main view's +/- buttons
          and slider stepSize, and by the settings page's "Step per scroll
          notch" segmented control. Default 1.0 matches that control's
          Phase 4.4.1 mockup default ("1 dB" active). -->
     <entry name="volumeStepDb" type="Double">
       <default>1.0</default>
+    </entry>
+
+    <!-- Phase 8.0.0: volume-limit settings, per
+         design/mockups/settings_window/devialet_config_dialog_mockup_v13_single_tab.html
+         (Volume Limits section + the Volume section's "Startup /
+         source-switch volume" row). Defaults are the mockup's own
+         LIMIT_DEFAULTS (min: -45, hard: -10, startup: -40), confirmed
+         directly in that file's JS rather than assumed to carry over from
+         an earlier draft. Range for all three is the real Expert Pro line
+         spec, -96..0 dB (enforced by ConfigGeneral.qml's DbStepper, not
+         re-declared here - kcfg <min>/<max> would only guard a value typed
+         directly into a config file, not the stepper UI itself).
+
+         volumeFloorDb is a UI/usability setting only (trims the unused low
+         end of the volume slider - Phase 8.2.0) - it does NOT feed the
+         Rust hard-limit clamp (Phase 8.1.0), only hardLimitDb does. Don't
+         conflate the two. -->
+    <entry name="volumeFloorDb" type="Double">
+      <default>-45.0</default>
+    </entry>
+    <entry name="hardLimitDb" type="Double">
+      <default>-10.0</default>
+    </entry>
+    <entry name="startupVolumeDb" type="Double">
+      <default>-40.0</default>
     </entry>
   </group>
 </kcfg>

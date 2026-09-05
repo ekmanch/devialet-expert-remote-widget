@@ -68,9 +68,25 @@ PlasmoidItem {
         id: pendingAmpState
     }
 
+    // Same root-anchored-and-forwarded pattern as PendingAmpState above,
+    // extended to volume-range configuration (floor/hard-limit/step/startup
+    // dB) - see VolumeSettings.qml's own header comment and CLAUDE.md's
+    // "Shared cross-view state" note. Anchored here for the identical
+    // reason: CompactRepresentation and the flyout are not guaranteed
+    // co-resident, so anything meant to be shared between them can't live
+    // inside either one - it must live where both are forwarded from.
+    VolumeSettings {
+        id: volumeSettings
+        floorDb: Plasmoid.configuration.volumeFloorDb
+        hardLimitDb: Plasmoid.configuration.hardLimitDb
+        stepDb: Plasmoid.configuration.volumeStepDb
+        startupVolumeDb: Plasmoid.configuration.startupVolumeDb
+    }
+
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
+        volumeSettings: volumeSettings
     }
 
     // Phase 7.13.0 cleanup: FullRepresentation.qml itself is deleted, but

@@ -145,6 +145,29 @@ all three.
   ListView only gets its model once visible and its height chases
   delegates as they land, which broke live three times before the Popup
   rebuild.
+- **Shared cross-view state: root-anchored `QtObject`, forwarded via
+  `required property` — not a QML singleton.** When state must not
+  diverge across the compact icon, the flyout, the OSD toast, and the
+  hover tooltip (`PendingAmpState.qml`'s daemon-resolved VolumeDb/Muted;
+  `VolumeSettings.qml`'s KConfig-sourced floor/hard-limit/step/startup
+  dB), instantiate one plain `QtObject` once at `main.qml`'s root — the
+  one owner that strictly outlives both `compactRepresentation` and the
+  flyout — and forward it down as a `required property` through the
+  `CompactRepresentation → FlyoutPopup → FlyoutContent` chain. Never
+  reach into a sibling's live state directly: the historical
+  `FullRepresentation.qml` was only opportunistically preloaded by
+  Plasma's shell, so `CompactRepresentation.qml` couldn't safely assume
+  it was resident — this project's actual answer was always "anchor at
+  `main.qml`'s root instead," not "share directly between the two
+  representations." No `qmldir`/`pragma Singleton` exists anywhere in
+  this KPackage, so this forwarding chain is the mechanism, not a true
+  QML module singleton. **Contrast with `Theme.qml`**: it holds only
+  local palette/font constants with no cross-view state that could
+  diverge, so it's deliberately re-instantiated per consuming file
+  instead (`readonly property Theme theme: Theme {}`) — don't apply the
+  root-anchored pattern where nothing actually needs to stay in sync;
+  that's needless plumbing for a value that was never at risk of
+  disagreeing with itself.
 - **In-process alternative (cxx-qt) considered and rejected**: the listener
   could in principle run inside plasmashell's own process via a cxx-qt QML
   plugin instead of as a standalone daemon, eliminating the need for a
