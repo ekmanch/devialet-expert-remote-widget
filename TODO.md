@@ -5055,6 +5055,250 @@ architecture decisions; this file is just sequencing and status.
   --delete`, then `plasmashell --replace`) now that it's served its
   accidental purpose here.
 
+- [x] **Phase 8.3.0 — ConfigDialog blocks invalid floor/ceiling
+  ordering at the point of interaction; self-heals if it's ever
+  violated anyway (supersedes prior "real validation" placeholder).**
+  Done. Depends on 8.0.0.
+
+  **Value correction, flagged rather than implemented as literally
+  specified**: the prompt for this phase said "write both back to
+  KConfig as hardLimitDb = -40.0, floorDb = -39.0" - that's inverted
+  against this codebase's own floor < hardLimit convention (floor is
+  the *more negative*/quieter bound everywhere else: shipped defaults
+  floor -45.0 < hardLimit -10.0, `ConfigGeneral.qml`'s own "Volume
+  floor"/"Volume ceiling" descriptions). -39 is numerically *greater*
+  than -40, so `hardLimitDb=-40, floorDb=-39` would leave floor > hard
+  limit - the exact bug this phase exists to prevent. Implemented as
+  **floorDb = -40.0, hardLimitDb = -39.0** instead (same magnitudes,
+  same 1dB gap, correct order) everywhere this pair appears.
+
+  **1. Stepper-level blocking** (`ConfigGeneral.qml`): the floor
+  `DbStepper`'s `to` is now `cfg_hardLimitDb - limitStepDb` (was
+  `dbRangeMax`) and the hard-limit `DbStepper`'s `from` is now
+  `cfg_volumeFloorDb + limitStepDb` (was `dbRangeMin`) - a new
+  `readonly property real limitStepDb: 1.0`, passed explicitly as
+  `stepDb:` to both instead of relying on `DbStepper`'s own default,
+  so the gap and the step size can't drift apart. `DbStepper`'s
+  existing `enabled: value > from` / `value < to` and its
+  `clamp()` (`Math.max`/`Math.min`) already do the actual refusing and
+  boundary-exact clamping for free - both directions guarded
+  independently since each stepper only reads the *other's* live
+  value, not its own.
+  - **UI feedback decision**: disabled cue, not a silent no-op, and
+    not a flash. `DbStepper`'s two buttons gained `opacity: enabled ?
+    1.0 : 0.4` (the same 0.4 factor `VolumeBlock.qml` already uses for
+    its own no-amp-connected dimming, applied per-button here since
+    only one of the pair is ever blocked at a time - a whole-row dim
+    would incorrectly gray out the still-usable button too). No flash:
+    no precedent for one anywhere in this codebase, and a flash
+    retriggering on every `autoRepeat` tick while held at the boundary
+    would look worse than a steady dim, not better.
+  - Removed the mockup-derived `visible: cfg_volumeFloorDb >=
+    cfg_hardLimitDb` warning `Label` ("Volume floor should stay below
+    the volume ceiling.") entirely, confirmed against
+    `devialet_config_dialog_mockup_v14_single_tab.html`'s own
+    `#limitWarning` text before removing it. Grepped the file
+    afterward for `dangerBright`/`limitWarning` - nothing left besides
+    the unrelated Forget-button danger color.
+
+  **2. Self-heal on load** (`main.qml`): a `Component.onCompleted` on
+  the `VolumeSettings { ... }` instantiation checks
+  `Plasmoid.configuration.volumeFloorDb >= .hardLimitDb` and, if so,
+  writes both back (corrected values, see above) before either
+  representation binds to the object - runs once, synchronously, at
+  daemon/widget startup.
+  - **Decision: yes, ConfigDialog also re-checks on open** - the
+    original intent was to also cover a KConfig file edited externally
+    while the widget was already running with a previously-valid pair
+    in memory (main.qml's check only fires once, at construction).
+    Implemented as `onCfg_volumeFloorDbChanged`/
+    `onCfg_hardLimitDbChanged` handlers calling a shared
+    `healLimitOrdering()` - reactive rather than a one-shot open hook,
+    so it self-corrects if *anything* pushes an invalid pair into those
+    two properties. **Does not actually reach the already-running
+    external-corruption case it was written for** - see the owner-soak
+    investigation below for why, found live rather than assumed. Still
+    real and worth keeping: it correctly guards every in-process write
+    to `cfg_volumeFloorDb`/`cfg_hardLimitDb` (the Defaults-button bug
+    below is a genuine example), just not that one specific scenario.
+  - **Real bug found and fixed while implementing this, not
+    hypothetical**: the reactive self-heal above interacts with the
+    existing "Defaults" button, which writes `cfg_volumeFloorDb` then
+    `cfg_hardLimitDb` in sequence. Starting from a legitimately
+    reachable prior state near one extreme (e.g. floor -90/hardLimit
+    -89, reached by decrementing each stepper repeatedly - fully valid
+    under the new mutual constraint the whole time), clicking Defaults
+    wrote floor to -45 *first*, which is `>=` the still-stale
+    hardLimit -89, firing the reactive self-heal mid-click and landing
+    hardLimit at -39; the very next line then overwrote hardLimit with
+    the real shipped default -10, leaving the pair at **floor -40**
+    (from the accidental self-heal) instead of the intended shipped
+    default -45. Fixed by widening first: the handler now writes
+    `cfg_hardLimitDb = dbRangeMax` *before* touching either value
+    toward its real default, then floor, then hardLimit - each of the
+    three writes is individually valid against whatever the other
+    currently holds (dbRangeMax is `>=` every reachable floor by
+    construction), so the reactive heal never fires mid-click. Traced
+    by hand through the reentrant signal-handler call stack for
+    several adversarial prior states (including external-corruption
+    cases with wildly separated values, not just the reachable
+    -90/-89 case) rather than assumed fixed after the one repro.
+
+  **Live-verified this pass (no pointer/screenshot needed):**
+  - **Self-heal on load, exact**: corrupted the live KConfig
+    (`volumeFloorDb=-5.0`, no `hardLimitDb` key → falls back to the
+    kcfg default -10.0, i.e. floor > hardLimit) with plasmashell fully
+    stopped (`pkill -x plasmashell`, confirmed not running), then
+    started it fresh. Config read back **exactly** `volumeFloorDb=-40`,
+    `hardLimitDb=-39` - correct values, correct order. No errors in
+    `journalctl --user _COMM=plasmashell` around startup.
+  - **No broken math after healing**: drove `VolumeDb=-39.5` (the
+    healed range's exact midpoint) through `tools/flyout-harness`'s
+    `fakeamp.py` and screenshotted the real flyout - handle sits
+    exactly centered on the track, label reads "-39.5 dB", nothing
+    NaN/degenerate.
+  - **`ConfigGeneral.qml` loads without a runtime error**: `qmllint`
+    clean on `ConfigGeneral.qml`/`DbStepper.qml`/`main.qml` (the
+    `main.qml` non-zero exit is a pre-existing standalone-qmllint
+    quirk unrelated to this change - confirmed identical on the
+    pre-Phase-8.3.0 file via `git stash`); separately triggered the
+    real dialog via `org.kde.PlasmaShell.evaluateScript` →
+    `widget.showConfigurationInterface()` (found via probing the
+    scripting `Widget` object's own property list - no `.action()`
+    method exists on it, contrary to a first guess) with the daemon
+    live - no QML warnings/errors appeared in the journal.
+  - **Not attempted initially**: a screenshot of the open ConfigDialog
+    itself. The owner had a fullscreen video player active at that
+    point in the session; a window-focused capture grabbed that window
+    instead, and the dialog didn't appear in a KWin window-list probe
+    shortly after (likely lost focus and/or was already dismissed -
+    not chased further at the time to avoid poking at window focus/
+    activation while the owner was actively watching something).
+    Superseded by the owner's own screenshots below once that was no
+    longer a concern.
+
+  **Owner soak (2026-09-06): (a)-(c) confirmed.**
+  Tried multiple different floor/ceiling value pairs in the real
+  ConfigDialog: with the gap at exactly 1dB, the floor stepper's "+"
+  and the hard-limit stepper's "−" both dim and refuse to progress
+  further - matches (a)/(b) exactly, including the boundary-exact
+  case (gap closed to precisely 1dB, not just "roughly close").
+  Screenshot supplied of the real rendered dialog (floor -32dB/ceiling
+  -31dB, a 1dB gap) confirms (c) too: nothing appears between the
+  "Volume ceiling" row and the "Amplifiers" section - the removed
+  warning text is genuinely gone from the rendered page, not just
+  invisible.
+
+  **(d) - self-heal-on-open while already running: investigated live
+  (2026-09-06), found structurally unreachable from applet QML in this
+  Plasma version, not a bug left unfixed.** Owner's own test (external
+  `kwriteconfig6` write while the widget stayed running, no restart)
+  showed the ConfigDialog displaying neither the corrupted value nor a
+  healed one - a third, older value, unchanged across several genuine
+  close/reopen cycles. Chased with `Component.onCompleted`/
+  `onVisibleChanged` diagnostics added temporarily to both
+  `ConfigGeneral.qml` and `main.qml` (removed again before closing this
+  phase) rather than guessed at:
+  - A first hypothesis (raw editor save vs. `kwriteconfig6` - only the
+    latter sends KConfig's own change-notification signal) was ruled
+    out: owner confirmed the corruption was a raw editor save, but a
+    **second** test using `kwriteconfig6` specifically hit the exact
+    same staleness.
+  - The diagnostics then showed the real mechanism: `Plasmoid.
+    configuration` is a single `KConfigPropertyMap` object, created
+    once when the plasmashell process starts and shared by every QML
+    file in this KPackage - `contents/config/ConfigGeneral.qml`
+    included (confirmed reachable there: `Plasmoid.configuration`
+    resolves to a real, non-null `KConfigPropertyMap`, contrary to an
+    earlier, untested assumption elsewhere in this file's history).
+    Logging its object address across two separate `ConfigGeneral.qml`
+    page instantiations (a real close then a real reopen, not just
+    `visible` toggling - `Component.onCompleted` fired again both
+    times) showed the **identical** address, and both times the
+    freshly-created page's own initial `cfg_volumeFloorDb`/
+    `cfg_hardLimitDb` were already stale, matching the shared object's
+    stale in-memory state rather than the file.
+  - Confirmed this isn't a ConfigDialog-only quirk: with the file
+    externally corrupted this way, the **live flyout itself** (via
+    `tools/flyout-harness`, no pointer needed) rendered using the same
+    stale pair, not the file's current one - clamping a swept `VolumeDb`
+    at the stale hard-limit exactly, byte-for-byte consistent with the
+    stale value and nothing else. A real external corruption while the
+    widget is running is invisible to the running widget too, not just
+    to the dialog.
+  - **Root cause, confirmed by reading the actual header** (`/usr/
+    include/KF6/KConfigQml/kconfigpropertymap.h`, on this dev machine -
+    not inferred from behavior alone), **not just "benign," provably
+    inert**: `Plasmoid.configuration` is a `KConfigPropertyMap`. Its
+    `isNotify()`/`setNotify()` pair - the switch for listening to
+    `KConfigBase::Notify`, the exact change-notification signal
+    `kwriteconfig6` sends - is documented "Disabled by default," and
+    its only other write path, `updateValue()`, is called solely from
+    an explicit local property assignment (`Plasmoid.configuration.foo
+    = x`). No polling, no file watcher wired in absent that flag. So
+    the object has no mechanism by which an external write could reach
+    it - not an observed pattern that might have an exception, a
+    documented absence of any such path. Closed the one gap in the
+    empirical coverage this raised on review: every corruption test
+    above touched `floorDb` (or both keys via a fresh restart) - a
+    dedicated follow-up corrupted `hardLimitDb` **alone**, leaving
+    `floorDb` on disk untouched, and got the symmetric result: the
+    live flyout clamped a swept value to the *pre-corruption*
+    `hardLimitDb`, not the corrupted one - proven by the clamped
+    value's own displayed label, not just its slider position (which
+    alone couldn't have distinguished the two). Both keys are
+    independently and symmetrically inert to an external write, exactly
+    as the header predicts. So: the amp keeps getting governed by
+    whatever was last known-good in memory, never by a corrupted
+    on-disk value, until the next restart - provably, not probably.
+  - `Plasmoid.configuration` reads the file correctly exactly once, at
+    that `KConfigPropertyMap`'s own construction - confirmed clean and
+    reproducible twice via the same diagnostics: corrupt the file with
+    the widget NOT running, restart, and the read/heal sequence is
+    exactly right (`floorDb`/`hardLimitDb` bind to the real corrupted
+    values, the `>=` check fires once, both properties update to
+    -40.0/-39.0, nothing re-fires after). This is exactly what
+    main.qml's on-load self-heal already relies on and is why it's
+    reliable - the fresh-process-start case was never in question, only
+    the already-running one.
+  - No QML-level API to force `Plasmoid.configuration` to reparse was
+    found (`writeConfig()` is the only other public method on this
+    class, and it saves outward, not reloads inward). A hand-rolled
+    workaround (reading the raw
+    `plasma-org.kde.plasma.desktop-appletsrc` INI file directly,
+    bypassing KConfig entirely) was considered and rejected - it would
+    duplicate and risk diverging from Plasma's own config format/
+    semantics, for a scenario CLAUDE.md's own Phase 8.3.0 framing
+    already calls out as "not something the owner is defending against
+    maliciously." Same class of wall as the real-transparency
+    investigation elsewhere in this file: investigated live, root-
+    caused (this time down to the actual header, not just observed
+    symptoms), accepted rather than worked around.
+  - `ConfigGeneral.qml`'s `onCfg_volumeFloorDbChanged`/
+    `onCfg_hardLimitDbChanged` handlers (and their `healLimitOrdering()`)
+    are kept - both files' comments corrected to stop claiming they
+    cover the already-running external-corruption case (they never
+    actually could, given the above), while accurately describing what
+    they DO cover: any in-process write to `cfg_volumeFloorDb`/
+    `cfg_hardLimitDb`, which is a real, reachable case on its own (the
+    Defaults-button bug found earlier in this same phase went through
+    exactly this path).
+  - One real regression found and fixed during this investigation, not
+    shipped: an early diagnostic edit accidentally duplicated
+    `onCfg_volumeFloorDbChanged`/`onCfg_hardLimitDbChanged` (the
+    diagnostic block and the pre-existing healing block both declared
+    them), which QML treats as a hard "Property value set multiple
+    times" error - not a warning - and silently blanked the entire
+    ConfigDialog page (matching this file's own documented
+    `ConfigCategory.source` blank-page failure signature for a
+    different root cause). Caught immediately via a live screenshot
+    from the owner, fixed by merging into one handler each, verified
+    clean via `qmllint` (which did **not** catch the duplicate-property
+    error - `qmllint` is necessary but not sufficient for this kind of
+    change; a real load/render check is still needed) and a real
+    dialog open afterward, with a fresh screenshot from the owner
+    confirming the page renders correctly again.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -5212,14 +5456,6 @@ architecture decisions; this file is just sequencing and status.
     hard limit gets clamped in both the source-switch and power-on
     paths.
 
-
-- [ ] **Phase 8.3.0 — Real validation for limit ordering (floor 
-  hard).**
-  Depends on 8.0.0. Decide and implement actual behavior when floor is
-  set at or above the hard limit: block Apply/OK, auto-clamp the
-  just-edited stepper against the other, or some other explicit rule —
-  state which was chosen and why. Cover the boundary case where the two
-  are set equal.
 
 - [ ] **Phase 8.4.0 — Immediate clamp on settings change.**
   Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the

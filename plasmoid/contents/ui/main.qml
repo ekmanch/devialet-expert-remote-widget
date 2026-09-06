@@ -81,6 +81,53 @@ PlasmoidItem {
         hardLimitDb: Plasmoid.configuration.hardLimitDb
         stepDb: Plasmoid.configuration.volumeStepDb
         startupVolumeDb: Plasmoid.configuration.startupVolumeDb
+
+        // Phase 8.3.0 self-heal: ConfigGeneral.qml's steppers can only
+        // prevent a NEW invalid floor/hard-limit pair from being created
+        // through the dialog - they can't fix one that already exists on
+        // disk (e.g. the KConfig INI edited directly while the widget
+        // wasn't running). Not something the owner is defending against
+        // maliciously, but this construction point already exists and is
+        // the natural place to catch it before anything reads floorDb/
+        // hardLimitDb for real. Runs once, synchronously, before
+        // compactRepresentation/fullRepresentation below ever bind to
+        // this object, so no invalid slider/OSD/tooltip math is ever
+        // visible - both KConfig writes land in the same tick, and
+        // floorDb/hardLimitDb above (already-live bindings to
+        // Plasmoid.configuration) pick up the corrected values
+        // automatically, no extra plumbing needed.
+        //
+        // This is the ONLY point that reliably catches external file
+        // corruption - `Plasmoid.configuration` is one KConfigPropertyMap
+        // per plasmashell process, read from disk exactly once at this
+        // Component.onCompleted's own moment (confirmed live, Phase
+        // 8.3.0: fresh restart -> correct read -> correct heal,
+        // reproduced cleanly twice). It never re-reads the file again for
+        // the rest of that process's life, for ANY external write
+        // (kwriteconfig6 or a raw editor save alike) - a corruption
+        // introduced while already running is invisible to this check
+        // and to the live widget itself until the next restart.
+        // ConfigGeneral.qml's own onCfg_volumeFloorDbChanged/
+        // onCfg_hardLimitDbChanged handlers do NOT cover that
+        // already-running case either, despite originally being added
+        // for exactly that - see their own comment for the full
+        // investigation. They still guard every in-process write to
+        // cfg_* (e.g. the Defaults button), which is a real, reachable
+        // case on its own.
+        //
+        // Floor gets the more negative (quieter) of the pair, hard limit
+        // the less negative one - matching every other floor/hardLimit
+        // pair in this codebase (shipped defaults: floor -45.0 < hardLimit
+        // -10.0).
+        Component.onCompleted: {
+            if (Plasmoid.configuration.volumeFloorDb >= Plasmoid.configuration.hardLimitDb) {
+                console.log("[VolumeSettings] floor/hardLimit invalid on load (" +
+                            Plasmoid.configuration.volumeFloorDb + " >= " +
+                            Plasmoid.configuration.hardLimitDb + ") - self-healing to -40.0/-39.0");
+                Plasmoid.configuration.volumeFloorDb = -40.0;
+                Plasmoid.configuration.hardLimitDb = -39.0;
+            }
+        }
     }
 
     compactRepresentation: CompactRepresentation {

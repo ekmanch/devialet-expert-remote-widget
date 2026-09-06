@@ -46,8 +46,17 @@ RowLayout {
         autoRepeatInterval: 100
         onClicked: root.stepped(root.clamp(root.value - root.stepDb))
 
+        // Phase 8.3.0: disabled cue (not a silent no-op) for the boundary
+        // case - a click/hold at `from` (or, for the floor/hard-limit pair,
+        // at the other stepper's current value) does nothing, and this is
+        // the only visual signal that tells the user why. Same 0.4 dim
+        // factor VolumeBlock.qml's own group-level ampIp==="" dimming uses,
+        // just applied per-button here since only one of the two +/-
+        // buttons is ever blocked at a time (a whole-row dim would be
+        // wrong - the other button stays fully usable).
         implicitWidth: 26
         implicitHeight: 26
+        opacity: enabled ? 1.0 : 0.4
         background: Rectangle {
             radius: root.theme.radiusSm
             color: root.theme.surface
@@ -94,6 +103,7 @@ RowLayout {
 
         implicitWidth: 26
         implicitHeight: 26
+        opacity: enabled ? 1.0 : 0.4
         background: Rectangle {
             radius: root.theme.radiusSm
             color: root.theme.surface

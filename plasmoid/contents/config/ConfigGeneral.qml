@@ -86,6 +86,58 @@ KCM.SimpleKCM {
     readonly property real dbRangeMin: -96.0
     readonly property real dbRangeMax: 0.0
 
+    // Phase 8.3.0: floor and hard limit must stay strictly ordered
+    // (floor < hard limit, never equal - a 0dB-wide range is meaningless).
+    // One stepper increment is the minimum usable gap. Named rather than
+    // relying on DbStepper's own default `stepDb: 1` so the two steppers
+    // below and this gap agree by construction, not by coincidence.
+    readonly property real limitStepDb: 1.0
+
+    // Self-heal: called whenever either limit changes, for any reason - a
+    // user step (already prevented from producing an invalid pair by the
+    // steppers' own to/from binding below, so this is a no-op in that
+    // case), Defaults/Reset (see its own onClicked comment for the
+    // widen-first write order that keeps every intermediate pair valid
+    // too), or any other in-process write to either cfg_* property.
+    //
+    // Does NOT reach external KConfig file corruption while the widget is
+    // already running, despite this being the original intent (see
+    // main.qml's own comment on its VolumeSettings.Component.onCompleted
+    // check for the full story) - investigated live (Phase 8.3.0,
+    // 2026-09-06) and found structurally unreachable from applet QML:
+    // `Plasmoid.configuration` is one `KConfigPropertyMap` object, created
+    // once per plasmashell process and shared by every QML file in this
+    // KPackage (confirmed identical object address across two separate
+    // ConfigGeneral.qml page instantiations, and the live flyout showing
+    // the same stale values as this page at the same moment). It reads
+    // the file correctly exactly once, at that KConfigPropertyMap's own
+    // construction (i.e. at process start - main.qml's on-load check is
+    // reliable specifically because it runs at that exact point), and
+    // never re-reads it afterward for an external write, for the life of
+    // that process - not on this page's own Component.onCompleted firing
+    // again for a fresh page instance, not across real close/reopen
+    // cycles, not for kwriteconfig6 vs. a raw editor save (both equally
+    // stale). Only a full plasmashell restart re-reads the file. No QML-
+    // level API to force a reload was found; hand-rolling one (reading
+    // the raw INI file directly, bypassing KConfig) would duplicate and
+    // diverge from Plasma's own config format/semantics for a rare,
+    // non-adversarial scenario (CLAUDE.md's "not something the owner is
+    // defending against maliciously") - not worth it. Floor gets the more
+    // negative (quieter) of the pair, hard limit the less negative one,
+    // matching every other floor/hardLimit pair in this file (shipped
+    // defaults: floor -45.0 < hardLimit -10.0).
+    function healLimitOrdering() {
+        if (root.cfg_volumeFloorDb >= root.cfg_hardLimitDb) {
+            console.log("[ConfigGeneral] floor/hardLimit invalid (" + root.cfg_volumeFloorDb +
+                        " >= " + root.cfg_hardLimitDb + ") - self-healing to -40.0/-39.0");
+            root.cfg_volumeFloorDb = -40.0;
+            root.cfg_hardLimitDb = -39.0;
+        }
+    }
+
+    onCfg_volumeFloorDbChanged: root.healLimitOrdering()
+    onCfg_hardLimitDbChanged: root.healLimitOrdering()
+
     // Mirrors main.xml's own <default> entries - feeds both the
     // cfg_<name>Default properties above (what KCMUtils' generic loader
     // expects) and the Reset section's "Defaults" button below (what a
@@ -351,7 +403,13 @@ KCM.SimpleKCM {
             DbStepper {
                 value: root.cfg_volumeFloorDb
                 from: root.dbRangeMin
-                to: root.dbRangeMax
+                // Phase 8.3.0: can never reach (let alone pass) the current
+                // hard limit - capped one step below it, not at dbRangeMax.
+                // DbStepper's own `enabled: value < to` disables "+" the
+                // moment this cap is reached, and its clamp() (Math.min)
+                // makes the boundary step land exactly on it, never past.
+                to: root.cfg_hardLimitDb - root.limitStepDb
+                stepDb: root.limitStepDb
                 onStepped: (value) => root.cfg_volumeFloorDb = value
             }
         }
@@ -363,28 +421,13 @@ KCM.SimpleKCM {
 
             DbStepper {
                 value: root.cfg_hardLimitDb
-                from: root.dbRangeMin
+                // Phase 8.3.0: mirror of the floor stepper above - can
+                // never reach the current floor, capped one step above it.
+                from: root.cfg_volumeFloorDb + root.limitStepDb
                 to: root.dbRangeMax
+                stepDb: root.limitStepDb
                 onStepped: (value) => root.cfg_hardLimitDb = value
             }
-        }
-
-        // Phase 8.0.0 placeholder, matching the mockup's own
-        // handleDefaults()/renderLimits() scope note ("Min-above-hard shows
-        // an inline warning as a placeholder for real validation") - Phase
-        // 8.3.0 owns the actual ordering *behavior* (block Apply/OK,
-        // auto-clamp, etc.), not this phase. This is display-only.
-        Label {
-            Layout.fillWidth: true
-            Layout.topMargin: -6
-            Layout.bottomMargin: 8
-            horizontalAlignment: Text.AlignRight
-            visible: root.cfg_volumeFloorDb >= root.cfg_hardLimitDb
-            text: "Volume floor should stay below the volume ceiling."
-            font.family: root.theme.fontMono
-            font.pixelSize: 10
-            color: root.theme.dangerBright
-            wrapMode: Text.NoWrap
         }
 
         // ---- Amplifiers ----
@@ -514,6 +557,28 @@ KCM.SimpleKCM {
                         root.cfg_transparencyPercent = root.shippedDefaults.transparencyPercent;
                         root.cfg_volumeStepDb = root.shippedDefaults.volumeStepDb;
                         root.cfg_startupVolumeDb = root.shippedDefaults.startupVolumeDb;
+                        // Phase 8.3.0: widen the hard limit to dbRangeMax
+                        // *first* - a lone extra write, not just reordering
+                        // the two lines below - before touching either
+                        // limit toward its real shipped default. Each of
+                        // the three writes below is individually valid
+                        // against whatever the other one currently holds
+                        // (dbRangeMax is >= every reachable floor; the new
+                        // floorDefault is < dbRangeMax; the new
+                        // hardLimitDefault is > the new floorDefault), so
+                        // healLimitOrdering() above - which reacts to every
+                        // single write via onCfg_*Changed, not just the
+                        // final pair - never sees a transient invalid pair
+                        // partway through and self-heals over one of these
+                        // three intended values. Without this widen step, a
+                        // prior pair near the opposite extreme (e.g. floor
+                        // -90/hardLimit -89) sets floorDb -45 first, which
+                        // is >= the still-stale hardLimit -89, triggers a
+                        // self-heal to -40/-39 mid-click, and the final
+                        // hardLimitDb write below then leaves floorDb at
+                        // -40 instead of the intended -45 - caught by
+                        // tracing exactly this sequence, not observed live.
+                        root.cfg_hardLimitDb = root.dbRangeMax;
                         root.cfg_volumeFloorDb = root.shippedDefaults.volumeFloorDb;
                         root.cfg_hardLimitDb = root.shippedDefaults.hardLimitDb;
                     }
