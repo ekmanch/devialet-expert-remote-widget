@@ -125,7 +125,8 @@ MouseArea {
             exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped);
+        exec.connectSource(root.devialetCtlCommand + " --ip " + root.ampIp + " volume " + clamped +
+            " --hard-limit-db " + root.volumeSettings.hardLimitDb);
         // Tells the daemon directly, so FullRepresentation (and anything
         // else reading pendingAmpState) sees this as authoritative
         // without waiting for the real amp broadcast - see

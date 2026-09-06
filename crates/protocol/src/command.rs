@@ -5,12 +5,6 @@ use crate::dbconvert::db_convert;
 /// regardless of command type. See docs/protocol.md.
 pub const PACKET_LEN: usize = 142;
 
-/// Deliberate safety ceiling (matches Kotlin's `setVolumeDb` default
-/// `maxDb`): the amp itself accepts up to +30dB, which is "dangerously
-/// loud" on this hardware - see docs/known-gotchas.md #6. Enforced here,
-/// not left to a caller/UI layer to remember.
-pub const MAX_VOLUME_DB: f64 = -15.0;
-
 /// Forced volume sent after every source switch, overriding the amp's own
 /// inconsistent per-input startup volume memory. Not part of the wire
 /// protocol itself - a deliberate product decision. See
@@ -88,12 +82,24 @@ pub fn mute_packet(muted: bool, packet_counter: u16, command_counter: u16) -> [u
     )
 }
 
-/// Set volume. Clamps to `MAX_VOLUME_DB` internally (never left to a
-/// caller), runs the clamped value through `db_convert`, and sets the sign
-/// bit (`0x8000`) when the clamped value is negative. Ported from
-/// `DevialetController.setVolumeDb()`.
-pub fn volume_packet(db_in: f64, packet_counter: u16, command_counter: u16) -> [u8; PACKET_LEN] {
-    let db = db_in.min(MAX_VOLUME_DB);
+/// Set volume. Clamps to `hard_limit_db` internally when `Some` (never
+/// left to a caller to remember - see this crate's Phase 8.1.0 note: this
+/// replaces the old hardcoded `MAX_VOLUME_DB` constant, which every
+/// volume-set caller now supplies as a real value instead), then runs the
+/// clamped value through `db_convert`, and sets the sign bit (`0x8000`)
+/// when the clamped value is negative. `hard_limit_db: None` means
+/// unbounded - no ceiling is applied, matching a widget with no hard
+/// limit configured. Ported from `DevialetController.setVolumeDb()`.
+pub fn volume_packet(
+    db_in: f64,
+    hard_limit_db: Option<f64>,
+    packet_counter: u16,
+    command_counter: u16,
+) -> [u8; PACKET_LEN] {
+    let db = match hard_limit_db {
+        Some(limit) => db_in.min(limit),
+        None => db_in,
+    };
     let mut vol = db_convert(db);
     if db < 0.0 {
         vol |= 0x8000;
@@ -215,35 +221,63 @@ mod tests {
     }
 
     #[test]
-    fn volume_at_safety_ceiling() {
-        let p = volume_packet(-15.0, 0, 0);
+    fn volume_at_hard_limit_is_not_further_clamped() {
+        // Exact boundary value: db_in == hard_limit_db must pass through
+        // as-is (min() is inclusive), not get pushed any quieter.
+        let p = volume_packet(-15.0, Some(-15.0), 0, 0);
         assert_eq!(&p[..14], hdr([0, 0, 0, 0], 0x00, 0x04, 0xC1, 0x70, [0xDB, 0x52]).as_slice());
     }
 
     #[test]
-    fn volume_above_ceiling_is_clamped_down_to_it() {
-        // -10dB is "louder" than the -15dB ceiling and must be clamped to
+    fn volume_above_hard_limit_is_clamped_down_to_it() {
+        // -10dB is "louder" than a -15dB hard limit and must be clamped to
         // produce byte-identical output to requesting -15dB directly.
-        let requested_loud = volume_packet(-10.0, 0, 0);
-        let at_ceiling = volume_packet(-15.0, 0, 0);
-        assert_eq!(requested_loud, at_ceiling);
+        let requested_loud = volume_packet(-10.0, Some(-15.0), 0, 0);
+        let at_limit = volume_packet(-15.0, Some(-15.0), 0, 0);
+        assert_eq!(requested_loud, at_limit);
     }
 
     #[test]
-    fn volume_quieter_than_ceiling_is_not_clamped() {
-        // -40dB (the forced post-source-switch volume) is quieter than the
-        // -15dB ceiling and must pass through unclamped.
-        let p = volume_packet(SOURCE_SWITCH_VOLUME_DB, 0, 0);
+    fn volume_below_hard_limit_is_not_clamped() {
+        // -40dB (the forced post-source-switch volume) is quieter than a
+        // -15dB hard limit and must pass through unclamped.
+        let p = volume_packet(SOURCE_SWITCH_VOLUME_DB, Some(-15.0), 0, 0);
         assert_eq!(&p[..14], hdr([0, 0, 0, 0], 0x00, 0x04, 0xC2, 0x20, [0x1E, 0x40]).as_slice());
     }
 
     #[test]
-    fn volume_zero_db_is_clamped_to_ceiling_not_allowed_through() {
+    fn volume_zero_db_is_clamped_to_configured_hard_limit() {
         // Regression guard for known-gotchas.md #6: 0dB must never reach
-        // the wire - it has to come out byte-identical to the -15dB ceiling.
-        let zero = volume_packet(0.0, 0, 0);
-        let ceiling = volume_packet(-15.0, 0, 0);
-        assert_eq!(zero, ceiling);
+        // the wire unclamped when a hard limit is configured - it has to
+        // come out byte-identical to requesting the limit directly.
+        let zero = volume_packet(0.0, Some(-15.0), 0, 0);
+        let at_limit = volume_packet(-15.0, Some(-15.0), 0, 0);
+        assert_eq!(zero, at_limit);
+    }
+
+    #[test]
+    fn volume_with_a_different_configured_hard_limit_clamps_to_that_value() {
+        // The limit is now a real runtime value (Phase 8.1.0), not the old
+        // hardcoded -15.0 - confirm an arbitrary configured limit (e.g.
+        // -10dB from ConfigDialog) is honored, not just -15.0.
+        let p = volume_packet(-5.0, Some(-10.0), 0, 0);
+        let at_limit = volume_packet(-10.0, Some(-10.0), 0, 0);
+        assert_eq!(p, at_limit);
+    }
+
+    #[test]
+    fn volume_with_no_hard_limit_configured_is_never_clamped() {
+        // hard_limit_db: None means unbounded - must behave identically to
+        // a widget with no limit configured at all. 0dB is deliberately
+        // used here (the exact value known-gotchas.md #6 wants blocked
+        // *when a limit is configured*) to prove None truly applies no
+        // ceiling of its own, rather than silently falling back to some
+        // hardcoded value.
+        let unbounded = volume_packet(0.0, None, 0, 0);
+        let db = db_convert(0.0);
+        let hi = (db >> 8) as u8;
+        let lo = (db & 0xFF) as u8;
+        assert_eq!((unbounded[8], unbounded[9]), (hi, lo));
     }
 
     #[test]

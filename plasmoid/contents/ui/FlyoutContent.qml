@@ -163,7 +163,7 @@ Item {
         root.activeSourceIndex = index;
         root.activeSourceName = name;
         root.lastSourceChangeAtMs = root.now();
-        root.runCtl("source " + index);
+        root.runCtl("source " + index + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
     }
 
     readonly property string devialetCtlCommand: "devialet-ctl"
@@ -206,7 +206,7 @@ Item {
             root.runCtl("mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        root.runCtl("volume " + clamped);
+        root.runCtl("volume " + clamped + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
         root.pendingAmpState.notifyVolume(clamped);
     }
 
@@ -226,7 +226,7 @@ Item {
             root.runCtl("mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        root.runCtl("volume " + clamped);
+        root.runCtl("volume " + clamped + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
         root.pendingAmpState.notifyVolume(clamped);
     }
 

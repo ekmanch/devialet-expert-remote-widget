@@ -7,14 +7,39 @@
 //! Usage:
 //!   devialet-ctl --ip <amp-ip> power <on|off>
 //!   devialet-ctl --ip <amp-ip> mute <on|off>
-//!   devialet-ctl --ip <amp-ip> volume <db, e.g. -20.0>
-//!   devialet-ctl --ip <amp-ip> source <status-broadcast index, 0-29>
+//!   devialet-ctl --ip <amp-ip> volume <db, e.g. -20.0> --hard-limit-db <db|none>
+//!   devialet-ctl --ip <amp-ip> source <status-broadcast index, 0-29> --hard-limit-db <db|none>
 //!
 //! `--ip` is required: unlike the original single-process Kotlin app (which
 //! held the target IP as instance state across its whole session), this CLI
 //! is a fresh process per invocation with no persisted "selected amp"
 //! concept yet (amp discovery/selection UI is a later phase) - so the
 //! caller (QML, eventually) must supply the target IP every time.
+//!
+//! `--hard-limit-db <db|none>` (Phase 8.1.0): **required** for `volume`
+//! and `source` (a missing flag is a CLI error, not a silent gap) - applies
+//! `devialet_protocol::volume_packet`'s hard-limit clamp to every
+//! volume-set command this invocation sends (the plain `volume` command,
+//! and `source`'s forced post-switch volume). The literal value `none`
+//! (case-insensitive) means explicitly unbounded - a deliberate choice,
+//! not a fallback for an omitted flag; see that function's own doc for why
+//! unbounded isn't the same as reintroducing a hardcoded ceiling. A named
+//! flag rather than a second positional value: `source` is expected to
+//! gain its own optional trailing value in Phase 8.0.1 (startup/
+//! source-switch volume) - two independent optional positional slots
+//! would be ambiguous about which value fills which when only one is
+//! given, where two independent named flags aren't.
+//!
+//! **This flag closes the hard-limit guarantee only for QML-originated
+//! invocations** - QML passes `volumeSettings.hardLimitDb` on every call
+//! (see plasmoid/contents/ui/FlyoutContent.qml, CompactRepresentation.qml).
+//! A bare manual invocation of this binary from a terminal now has to
+//! supply the flag explicitly (`--hard-limit-db none` for unbounded, or a
+//! real number) - the CLI has no way to independently re-derive the
+//! widget's configured limit itself without a value being passed in. See
+//! TODO.md's Phase 8.1.0 entry for why a fully caller-independent
+//! guarantee (e.g. this CLI reading Plasma's own KConfig directly) was
+//! investigated and not pursued.
 
 use devialet_protocol as proto;
 use std::net::{ToSocketAddrs, UdpSocket};
@@ -24,28 +49,68 @@ struct Args {
     ip: String,
     command: String,
     value: String,
+    /// `None` = flag not given at all (an error for `volume`/`source`,
+    /// checked at the point of use, not here - `power`/`mute` don't need
+    /// it). `Some(None)` = flag given as the literal `none` - explicitly
+    /// unbounded. `Some(Some(db))` = flag given with a real limit.
+    hard_limit_db: Option<Option<f64>>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.len() != 4 || raw[0] != "--ip" {
+    if raw.len() < 4 || raw[0] != "--ip" {
         return Err(usage());
     }
+    let ip = raw[1].clone();
+    let command = raw[2].clone();
+    let value = raw[3].clone();
+
+    let mut hard_limit_db = None;
+    let mut i = 4;
+    while i < raw.len() {
+        match raw[i].as_str() {
+            "--hard-limit-db" => {
+                let v = raw
+                    .get(i + 1)
+                    .ok_or_else(|| format!("--hard-limit-db requires a value\n\n{}", usage()))?;
+                hard_limit_db = Some(if v.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    Some(
+                        v.parse::<f64>()
+                            .map_err(|_| format!("expected a number or \"none\" for --hard-limit-db, got {:?}", v))?,
+                    )
+                });
+                i += 2;
+            }
+            other => return Err(format!("unknown argument {other:?}\n\n{}", usage())),
+        }
+    }
+
     Ok(Args {
-        ip: raw[1].clone(),
-        command: raw[2].clone(),
-        value: raw[3].clone(),
+        ip,
+        command,
+        value,
+        hard_limit_db,
     })
 }
 
 fn usage() -> String {
-    "usage: devialet-ctl --ip <amp-ip> <power|mute|volume|source> <value>\n\
+    "usage: devialet-ctl --ip <amp-ip> <power|mute|volume|source> <value> [--hard-limit-db <db|none>]\n\
      \n\
      \x20 power  on|off\n\
      \x20 mute   on|off\n\
-     \x20 volume <db, e.g. -20.0>  (clamped to -15.0 max, never sent louder)\n\
-     \x20 source <status-broadcast index, 0-29>"
+     \x20 volume <db, e.g. -20.0>  --hard-limit-db <db|none>  (required; \"none\" = explicitly unbounded)\n\
+     \x20 source <status-broadcast index, 0-29>  --hard-limit-db <db|none>  (required; applies to the forced post-switch volume)"
         .to_string()
+}
+
+/// `volume`/`source` both require the flag - a missing `--hard-limit-db`
+/// is a CLI usage error, not a silent "unbounded" default. Only an
+/// explicit `none` means unbounded.
+fn require_hard_limit(args: &Args) -> Result<Option<f64>, String> {
+    args.hard_limit_db
+        .ok_or_else(|| format!("--hard-limit-db is required (pass a number, or \"none\" to explicitly send unbounded)\n\n{}", usage()))
 }
 
 fn parse_on_off(value: &str) -> Result<bool, String> {
@@ -118,23 +183,33 @@ fn run() -> Result<(), String> {
                 .value
                 .parse()
                 .map_err(|_| format!("expected a number for volume, got {:?}", args.value))?;
-            send_twice(&socket, |p, c| proto::volume_packet(db, p, c), &mut counters)
-                .map_err(|e| format!("send failed: {e}"))?;
+            let hard_limit_db = require_hard_limit(&args)?;
+            send_twice(
+                &socket,
+                |p, c| proto::volume_packet(db, hard_limit_db, p, c),
+                &mut counters,
+            )
+            .map_err(|e| format!("send failed: {e}"))?;
         }
         "source" => {
             let index: u8 = args
                 .value
                 .parse()
                 .map_err(|_| format!("expected an integer 0-29 for source, got {:?}", args.value))?;
+            let hard_limit_db = require_hard_limit(&args)?;
             send_twice(&socket, |p, c| proto::source_packet(index, p, c), &mut counters)
                 .map_err(|e| format!("send failed: {e}"))?;
             // Forced follow-up volume after every source switch - not
             // optional, not source-dependent. See
             // docs/known-gotchas.md #5 and proto::SOURCE_SWITCH_VOLUME_DB's
-            // doc comment. Continues the same counter sequence.
+            // doc comment. Continues the same counter sequence. Also
+            // subject to the configured hard limit (Phase 8.1.0) like any
+            // other volume-set command - SOURCE_SWITCH_VOLUME_DB (-40dB)
+            // is normally well below any real limit, but a caller could in
+            // principle configure a stricter one.
             send_twice(
                 &socket,
-                |p, c| proto::volume_packet(proto::SOURCE_SWITCH_VOLUME_DB, p, c),
+                |p, c| proto::volume_packet(proto::SOURCE_SWITCH_VOLUME_DB, hard_limit_db, p, c),
                 &mut counters,
             )
             .map_err(|e| format!("send failed: {e}"))?;

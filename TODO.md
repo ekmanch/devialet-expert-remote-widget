@@ -4857,6 +4857,81 @@ architecture decisions; this file is just sequencing and status.
     (scroll/hover/click, and confirming a ConfigDialog change actually
     propagates live to all three surfaces).
 
+- [x] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
+  Done 2026-09-06 — owner live-soaked and confirmed. Independent
+  implementation work, but now consumes the setting 8.0.0 persisted
+  rather than a hardcoded test value. Any function in the
+  dependency-free protocol library crate that constructs/sends a
+  volume-set command clamps to the configured hard limit internally —
+  structural, not a check any particular caller (devialet-ctl, the
+  daemon's D-Bus handler, a future client) has to remember to apply.
+  This replaces Phase 3's hardcoded MAX_VOLUME_DB ceiling — confirm no
+  leftover hardcoded ceiling remains anywhere in the crate once this
+  lands. Add cargo tests covering: command at/above/below the limit,
+  limit unset (unbounded), and the boundary value itself. No QML
+  changes this phase.
+  - **Investigation gate result (before implementing the wiring, as this
+    entry's own process required)**: `MAX_VOLUME_DB` had exactly two
+    call sites in the whole codebase, both inside `devialet-ctl`
+    (`volume` and `source`'s forced post-switch volume) — confirmed by
+    grepping the daemon source too, which never constructs a
+    `volume_packet` itself (`NotifyVolumeCommand` only records the
+    optimistic-state mirror, it doesn't build/send a UDP packet). So one
+    clamp point, inside `devialet-ctl`, is structurally sufficient — no
+    second call site in the daemon needs its own value delivery.
+  - **No existing precedent for a Rust component reading Plasma's
+    KConfig directly** — the daemon's only on-disk config code
+    (`crates/devialet-remote-daemon/src/config.rs`) is a bespoke
+    plain-text file for its own persisted amp selection, unrelated to
+    Plasma's real `plasma-org.kde.plasma.desktop-appletsrc` INI format.
+    Building a reader for that (parsing KDE's group format, finding the
+    right containment/applet ID at runtime — the same brittle
+    path-discovery problem the AppletPopup size-key bug documents
+    elsewhere in this file) was judged new scope beyond this phase.
+  - **Chosen mechanism**: `devialet-ctl`'s `volume` and `source`
+    subcommands gain a **required** `--hard-limit-db <db|none>` flag
+    (named, not positional — `source` is expected to gain its own second
+    optional trailing value in Phase 8.0.1, startup-volume-db; two
+    independent optional *positional* slots would be ambiguous about
+    which value fills which when only one is given, two independent
+    named flags aren't). Owner-requested revision from this entry's
+    first draft: the flag is required, not optional-defaulting-to-
+    unbounded — a bare invocation with the flag omitted entirely is now
+    a CLI usage error (exit 1), not a silent "no limit" gap. The literal
+    value `none` (case-insensitive) is the explicit, deliberate way to
+    request unbounded — distinct from simply forgetting the flag.
+    Internally this is `Option<Option<f64>>`: outer `None` = flag not
+    given (error), `Some(None)` = explicit `none`, `Some(Some(db))` = a
+    real limit. QML passes `volumeSettings.hardLimitDb` (always a real
+    number, never `none`) on every invocation that can send a
+    volume-set command (`CompactRepresentation.qml`'s scroll handler,
+    `FlyoutContent.qml`'s step/slider-release/source-switch paths) —
+    all four already held `volumeSettings` as a `required property` from
+    Phase 8.0.0's shared-state work, so no new plumbing was needed to
+    get the value into QML itself.
+  - **Owner-accepted trade-off, stated explicitly rather than left
+    implicit**: this closes the "structural, caller-independent"
+    guarantee only for QML-originated commands, and only in the sense
+    that a bare terminal invocation is now forced to make a deliberate
+    choice (a real limit, or explicit `none`) rather than silently
+    defaulting either way — `devialet-ctl` still has no independent way
+    to know or re-derive the widget's actual configured limit itself
+    without the KConfig-reader work described above, which was
+    investigated and not pursued this phase. A fully caller-independent
+    guarantee (a manual CLI invocation automatically picking up the
+    widget's real configured limit with no flag at all) would require
+    that KConfig reader; owner explicitly accepted this narrower scope
+    rather than building it.
+  - **Owner's live soak (2026-09-06), the phase's real verification**:
+    tried a range of floors (-50dB down to -70dB) and ceilings (-20dB to
+    -10dB) via the real ConfigDialog/flyout against the real amp. Every
+    volume within the currently-configured range sent successfully; no
+    value outside it was reachable. The original snap-back symptom this
+    phase set out to fix (anything below -60dB or above -15dB reverting
+    within about a second) is gone — confirmed across multiple different
+    configured ranges, not just the one pair used during implementation
+    verification.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -4933,19 +5008,6 @@ architecture decisions; this file is just sequencing and status.
       need its own design pass, similar to the `VolumeSettings.qml`
       one. Explicitly deferred by the owner until after Phase 8.x.x is
       otherwise done.
-
-- [ ] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
-  Independent implementation work, but now consumes the setting
-  8.0.0 persisted rather than a hardcoded test value. Any function in
-  the dependency-free protocol library crate that constructs/sends a
-  volume-set command clamps to the configured hard limit internally —
-  structural, not a check any particular caller (devialet-ctl, the
-  daemon's D-Bus handler, a future client) has to remember to apply.
-  This replaces Phase 3's hardcoded MAX_VOLUME_DB ceiling — confirm no
-  leftover hardcoded ceiling remains anywhere in the crate once this
-  lands. Add cargo tests covering: command at/above/below the limit,
-  limit unset (unbounded), and the boundary value itself. No QML
-  changes this phase.
 
 - [ ] **Phase 8.2.0 — QML: slider bounds now span floor to hard limit.**
   Depends on 8.0.0 (done). **Likely already substantially done as a
