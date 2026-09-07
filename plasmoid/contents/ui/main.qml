@@ -13,6 +13,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import org.kde.plasma.plasmoid
+import org.kde.plasma.plasma5support as P5Support
 
 PlasmoidItem {
     id: root
@@ -55,6 +56,14 @@ PlasmoidItem {
     // this icon.
     Plasmoid.icon: Qt.resolvedUrl("../icons/devialet_icon_glow_dot.svg")
 
+    // Phase 8.4.0: same devialet-ctl invocation string CompactRepresentation.qml
+    // and FlyoutContent.qml each already define locally (their own
+    // devialetCtlCommand) - duplicated here for the identical reason
+    // VolumeSettings/PendingAmpState are duplicated-as-forwarded rather than
+    // reached-into: applyImmediateClamp() below must fire regardless of
+    // which representation (if any) is currently resident.
+    readonly property string devialetCtlCommand: "devialet-ctl"
+
     // Phase 5.0.1: single shared, root-anchored consumer of the daemon's
     // resolved VolumeDb/Muted - see PendingAmpState.qml's own header
     // comment for the full reasoning. Anchored here (main.qml's root
@@ -66,6 +75,41 @@ PlasmoidItem {
     // inside either one.
     PendingAmpState {
         id: pendingAmpState
+
+        // Phase 8.4.0 follow-up: catches the case where applyImmediateClamp()
+        // ran once already (from a floorDb/hardLimitDb change) while no amp
+        // was connected yet (ampIp === "" at the time) and so no-op'd -
+        // confirmed live: Phase 8.3.0's self-heal fires synchronously during
+        // Component.onCompleted, and Qt.callLater's deferred callback
+        // reliably beats the daemon's async D-Bus reply that populates
+        // ampIp, so the self-heal-triggered check was consistently no-op'ing
+        // even once the amp connected moments later - floorDb/hardLimitDb
+        // don't change again on their own, so nothing retried the check.
+        // Re-running the check when ampIp itself transitions (including
+        // "" -> a real IP) closes that gap, and also covers the general
+        // "widget starts up with an already-out-of-range stored volume"
+        // case, not just the self-heal one specifically.
+        //
+        // Deferred via Qt.callLater for a different, concrete reason than
+        // the floorDb/hardLimitDb coalescing above (not just consistency):
+        // onRefreshed/onPropertiesChanged above both assign root.ampIp
+        // BEFORE root.volumeDb in the same synchronous handler call - a
+        // synchronous (non-deferred) handler here would run in between
+        // those two assignments and read a stale/not-yet-updated volumeDb
+        // from the very refresh that just delivered the fresh one.
+        // Qt.callLater defers past both assignments, so volumeDb is
+        // guaranteed current by the time applyImmediateClamp() runs.
+        //
+        // No interaction with the floorDb/hardLimitDb coalescing above:
+        // ampIp changes come only from the daemon's async D-Bus signal
+        // delivery (onRefreshed/onPropertiesChanged in this file), entirely
+        // independent of the local Plasmoid.configuration writes that drive
+        // floorDb/hardLimitDb - these two trigger sources can't fire within
+        // the same synchronous tick. Even if they somehow did, all three
+        // handlers target the same root.applyImmediateClamp reference, so
+        // Qt.callLater's identity-based dedup would still collapse them to
+        // one call with no special-casing needed.
+        onAmpIpChanged: Qt.callLater(root.applyImmediateClamp)
     }
 
     // Same root-anchored-and-forwarded pattern as PendingAmpState above,
@@ -81,6 +125,32 @@ PlasmoidItem {
         hardLimitDb: Plasmoid.configuration.hardLimitDb
         stepDb: Plasmoid.configuration.volumeStepDb
         startupVolumeDb: Plasmoid.configuration.startupVolumeDb
+
+        // Phase 8.4.0: floorDb/hardLimitDb above are ordinary live bindings
+        // to Plasmoid.configuration.* - a single ConfigDialog Apply/OK click
+        // can change BOTH in the same tick (two separate, non-batched
+        // property-change signals fired back to back), and each would
+        // independently trigger applyImmediateClamp() if called directly -
+        // the first firing could see one new value paired with the other
+        // property's still-stale value, computing a transiently-wrong clamp
+        // target and sending a spurious/incorrect devialet-ctl command
+        // before the second, correct call. Qt.callLater dedupes repeated
+        // calls to the SAME function value within one event-loop turn, so
+        // passing the bare function (root.applyImmediateClamp, not a
+        // wrapping lambda - a lambda would be a fresh closure each call and
+        // would NOT dedupe) coalesces both signals into exactly one, fully-
+        // settled check per Apply/OK. Also composes for free with the
+        // Phase 8.3.0 self-heal below: Component.onCompleted runs
+        // synchronously, before any D-Bus reply (including
+        // pendingAmpState's own subscription) could plausibly have
+        // arrived, and Qt.callLater always defers to the next event-loop
+        // turn rather than running inline - so applyImmediateClamp() never
+        // executes mid-construction; by the time it runs, ampIp is either
+        // still "" (guard no-ops) or a real amp has connected in the
+        // meantime, in which case clamping against the now-healed range is
+        // correct, not a race.
+        onFloorDbChanged: Qt.callLater(root.applyImmediateClamp)
+        onHardLimitDbChanged: Qt.callLater(root.applyImmediateClamp)
 
         // Phase 8.3.0 self-heal: ConfigGeneral.qml's steppers can only
         // prevent a NEW invalid floor/hard-limit pair from being created
@@ -128,6 +198,63 @@ PlasmoidItem {
                 Plasmoid.configuration.hardLimitDb = -39.0;
             }
         }
+    }
+
+    // Phase 8.4.0: dedicated executable-engine DataSource for
+    // applyImmediateClamp() below - NOT shared with CompactRepresentation
+    // .qml's or FlyoutContent.qml's own `exec` (those are per-representation
+    // -file locals, and this must fire independent of which representation
+    // is resident - same reasoning as VolumeSettings/PendingAmpState living
+    // here). Same shape as both of those DataSources.
+    P5Support.DataSource {
+        id: clampExec
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-ctl finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    // Phase 8.4.0: immediate clamp when a settings change (ConfigDialog
+    // Apply/OK, or Phase 8.3.0's self-heal) moves the connected amp's live
+    // volume outside the new [floorDb, hardLimitDb] range. Owner decision
+    // (TODO.md's Phase 8.4.0 entry): both directions are required and
+    // symmetric (a lowered hard limit pulls volume down; a raised floor
+    // pulls volume up), firing immediately, not deferred to the next
+    // user-initiated volume change. Only the currently-connected amp
+    // (pendingAmpState.ampIp, mirroring the daemon's real AmpIp property -
+    // NOT SelectedAmpIp, which is UI-picker bookkeeping) is touched; other
+    // KnownAmps entries have no live volume to compare against and aren't
+    // reachable, matching every other volume call site's own
+    // `if (ampIp === "") return` guard.
+    //
+    // Fires the same two-step pattern as every other volume-change call
+    // site (CompactRepresentation.qml's stepVolume(), FlyoutContent.qml's
+    // stepVolume()/releaseVolume()): a devialet-ctl invocation via a
+    // Plasma5Support.DataSource, then pendingAmpState.notifyVolume() for
+    // the optimistic UI mirror - NOT a daemon-sent command (the daemon's
+    // NotifyVolumeCommand only ever records an optimistic mirror, it never
+    // sends UDP - see crates/devialet-remote-daemon/src/interface.rs and
+    // Phase 8.0.1's rejection of an autonomous second sender).
+    //
+    // Deliberately does NOT send "mute off" or call notifyMute(), unlike
+    // stepVolume()'s own muted-unmute-on-scroll behavior - the amp must
+    // stay muted through a settings-triggered correction (owner decision).
+    // Safe to omit: volume and mute are independent protocol commands with
+    // separate opcodes (docs/protocol.md's Mute on/off vs. Volume rows;
+    // devialet_protocol::volume_packet carries no mute bit, only the
+    // 0x8000 negative-dB sign bit), so a bare volume command doesn't
+    // unmute the amp at the protocol level - stepVolume()'s "mute off" is
+    // an added UX behavior for direct user interaction, not a side effect
+    // of the volume command itself.
+    function applyImmediateClamp() {
+        if (pendingAmpState.ampIp === "" || pendingAmpState.volumeDb === undefined) return;
+        const clamped = volumeSettings.clamp(pendingAmpState.volumeDb);
+        if (clamped === pendingAmpState.volumeDb) return;
+        clampExec.connectSource(root.devialetCtlCommand + " --ip " + pendingAmpState.ampIp +
+            " volume " + clamped + " --hard-limit-db " + volumeSettings.hardLimitDb);
+        pendingAmpState.notifyVolume(clamped);
     }
 
     compactRepresentation: CompactRepresentation {
