@@ -5377,9 +5377,40 @@ architecture decisions; this file is just sequencing and status.
     both bound directly to pendingAmpState.volumeDb, which updated
     correctly on every test above, so whichever surface is checked
     afterward necessarily shows the right value already.
-  - Multi-amp scope: not hardware-verified - only one amp has ever been
-    seen on the dev network. Code guarantee (guarded on
-    pendingAmpState.ampIp, never iterating KnownAmps) stands as designed.
+  - Multi-amp scope: **live-verified as a follow-up (2026-09-07)** using
+    the Phase 7.2.0 fake D-Bus daemon (`tools/flyout-harness/fakeamp.py`,
+    reused unmodified - no harness extension needed, it already accepts
+    an arbitrary `KnownAmps` array via `FakeAmp.set_amp()`) against the
+    real, already-running plasmoid, rather than continuing to rely on
+    code-reading alone. Fabricated two known amps on fictional IPs
+    (10.255.255.101 "connected"/selected, 10.255.255.102 "disconnected" -
+    deliberately NOT `scenarios.AMP_A`'s real 192.168.0.22, since
+    devialet-ctl sends a real UDP packet independent of the D-Bus daemon
+    being fake; reusing a real amp's real IP here would have sent a real
+    command to real hardware), connected amp at -20dB (in range, so the
+    AmpIp-transition-triggered check - the onAmpIpChanged fix above - is
+    itself exercised as a clean no-op first), then lowered hardLimitDb to
+    -30.0. Captured via a temporary devialet-ctl logging wrapper on the
+    `~/.local/bin/devialet-ctl` symlink (not part of the checked-in
+    harness - journalctl only logs exit code/stderr, not invocation args,
+    and the fake daemon's own D-Bus call log only sees NotifyVolumeCommand,
+    not the UDP-sending CLI, so neither existing mechanism alone could
+    show *which* IP was targeted). Result: exactly one devialet-ctl
+    invocation, `--ip 10.255.255.101 volume -30 --hard-limit-db -30`,
+    zero invocations naming .102 anywhere. Independently corroborated by
+    the fake daemon's own method-call log, which shows exactly one
+    `NotifyVolumeCommand('10.255.255.101', -30.0)` and nothing for .102 -
+    two independent capture mechanisms agreeing.
+    Scope of what this proves vs. doesn't: this verifies the QML-side
+    invocation-targeting guarantee end-to-end against the real, running
+    widget (pendingAmpState.ampIp is the only thing that ever reaches a
+    devialet-ctl --ip argument; KnownAmps is never iterated for this
+    purpose) - it does NOT exercise real multi-amp mDNS discovery/model-
+    name resolution (Phase 3.7) or two real amps broadcasting
+    simultaneously on the LAN, which stays genuinely untested (out of
+    scope here - this follow-up targets the settings-triggered-clamp
+    guarantee specifically, not amp discovery) and would need a second
+    physical amp to close.
 
   **Real bug found and fixed during this pass**: self-heal
   (Phase 8.3.0's Component.onCompleted) did NOT reliably trigger the
