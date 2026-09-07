@@ -5298,6 +5298,126 @@ architecture decisions; this file is just sequencing and status.
     change; a real load/render check is still needed) and a real
     dialog open afterward, with a fresh screenshot from the owner
     confirming the page renders correctly again.
+    
+- [x] **Phase 8.4.0 — Immediate clamp on settings change.**
+  Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the
+  Rust clamp to exist) — can be built alongside or after 8.2.0/8.3.0.
+  Correction to this entry's original wording: the daemon does NOT send
+  the command (its NotifyVolumeCommand only records an optimistic
+  pending_volume_db mirror - see interface.rs and Phase 8.0.1's explicit
+  rejection of the daemon as an autonomous second sender). The real
+  mechanism is main.qml issuing a devialet-ctl invocation via its own
+  Plasma5Support.DataSource (id: clampExec), exactly like every existing
+  volume-change call site (CompactRepresentation.qml's/FlyoutContent.qml's
+  stepVolume()/releaseVolume()), then calling
+  pendingAmpState.notifyVolume() for the optimistic mirror.
+  Both open questions below are now decided (owner, 2026-09-07):
+  - **Both directions are required and symmetric.** A newly-set hard
+    limit below the amp's current live volume immediately pulls it down
+    to the new limit; a newly-raised floor above the amp's current live
+    volume likewise immediately bumps it up to the new floor. Neither
+    is deferred to the next user-initiated volume change.
+  - **Only the currently-connected amp is touched.** Scoped to
+    pendingAmpState.ampIp (mirroring the daemon's real AmpIp property,
+    not SelectedAmpIp's UI-picker bookkeeping) - other/disconnected
+    KnownAmps entries have no live volume to compare against and aren't
+    reachable, matching every other volume call site's own
+    `if (ampIp === "") return` guard.
+  - **The amp stays muted through the correction.** Unlike
+    stepVolume()'s own muted-unmute-on-scroll UX, this path never sends
+    "mute off"/calls notifyMute() - volume and mute are independent
+    protocol commands (separate opcodes; volume_packet carries no mute
+    bit), so a bare volume command doesn't unmute the amp at the
+    protocol level, and the amp should stay silent/muted through a
+    settings-driven correction rather than audibly unmuting.
+  Interaction with Phase 5's pending-command architecture is correct by
+  construction: this reuses PendingAmpState.notifyVolume() itself, the
+  same call every other volume change already goes through - no bypass
+  possible. Implementation-specific risk to verify: a single
+  ConfigDialog Apply/OK can change both volumeFloorDb and hardLimitDb in
+  the same tick (two independent, non-batched property-change signals);
+  the handler coalesces these via Qt.callLater so exactly one
+  fully-settled check runs, not one per changed entry with a transiently
+  wrong intermediate value, and no-ops (sends nothing) when the clamped
+  value already equals the current value.
+
+  **Done 2026-09-07, live-verified against the real amp** (192.168.0.22,
+  "My Devialet-ETH", Devialet Expert 140 Pro). Settings changes driven via
+  the Plasma shell scripting API's `applet.writeConfig()`/`.reloadConfig()`
+  (`org.kde.PlasmaShell.evaluateScript`) rather than synthetic pointer
+  clicks, per this project's established owner-soak-over-scripted-pointer
+  convention - this exercises the exact same in-process
+  `Plasmoid.configuration` write path ConfigDialog's Apply/OK uses, without
+  needing simulated mouse input on the real desktop. Confirmed via
+  `busctl`/`journalctl`, not just code-reading:
+  - Ceiling pulls volume down: real amp -25dB → -30dB on lowering
+    hardLimitDb, one devialet-ctl invocation, exit 0.
+  - Floor pulls volume up: real amp -30dB → -20dB on raising
+    volumeFloorDb, one invocation, exit 0.
+  - No-op: widening the ceiling with volume already in range sent zero
+    devialet-ctl invocations.
+  - Coalescing: changing volumeFloorDb AND hardLimitDb in one
+    writeConfig/reloadConfig batch (mirroring a single Apply click)
+    produced exactly one invocation, not two and not a
+    wrong-then-corrected pair - confirms the Qt.callLater dedup works
+    against real, back-to-back property-change signals, not just in
+    theory.
+  - Muted amp stays muted: clamped -8dB → -10dB while Muted was true;
+    Muted stayed true throughout, and only a `volume` invocation ran (no
+    `mute` command was ever sent alongside it).
+  - Cross-surface consistency: cannot be directly observed - not a gap,
+    a structural non-event. Opening ConfigDialog dismisses the flyout via
+    `hideOnWindowDeactivate`, so the two are never simultaneously visible;
+    there's no window state in which a settings-triggered clamp could
+    show both surfaces at once for a side-by-side check. What stands in
+    for it: `notifyVolume()`'s synchronous write (PendingAmpState.qml)
+    means any later look at either surface is guaranteed correct by
+    construction, not by timing - VolumeBlock.qml's slider (`Binding {
+    when: !volumeSlider.pressed }`) and VolumeHoverTooltip.qml's text are
+    both bound directly to pendingAmpState.volumeDb, which updated
+    correctly on every test above, so whichever surface is checked
+    afterward necessarily shows the right value already.
+  - Multi-amp scope: not hardware-verified - only one amp has ever been
+    seen on the dev network. Code guarantee (guarded on
+    pendingAmpState.ampIp, never iterating KnownAmps) stands as designed.
+
+  **Real bug found and fixed during this pass**: self-heal
+  (Phase 8.3.0's Component.onCompleted) did NOT reliably trigger the
+  immediate clamp. Reproduced live: corrupted on-disk config to an
+  invalid floor/hardLimit ordering while the amp sat at a volume outside
+  the range self-heal would produce, then restarted plasmashell. Self-heal
+  correctly rewrote the config to -40.0/-39.0 (confirmed on disk and in
+  the journal), but the amp's volume never moved, even after waiting 10+
+  seconds with AmpIp confirmed populated - no delayed fire either.
+  Root-caused: `Component.onCompleted` runs synchronously during
+  construction; `Qt.callLater`'s deferred callback reliably fires on the
+  next event-loop tick, which beats the daemon's async D-Bus reply that
+  populates `pendingAmpState.ampIp` - so `applyImmediateClamp()`'s guard
+  saw `ampIp === ""` and no-op'd, and since floorDb/hardLimitDb don't
+  change again on their own, nothing ever retried the check once the amp
+  actually connected. (This only affects the on-disk-corruption-while-
+  the-widget-wasn't-running scenario - ConfigDialog Apply/OK, the
+  real-world trigger, is unaffected: an amp has always long since
+  connected by the time a user can click Apply.)
+
+  Fix: added `onAmpIpChanged: Qt.callLater(root.applyImmediateClamp)` on
+  `pendingAmpState` in main.qml, so the check re-runs once a connection
+  actually lands, not just when floorDb/hardLimitDb change. Deferred via
+  Qt.callLater for a distinct, verified reason (not just consistency with
+  the floorDb/hardLimitDb handlers): `PendingAmpState.qml`'s
+  `onRefreshed`/`onPropertiesChanged` assign `root.ampIp` before
+  `root.volumeDb` in the same synchronous handler call, so a
+  non-deferred handler here would read a stale/not-yet-updated volumeDb
+  from the very refresh that just delivered the fresh one. Confirmed no
+  interaction with the floorDb/hardLimitDb coalescing: ampIp changes come
+  only from the daemon's async D-Bus signal delivery, never from the same
+  tick as a local Plasmoid.configuration write. Re-verified live after the
+  fix: same corrupted-config-then-restart repro now shows the
+  self-heal console.log line immediately followed by exactly one
+  devialet-ctl invocation, real amp volume pulled from -16dB to the
+  healed -39dB ceiling. Re-ran the ceiling/no-op/coalescing checks above
+  again post-fix to confirm no regression (still exactly one invocation
+  each, correct values).
 
 ## Up next
 
@@ -5455,139 +5575,6 @@ architecture decisions; this file is just sequencing and status.
     final result). Confirm a startup volume set above the configured
     hard limit gets clamped in both the source-switch and power-on
     paths.
-
-
-- [x] **Phase 8.4.0 — Immediate clamp on settings change.**
-  Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the
-  Rust clamp to exist) — can be built alongside or after 8.2.0/8.3.0.
-  Correction to this entry's original wording: the daemon does NOT send
-  the command (its NotifyVolumeCommand only records an optimistic
-  pending_volume_db mirror - see interface.rs and Phase 8.0.1's explicit
-  rejection of the daemon as an autonomous second sender). The real
-  mechanism is main.qml issuing a devialet-ctl invocation via its own
-  Plasma5Support.DataSource (id: clampExec), exactly like every existing
-  volume-change call site (CompactRepresentation.qml's/FlyoutContent.qml's
-  stepVolume()/releaseVolume()), then calling
-  pendingAmpState.notifyVolume() for the optimistic mirror.
-  Both open questions below are now decided (owner, 2026-09-07):
-  - **Both directions are required and symmetric.** A newly-set hard
-    limit below the amp's current live volume immediately pulls it down
-    to the new limit; a newly-raised floor above the amp's current live
-    volume likewise immediately bumps it up to the new floor. Neither
-    is deferred to the next user-initiated volume change.
-  - **Only the currently-connected amp is touched.** Scoped to
-    pendingAmpState.ampIp (mirroring the daemon's real AmpIp property,
-    not SelectedAmpIp's UI-picker bookkeeping) - other/disconnected
-    KnownAmps entries have no live volume to compare against and aren't
-    reachable, matching every other volume call site's own
-    `if (ampIp === "") return` guard.
-  - **The amp stays muted through the correction.** Unlike
-    stepVolume()'s own muted-unmute-on-scroll UX, this path never sends
-    "mute off"/calls notifyMute() - volume and mute are independent
-    protocol commands (separate opcodes; volume_packet carries no mute
-    bit), so a bare volume command doesn't unmute the amp at the
-    protocol level, and the amp should stay silent/muted through a
-    settings-driven correction rather than audibly unmuting.
-  Interaction with Phase 5's pending-command architecture is correct by
-  construction: this reuses PendingAmpState.notifyVolume() itself, the
-  same call every other volume change already goes through - no bypass
-  possible. Implementation-specific risk to verify: a single
-  ConfigDialog Apply/OK can change both volumeFloorDb and hardLimitDb in
-  the same tick (two independent, non-batched property-change signals);
-  the handler coalesces these via Qt.callLater so exactly one
-  fully-settled check runs, not one per changed entry with a transiently
-  wrong intermediate value, and no-ops (sends nothing) when the clamped
-  value already equals the current value.
-
-  **Done 2026-09-07, live-verified against the real amp** (192.168.0.22,
-  "My Devialet-ETH", Devialet Expert 140 Pro). Settings changes driven via
-  the Plasma shell scripting API's `applet.writeConfig()`/`.reloadConfig()`
-  (`org.kde.PlasmaShell.evaluateScript`) rather than synthetic pointer
-  clicks, per this project's established owner-soak-over-scripted-pointer
-  convention - this exercises the exact same in-process
-  `Plasmoid.configuration` write path ConfigDialog's Apply/OK uses, without
-  needing simulated mouse input on the real desktop. Confirmed via
-  `busctl`/`journalctl`, not just code-reading:
-  - Ceiling pulls volume down: real amp -25dB → -30dB on lowering
-    hardLimitDb, one devialet-ctl invocation, exit 0.
-  - Floor pulls volume up: real amp -30dB → -20dB on raising
-    volumeFloorDb, one invocation, exit 0.
-  - No-op: widening the ceiling with volume already in range sent zero
-    devialet-ctl invocations.
-  - Coalescing: changing volumeFloorDb AND hardLimitDb in one
-    writeConfig/reloadConfig batch (mirroring a single Apply click)
-    produced exactly one invocation, not two and not a
-    wrong-then-corrected pair - confirms the Qt.callLater dedup works
-    against real, back-to-back property-change signals, not just in
-    theory.
-  - Muted amp stays muted: clamped -8dB → -10dB while Muted was true;
-    Muted stayed true throughout, and only a `volume` invocation ran (no
-    `mute` command was ever sent alongside it).
-  - Cross-surface consistency: not directly observed (would require a
-    real pointer click to open the hand-built FlyoutPopup, which has no
-    scripting-accessible open() - left to owner soak) but strongly implied
-    structurally, since VolumeBlock.qml's slider (`Binding { when:
-    !volumeSlider.pressed }`) and VolumeHoverTooltip.qml's text are both
-    bound directly to pendingAmpState.volumeDb, which updated correctly on
-    every test above.
-  - Multi-amp scope: not hardware-verified - only one amp has ever been
-    seen on the dev network. Code guarantee (guarded on
-    pendingAmpState.ampIp, never iterating KnownAmps) stands as designed.
-
-  **Real bug found and fixed during this pass**: self-heal
-  (Phase 8.3.0's Component.onCompleted) did NOT reliably trigger the
-  immediate clamp. Reproduced live: corrupted on-disk config to an
-  invalid floor/hardLimit ordering while the amp sat at a volume outside
-  the range self-heal would produce, then restarted plasmashell. Self-heal
-  correctly rewrote the config to -40.0/-39.0 (confirmed on disk and in
-  the journal), but the amp's volume never moved, even after waiting 10+
-  seconds with AmpIp confirmed populated - no delayed fire either.
-  Root-caused: `Component.onCompleted` runs synchronously during
-  construction; `Qt.callLater`'s deferred callback reliably fires on the
-  next event-loop tick, which beats the daemon's async D-Bus reply that
-  populates `pendingAmpState.ampIp` - so `applyImmediateClamp()`'s guard
-  saw `ampIp === ""` and no-op'd, and since floorDb/hardLimitDb don't
-  change again on their own, nothing ever retried the check once the amp
-  actually connected. (This only affects the on-disk-corruption-while-
-  the-widget-wasn't-running scenario - ConfigDialog Apply/OK, the
-  real-world trigger, is unaffected: an amp has always long since
-  connected by the time a user can click Apply.)
-
-  Fix: added `onAmpIpChanged: Qt.callLater(root.applyImmediateClamp)` on
-  `pendingAmpState` in main.qml, so the check re-runs once a connection
-  actually lands, not just when floorDb/hardLimitDb change. Deferred via
-  Qt.callLater for a distinct, verified reason (not just consistency with
-  the floorDb/hardLimitDb handlers): `PendingAmpState.qml`'s
-  `onRefreshed`/`onPropertiesChanged` assign `root.ampIp` before
-  `root.volumeDb` in the same synchronous handler call, so a
-  non-deferred handler here would read a stale/not-yet-updated volumeDb
-  from the very refresh that just delivered the fresh one. Confirmed no
-  interaction with the floorDb/hardLimitDb coalescing: ampIp changes come
-  only from the daemon's async D-Bus signal delivery, never from the same
-  tick as a local Plasmoid.configuration write. Re-verified live after the
-  fix: same corrupted-config-then-restart repro now shows the
-  self-heal console.log line immediately followed by exactly one
-  devialet-ctl invocation, real amp volume pulled from -16dB to the
-  healed -39dB ceiling. Re-ran the ceiling/no-op/coalescing checks above
-  again post-fix to confirm no regression (still exactly one invocation
-  each, correct values).
-
-- [ ] **Phase 8.5.0 — Full verification pass.**
-  Depends on 8.0.0-8.4.0. Live-verify: hard limit genuinely
-  unbypassable via devialet-ctl direct invocation and via rapid
-  scroll/slider-drag bursts (Phase 5.0.2's rapid-repeat concern applies
-  here too — confirm several fast steps near either end of the track
-  can't overshoot it even transiently); floor and hard limit both
-  correctly bound the slider's `from`/`to`; startup/source-switch
-  volume round-trips correctly through whatever mechanism 8.0.0 chose
-  and actually reaches `devialet-ctl source`; ordering validation from
-  8.3.0 behaves as decided; settings UI round-trips correctly (set,
-  close ConfigDialog, reopen, values persisted) for all three dB
-  settings; immediate-clamp behavior from 8.4.0 fires correctly in both
-  directions decided there, visible in flyout/tooltip/OSD
-  simultaneously per Phase 7's consistency guarantees; unbounded
-  (unset) behaves identically to today's widget with no limits
-  configured at all.
   
 - [ ] **Feat — Wire Appearance transparency into real
   rendering.** Depends on 8.0.0 (done — UI/KConfig already exist,
