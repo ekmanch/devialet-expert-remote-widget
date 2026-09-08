@@ -51,6 +51,12 @@ ColumnLayout {
     required property var sources
     required property int activeSourceIndex
     required property string activeSourceName
+    // 2026-09-08 follow-up: "Off" | "Booting" | "On", from FlyoutContent's
+    // guarded mirror - the row is selectable only while the amp is on
+    // (same gate as VolumeBlock/ActionRow's mute; the amp drops a source
+    // command while off/booting). The last-known source name stays
+    // shown, dimmed.
+    required property string powerState
     // Owner-driven open state (FlyoutContent.sourceListOpen) - drives the
     // caret only; the Popup itself is opened/closed by the owner.
     required property bool listOpen
@@ -64,7 +70,7 @@ ColumnLayout {
     // `SourceListOverlay.parent` to this.
     readonly property alias rowItem: sourceRow
 
-    readonly property bool interactive: sourceSelector.ampIp !== "" && sourceSelector.enabledSources.length > 0
+    readonly property bool interactive: sourceSelector.ampIp !== "" && sourceSelector.powerState === "On" && sourceSelector.enabledSources.length > 0
 
     // "No source" when nothing is selected - see header.
     readonly property string displayName: {
@@ -83,8 +89,9 @@ ColumnLayout {
     Layout.rightMargin: 16
     spacing: 0
     // Same whole-group dim as every block above (Android's
-    // setGroupEnabled(soundControls, connected)).
-    opacity: sourceSelector.ampIp === "" ? 0.4 : 1.0
+    // setGroupEnabled(soundControls, connected)), now keyed on
+    // `interactive` so an off/booting amp dims the row too.
+    opacity: sourceSelector.interactive ? 1.0 : 0.4
 
     // `.source-row`: surface bg, 1px divider border (copper-dim on hover),
     // 11px radius, padding 9px 10px, gap 10.
@@ -180,6 +187,7 @@ ColumnLayout {
 
         MouseArea {
             id: sourceRowArea
+            objectName: "sourceRowArea"
             anchors.fill: parent
             hoverEnabled: true
             enabled: sourceSelector.interactive

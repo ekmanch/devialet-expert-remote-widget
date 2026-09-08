@@ -5450,60 +5450,7 @@ architecture decisions; this file is just sequencing and status.
   again post-fix to confirm no regression (still exactly one invocation
   each, correct values).
 
-## Up next
-
-- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
-      real install location for the `devialet-ctl` binary (system-wide
-      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
-      than the current manual symlink, or `cargo install` into
-      `~/.cargo/bin`) and build/place it as part of the install script.
-      Currently a manual `~/.local/bin` symlink per README — fine for
-      dev, not a real install path.
-  - Verify: `devialet-ctl` is invocable from a fresh shell with no
-    manual step, on a machine that hasn't had it built/placed before.
-- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
-      install/upgrade logic the script needs — including handling the
-      "already installed, needs upgrade not install" case cleanly when
-      the script is re-run on a system that already has the widget.
-  - Verify: widget installs cleanly on a fresh system; re-running the
-    script on an already-installed system upgrades cleanly with no
-    `kpackagetool6` errors.
-- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
-      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
-      `enable --now` as part of the script.
-  - Verify: `systemctl --user status` shows the daemon running
-    immediately after install; survives a logout/login.
-- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
-      into one script a user runs after cloning the repo. Must be
-      idempotent — safe to re-run on an already-installed system
-      without duplicating units, breaking an existing install, or
-      erroring out. Sensible failure messages if a step fails partway
-      (don't leave the system in a half-installed state silently).
-  - Verify: a clean clone → run script → fully working widget + daemon
-    + CLI, end to end, no manual steps outside the script.
-  - Note for packaging/install script phase: both the devialet-ctl
-      symlink and the devialet-remote-daemon systemd unit's ExecStart
-      have independently gone stale against pre-own/-move paths on
-      this machine. The install script should generate/verify these
-      paths against wherever the repo actually lives at install time,
-      rather than leaving them as manually sed-substituted
-      placeholders per the current README instructions - this class of
-      bug will keep recurring otherwise.
-- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
-      deliberately whether an uninstall script is in scope for v1.0.0
-      or explicitly deferred — don't let it default to "skipped"
-      silently. If in scope: reverse of 4.6.3 (disable/remove the
-      systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
-      remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
-  - Verify (if implemented): a full uninstall leaves no systemd unit,
-    no installed plasmoid, and no leftover binary.
-- [ ] **Phase 6.0.5 — README install instructions.** Replace the
-      current manual multi-step install instructions with "clone the
-      repo, run install.sh." Keep the manual steps documented separately
-      only if 4.6.4's uninstall is deferred and manual removal
-      instructions are still needed.
-
-- [ ] **Phase 8.0.1 — devialet-ctl startup-volume CLI wiring.**
+- [x] **Phase 8.0.1 — devialet-ctl startup-volume CLI wiring.**
   Depends on 8.0.0 (done — persistence exists) and ideally waits until
   8.2.0-8.5.0 (floor/hard-limit range work) are done first — this
   phase is independent of those and doesn't block them, but the branch
@@ -5607,6 +5554,248 @@ architecture decisions; this file is just sequencing and status.
     hard limit gets clamped in both the source-switch and power-on
     paths.
   
+
+  **Implemented 2026-09-08 (branch feature/volume-limits); automatable
+  verification done and owner soak passed the same day** - the owner
+  ran the plan's items 5-10 live against the real amp (repeated source
+  switches landing on the configured startup volume; widget power-on
+  ×3 including with the flyout closed mid-boot, amp landing on the
+  configured value, not -42; above-limit startup volume clamped on
+  both paths; external power-on sending nothing; front panel and
+  flyout/tooltip agreeing after the send; Gate #3 feel - no -42 flash,
+  configured value at "On", and an in-window slider/scroll change
+  followed immediately with the amp ending on the hand's value) and
+  reported all passed. Both investigation
+  gates were run against the real amp on 2026-09-07 before any code
+  (amp restored to Optical 1 / -25 dB afterwards):
+  - **Gate #1, source switch - same-invocation send is reliable.** 6/6
+    alternating Optical 1 ↔ Roon Ready switches with the target
+    input's per-input memory pre-set to -30 (distinguishable from the
+    forced -40): the first broadcast ~200 ms after the zero-delay
+    source×2 + volume×2 send already carried the new index and -40
+    together and held for 4 s. No delay needed; the flag rides the
+    existing shape.
+  - **Gate #2, power-on.** `devialet-ctl --ip <ip> power on`, called
+    only from FlyoutContent.qml's togglePower(). Power-on and volume
+    cannot share an invocation (one command per process, fire-and-exit,
+    no way to wait for the 15.0-18.6 s boot) - the follow-up is the
+    existing `volume` subcommand ~500 ms after the daemon's PowerState
+    "On". The pending flag lives in FlyoutContent.qml (owner of the
+    only PowerState mirror and the only `power on` call site;
+    PendingAmpState's header forbids other properties; main.qml's root
+    is unnecessary since FlyoutPopup is a plain Dialog child, no
+    Loader, so FlyoutContent stays resident while hidden). Ordering
+    checked per Phase 8.4.0's method: the handler reads only
+    root.powerState and the flag, the Timer defers the send past the
+    whole PropertiesChanged handler, nothing reads
+    pendingAmpState.volumeDb, so no Qt.callLater needed. Two separate
+    amp findings came out of the raw-capture sweep (kept separate on
+    purpose): (a) the post-boot broadcast misreport (-42 broadcast vs
+    -40 front panel, no self-correct) = the "widget doesn't reflect
+    amp-initiated volume changes" bug in ## Bugs, now characterized
+    there and in known-gotchas #8; (b) commands reaching the amp before
+    its own startup-volume application are dropped - early-exit sweep
+    +2 ms 0/1, +100 ms 1/2, +200 ms 9/9 (all with the application at
+    ≤ +202 ms), +500 ms 3/3, +1018/+2030 ms 1/1; chosen
+    `startupVolumeAfterBootMs = 500`, the smallest round value above
+    the latest observed amp-side application (+394 ms). Known-gotchas
+    #9 carries the table.
+  - **Gate #3, post-boot display hold (owner request).** Without it every
+    surface shows -42 for ~300-500 ms between the misreport and the
+    send landing. Lives in PendingAmpState.qml (the one VolumeDb
+    consumer every surface reads) as the second instance of the 400 ms
+    PowerState-guard pattern: armed on "On" with the target, VolumeDb
+    pushes recorded but not applied, released on a **VolumeRaw** push
+    decoding to the held value (the daemon's deliberately unmasked
+    byte; the VolumeDb echo of our own NotifyVolumeCommand fires at the
+    send and proves nothing), 1500 ms bounded fallback to the last real
+    value. A user volume change inside the window re-targets both the
+    hold and the deferred send - verified at the amp level 4/4 (user
+    -30 at +161…+349 ms honored, resend idempotent) against the naive
+    design that lost the user's change 1/1. PendingAmpState's header
+    rule is amended to name VolumeRaw for this one purpose.
+  - **Changes**: `crates/devialet-ctl/src/main.rs` (optional
+    `--startup-volume-db`, `parse_args_from` + first `#[cfg(test)]`
+    module in the crate, 8 tests incl. the clamp composition);
+    `FlyoutContent.qml` (selectSource passes the pre-clamped target and
+    notifies; `pendingStartupVolumeIp`, `startupVolumeTimer`,
+    `onPowerStateChanged`, `sendStartupVolume()`; togglePower arms/
+    disarms); `PendingAmpState.qml` (`beginBootHold`/`endBootHold`,
+    `bootHoldIp/Db`, `lastRealVolumeDb`, `bootHoldTimer`, VolumeRaw
+    branch, notifyVolume re-target); `ConfigGeneral.qml` stepper desc
+    ("Applied after a widget-initiated power-on, and on every source
+    switch" - the old "when the daemon starts" was never true);
+    `interface.rs` comment only; `docs/known-gotchas.md` #8/#9. No
+    daemon behaviour change.
+  - **Automatable verification (2026-09-08)**: `cargo test` 8 + 39
+    passing, clippy clean. CLI byte-level check with a local UDP
+    listener on 45455: `source 0 --hard-limit-db -10
+    --startup-volume-db -30` → packets 3/4 bytes 8-9 == `volume -30`'s;
+    `--startup-volume-db -5` → == `volume -10` (clamped); flag omitted →
+    == `volume -40`, exit 0, no stderr; swapped flag order identical;
+    bad/missing value → exit 1, no packets. Standalone Qt 6 `qml`
+    driver instantiating the real PendingAmpState.qml against
+    tools/flyout-harness/fakeamp.py: 20/20 (arm shows target at once;
+    misreport push not applied; VolumeDb-only echo does not release;
+    raw 129 releases; normal push applies after; user notifyVolume
+    re-targets and only the user's raw releases; fallback fired at
+    1502 ms to the last real value; AmpIp change ends the hold while
+    an unchanged AmpIp re-emit does not; target == misreport confirms
+    immediately; one NotifyVolumeCommand per send). Live plasmashell
+    display check (real daemon stopped, fake daemon on 10.255.255.1,
+    `startupVolumeDb` set to -33 via the scripting API, LayoutProbe
+    dumps of `dbValueLabel`): On + raw 111/-42 → label -33.0, never
+    -42; NotifyVolumeCommand(-33.0) at +503/+502 ms and the journal's
+    `running: devialet-ctl --ip 10.255.255.1 volume -33 --hard-limit-db
+    -10`, exit 0; non-matching raw while held keeps -33.0 (+1250 ms);
+    raw 129 releases and a following -32 push shows -32.0 before the
+    fallback (+1250 ms); unconfirmed → -42.0 at +2250 ms (1500 ms
+    fallback); a boot-timeout "Off" disarms so a later On shows -42.0
+    and sends nothing. Arming was driven by setting
+    `pendingStartupVolumeIp` through the harness UiState hook (the
+    state togglePower() sets) - togglePower()'s own arm/disarm lines
+    and the in-window manual override are pointer-driven and left to
+    the owner soak. Note for future harness runs: the Qt 6 tool is
+    `/usr/lib/qt6/bin/qml` (`/usr/bin/qml` is Qt 5) and needs
+    `QT_FORCE_STDERR_LOGGING=1` or its console output goes to journald.
+
+- [x] **Phase 8.0.1 follow-up — volume inputs gated on PowerState
+  (owner soak finding, 2026-09-08).** Owner observed during a boot:
+  the slider looked live during "Booting" and a drag snapped back to
+  the pre-power-off value within a fraction of a second.
+  - **Root cause, pre-existing (not the boot hold):** the daemon's Phase
+    5.0.0 pending-command mask (`PENDING_COMMAND_TIMEOUT` 400 ms,
+    `resolve_pending_commands`, commit e87afd1). A drag while off/
+    booting sends `volume` + `NotifyVolumeCommand`; the amp drops the
+    UDP command (gotcha #9 shows drops even 2 ms after "On"), nothing
+    confirms it, and the next recompute after the 400 ms deadline (next
+    broadcast, or the 1 s poll tick) reverts VolumeDb to the amp's real
+    status byte. Reproduced daemon-only: `NotifyVolumeCommand(-33)` with
+    no UDP sent → VolumeDb -33 at +1 ms, back to -30 at +472 ms
+    (deadline + one ~200 ms broadcast). Journal from the soak: `power on`
+    at 20:17:20.97, five slider releases at +1.2…+6.5 s during boot.
+    The daemon diff for 8.0.1 is comment-only and the QML volume path's
+    only new line is the hold re-target, a no-op while nothing is held.
+    The mask is doing its job; the fix is to not offer the control.
+  - **Gap was for both "Off" and "Booting", on every input:** every
+    volume input gated on `ampIp !== ""` alone - VolumeBlock's 0.4
+    group dim and the −/slider/+ `enabled`, CompactRepresentation's
+    stepVolume()/onWheel (its own mirror read no power property at
+    all), FlyoutContent's stepVolume()/releaseVolume(), and main.qml's
+    settings-triggered applyImmediateClamp(). Only the power button knew
+    about "Booting".
+  - **Fix:** `VolumeBlock.qml` gains `required property string
+    powerState` and `interactive` (`ampIp !== "" && powerState ===
+    "On"`) driving the group opacity (the same 0.4 factor Phase 8.3.0
+    reused for blocked steppers) and the three `enabled` bindings; the
+    dB readout stays, dimmed. FlyoutContent passes its own guarded
+    `powerState` - the property whose change handler arms the boot
+    hold, so the slider becomes interactive in the tick the hold arms -
+    and guards stepVolume()/releaseVolume() for queued autoRepeat ticks.
+    `main.qml` gets a root-anchored, unguarded PowerState mirror
+    (`ampPowerState`, its own `Dbus.Properties`) forwarded to
+    CompactRepresentation as `powerState` (guards stepVolume(), hence
+    the wheel) and used by applyImmediateClamp(); chosen over a second
+    per-consumer subscription or reaching into FlyoutContent's mirror
+    (CLAUDE.md's shared-state rule). It lags the flyout's optimistic
+    "Booting" by at most one broadcast after a power click. The clamp
+    is also re-run on ampPowerState → "On": the daemon emits one
+    PropertiesChanged message per property, so the existing
+    onAmpIpChanged → Qt.callLater fired between the AmpIp and
+    PowerState messages of one burst and read a stale "Off" (fake
+    daemon: a selection change to an already-on amp with -5 dB sent
+    nothing until this was added). Caveat left documented in main.qml:
+    a clamp fired at the first "On" can land inside gotcha #9's
+    acceptance window; only matters when the amp's own startup volume is
+    outside [floor, hardLimit]. `LayoutProbe.qml` now logs `en`
+    (item.enabled) so a run can assert blocked, not just dimmed.
+  - **Verified (fake daemon, live plasmashell, LayoutProbe dumps of
+    volumeBlock/volumeDownButton/volumeSlider/volumeUpButton/
+    dbValueLabel):** On → opacity 1, all enabled; Off and Booting →
+    opacity 0.4, all disabled, readout still "-25.0"; no amp → 0.4,
+    disabled, "—"; armed while Off stays disabled; Off → On with the
+    misreport → the same dump shows the hold's "-40.0" and the inputs
+    enabled; startup send once; applyImmediateClamp with -5 dB arriving
+    on an Off amp sends nothing, on an On amp clamps once to -10 (fake's
+    NotifyVolumeCommand(-10.0) + one devialet-ctl exit 0). Journal clean
+    of QML errors. Owner soak 2026-09-08: passed - volume controls and
+    panel scroll dimmed and inert while off/booting, live again at "On".
+  - **Same gate extended to Mute and Source (owner screenshot, same
+    day):** with the amp off the flyout still showed "Unmute" in copper
+    and a selectable "Roon Ready" row. `ActionRow.qml` gains
+    `muteInteractive` (`ampIp !== "" && powerState === "On"`) driving
+    the mute button's own `enabled` + 0.4 opacity - on the button, not
+    the row, because the power button beside it must stay live while
+    the amp is off. `SourceSelector.qml` gains `required property string
+    powerState`; its existing `interactive` now also requires "On" and
+    drives the row's opacity (previously keyed on ampIp alone).
+    FlyoutContent forwards `powerState`, guards toggleMute()/
+    selectSource(), and closes an open source list when powerState
+    leaves "On"; CompactRepresentation's middle-click toggleMute() gets
+    the same guard. Labels keep their last-known text, dimmed.
+    `sourceRowArea` got an objectName for the probe. Verified via
+    LayoutProbe (fake daemon, Muted=true, Roon Ready active): On → mute
+    and row enabled/1.0; Off and Booting → both disabled/0.4, "Unmute"
+    and "Roon Ready" still shown, power button enabled for Off and
+    disabled for Booting as before, slider matching; list opened while
+    On closes on Off; no-amp unchanged. 7/7. Owner soak 2026-09-08:
+    passed - mute button and source row dimmed and inert while off/
+    booting, last-known labels kept, live again at "On".
+
+
+## Up next
+
+- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
+      real install location for the `devialet-ctl` binary (system-wide
+      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
+      than the current manual symlink, or `cargo install` into
+      `~/.cargo/bin`) and build/place it as part of the install script.
+      Currently a manual `~/.local/bin` symlink per README — fine for
+      dev, not a real install path.
+  - Verify: `devialet-ctl` is invocable from a fresh shell with no
+    manual step, on a machine that hasn't had it built/placed before.
+- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
+      install/upgrade logic the script needs — including handling the
+      "already installed, needs upgrade not install" case cleanly when
+      the script is re-run on a system that already has the widget.
+  - Verify: widget installs cleanly on a fresh system; re-running the
+    script on an already-installed system upgrades cleanly with no
+    `kpackagetool6` errors.
+- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
+      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
+      `enable --now` as part of the script.
+  - Verify: `systemctl --user status` shows the daemon running
+    immediately after install; survives a logout/login.
+- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
+      into one script a user runs after cloning the repo. Must be
+      idempotent — safe to re-run on an already-installed system
+      without duplicating units, breaking an existing install, or
+      erroring out. Sensible failure messages if a step fails partway
+      (don't leave the system in a half-installed state silently).
+  - Verify: a clean clone → run script → fully working widget + daemon
+    + CLI, end to end, no manual steps outside the script.
+  - Note for packaging/install script phase: both the devialet-ctl
+      symlink and the devialet-remote-daemon systemd unit's ExecStart
+      have independently gone stale against pre-own/-move paths on
+      this machine. The install script should generate/verify these
+      paths against wherever the repo actually lives at install time,
+      rather than leaving them as manually sed-substituted
+      placeholders per the current README instructions - this class of
+      bug will keep recurring otherwise.
+- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
+      deliberately whether an uninstall script is in scope for v1.0.0
+      or explicitly deferred — don't let it default to "skipped"
+      silently. If in scope: reverse of 4.6.3 (disable/remove the
+      systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
+      remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
+  - Verify (if implemented): a full uninstall leaves no systemd unit,
+    no installed plasmoid, and no leftover binary.
+- [ ] **Phase 6.0.5 — README install instructions.** Replace the
+      current manual multi-step install instructions with "clone the
+      repo, run install.sh." Keep the manual steps documented separately
+      only if 4.6.4's uninstall is deferred and manual removal
+      instructions are still needed.
+
 - [ ] **Feat — Wire Appearance transparency into real
   rendering.** Depends on 8.0.0 (done — UI/KConfig already exist,
   `transparencyEnabled`/`transparencyPercent`). Per owner decision
@@ -5692,11 +5881,35 @@ architecture decisions; this file is just sequencing and status.
     (amp-initiated volume changes not picked up unless the widget/app
     has sent a volume command at least once itself) rather than
     something specific to this widget's implementation.
-  - Not investigated yet - root cause could be in the daemon (not
-    picking up/re-broadcasting an amp-initiated UDP volume change) or
-    the widget (not reacting to a D-Bus property it does receive).
-    Likely also affects volume changes from the amp's own front panel
-    or another remote, not just power-cycling - worth confirming.
+  - **Characterized 2026-09-07 (Phase 8.0.1's Gate #2 investigation),
+    root cause is the amp's firmware, not the daemon or the widget.**
+    Method: an independent raw UDP capture on port 45454 (a second
+    SO_REUSEADDR socket logging byte 562 bit 0x80 = power and byte 565
+    = raw volume, dB = (raw - 195) / 2) merged with `busctl` polling of
+    the daemon on one clock, across 21+ real power cycles. Findings:
+    - The daemon tracks every raw-byte change within 1-40 ms and the
+      D-Bus push follows immediately - nothing in UDP → daemon → D-Bus
+      → QML drops or lags an amp-initiated change. The earlier "could
+      be daemon or widget" guess is ruled out on this path.
+    - The first `power_on` packet after boot still carries the
+      pre-shutdown byte (raw 145 = -25); ~200 ms later the broadcast
+      switches to **raw 111 = -42.0** and stays there for 30 s+ with no
+      command in flight. The owner read the front panel at that moment:
+      **-40**, the configurator's startup setting. So the amp is really
+      at -40 and its own broadcast is wrong by 2 dB - the "stale -42
+      while the amp is at -40" seen above was the widget faithfully
+      showing the amp's misreport, not a stale local value.
+    - It does not self-correct. Any volume command (any value) makes
+      the broadcast track the real level again immediately (verified
+      each time the test restored -25 after a boot) - which is exactly
+      why touching the slider "fixed" it. Now docs/known-gotchas.md #8.
+  - Consequence for scope: Phase 8.0.1's post-boot startup send (500 ms
+    after a widget-initiated boot confirms) incidentally re-syncs the
+    broadcast for that path only. An external power-on (physical
+    remote, front panel) stays exposed to the misreport by design
+    (owner decision: widget-initiated only). Kept open for that case;
+    front-panel/remote volume changes on an already-running amp were
+    not tested here and remain unverified.
 
 ## Not yet scoped / parked
 

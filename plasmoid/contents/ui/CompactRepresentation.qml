@@ -53,6 +53,14 @@ MouseArea {
     // startup dB) - see VolumeSettings.qml's own header comment and this
     // file's header comment above.
     required property VolumeSettings volumeSettings
+    // 2026-09-08 follow-up: the amp's PowerState, from main.qml's root-
+    // anchored mirror (ampPowerState) - forwarded like pendingAmpState/
+    // volumeSettings rather than reaching into the flyout's own guarded
+    // mirror, per CLAUDE.md's "Shared cross-view state" rule. Gates the
+    // panel-icon scroll: with the amp off or booting the amp drops volume
+    // commands and the daemon's 400 ms pending mask snaps the optimistic
+    // value back, so a scroll must not be turned into a command at all.
+    required property string powerState
 
     // ---- Local mirror of just the D-Bus state this icon needs (see
     // header comment for why this isn't shared with FullRepresentation) ----
@@ -105,7 +113,9 @@ MouseArea {
     }
 
     function stepVolume(direction) {
-        if (root.ampIp === "") return;
+        // Power gate - see `powerState` above. Also guards onWheel below,
+        // whose notches all route through here.
+        if (root.ampIp === "" || root.powerState !== "On") return;
         // Phase 5.0.2 Step B: base now reads pendingAmpState.volumeDb,
         // not a local copy - safe because PendingAmpState.notifyVolume()
         // writes it synchronously before its D-Bus call, so a rapid
@@ -147,7 +157,8 @@ MouseArea {
     // on why state here is an independent mirror, not shared, matching the
     // same precedent stepVolume() above already established).
     function toggleMute() {
-        if (root.ampIp === "") return;
+        // Power gate - same as stepVolume() above (middle-click mute).
+        if (root.ampIp === "" || root.powerState !== "On") return;
         // Phase 5.0.2 Step B: see the matching comment in stepVolume() -
         // same reasoning, reads pendingAmpState.muted instead of a local
         // copy.

@@ -647,8 +647,11 @@ impl AmpState {
                 // stays a pure, unfiltered reflection of the amp's real
                 // status byte even while a pending VolumeDb is active - it's
                 // documented as a debug/manual-verification aid independent
-                // of the dB formula, not something QML's UI reads, so there
-                // is no matching "pending" concept for it to prefer.
+                // of the dB formula, so there is no matching "pending"
+                // concept for it to prefer. Since Phase 8.0.1 QML does read
+                // it for one thing (PendingAmpState.qml's post-boot hold
+                // confirms against it precisely *because* it is unmasked);
+                // keep it unfiltered.
                 self.muted = amp.pending_muted.map(|(v, _)| v).unwrap_or(amp.status.muted);
                 self.volume_raw = amp.status.volume_raw;
                 self.volume_db = amp.pending_volume_db.map(|(v, _)| v).unwrap_or_else(|| amp.status.volume_db());

@@ -376,7 +376,7 @@ KCM.SimpleKCM {
 
         SettingsRow {
             name: "Startup / source-switch volume"
-            desc: "Set automatically when the daemon starts, or whenever the source changes"
+            desc: "Applied after a widget-initiated power-on, and on every source switch"
 
             DbStepper {
                 value: root.cfg_startupVolumeDb

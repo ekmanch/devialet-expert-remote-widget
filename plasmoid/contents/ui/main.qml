@@ -14,6 +14,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import org.kde.plasma.plasmoid
 import org.kde.plasma.plasma5support as P5Support
+import org.kde.plasma.workspace.dbus as Dbus
 
 PlasmoidItem {
     id: root
@@ -248,8 +249,17 @@ PlasmoidItem {
     // unmute the amp at the protocol level - stepVolume()'s "mute off" is
     // an added UX behavior for direct user interaction, not a side effect
     // of the volume command itself.
+    //
+    // Power gate (2026-09-08 follow-up): no command while the amp is off or
+    // booting - the amp drops it and the daemon's 400 ms pending mask
+    // reverts the optimistic value, so the clamp would only flash. The
+    // next ampIp/setting change re-runs the check; a stored out-of-range
+    // volume on a powered-off amp is corrected at the first user volume
+    // action after boot (every input is gated the same way), not silently
+    // during boot.
     function applyImmediateClamp() {
         if (pendingAmpState.ampIp === "" || pendingAmpState.volumeDb === undefined) return;
+        if (root.ampPowerState !== "On") return;
         const clamped = volumeSettings.clamp(pendingAmpState.volumeDb);
         if (clamped === pendingAmpState.volumeDb) return;
         clampExec.connectSource(root.devialetCtlCommand + " --ip " + pendingAmpState.ampIp +
@@ -257,10 +267,51 @@ PlasmoidItem {
         pendingAmpState.notifyVolume(clamped);
     }
 
+    // 2026-09-08 follow-up: the amp's PowerState ("Off"/"Booting"/"On"),
+    // read once here at the root and forwarded down (CompactRepresentation
+    // below; applyImmediateClamp() above) - the same root-anchored pattern
+    // as PendingAmpState/VolumeSettings, chosen over giving each consumer
+    // its own subscription or reaching into FlyoutContent's mirror.
+    // FlyoutContent keeps its own copy on purpose: that one carries the
+    // 400 ms optimistic guard for its power button and arms the boot hold;
+    // this one is a plain, unguarded read used only to gate inputs, so it
+    // lags the flyout's optimistic "Booting" by at most one broadcast
+    // (~200 ms) after a power click. Not added to PendingAmpState (its
+    // header rule restricts it to the volume/mute domain).
+    property string ampPowerState: "Off"
+    // Re-run the clamp check when the amp comes on. Needed for ordering,
+    // not just completeness: the daemon emits one PropertiesChanged
+    // message per property, so PendingAmpState's onAmpIpChanged ->
+    // Qt.callLater fires between the AmpIp and PowerState messages of the
+    // same burst and reads a stale "Off" (seen with the fake daemon: a
+    // selection change to an already-on amp with an out-of-range volume
+    // sent nothing). Same Qt.callLater target, so the two triggers
+    // collapse to one call. Caveat, documented rather than solved: a
+    // command fired at the first "On" can fall inside the amp's post-boot
+    // acceptance window (docs/known-gotchas.md #9) and be dropped; the
+    // daemon then reverts and the next ampIp/setting change or user
+    // volume action re-checks. That only matters when the amp's own
+    // startup volume is outside the widget's [floor, hardLimit], so it
+    // is not given its own delay here.
+    onAmpPowerStateChanged: if (root.ampPowerState === "On") Qt.callLater(root.applyImmediateClamp)
+
+    Dbus.Properties {
+        id: powerProps
+        busType: Dbus.BusType.Session
+        service: pendingAmpState.serviceName
+        path: pendingAmpState.objectPath
+        iface: pendingAmpState.interfaceName
+        onRefreshed: root.ampPowerState = pendingAmpState.unwrap(properties.PowerState, "Off")
+        onPropertiesChanged: (interfaceName, changed, invalidated) => {
+            if ("PowerState" in changed) root.ampPowerState = pendingAmpState.unwrap(changed.PowerState, root.ampPowerState);
+        }
+    }
+
     compactRepresentation: CompactRepresentation {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
         volumeSettings: volumeSettings
+        powerState: root.ampPowerState
     }
 
     // Phase 7.13.0 cleanup: FullRepresentation.qml itself is deleted, but

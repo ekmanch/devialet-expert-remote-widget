@@ -285,6 +285,9 @@ Item {
                     vis: item.visible, op: item.opacity
                 };
                 if (item.text !== undefined) rec.text = String(item.text);
+                // `en` (2026-09-08): the item's own `enabled` - lets a run
+                // assert an input is really blocked, not just dimmed.
+                if (item.enabled !== undefined) rec.en = item.enabled;
                 if (item.font !== undefined && item.font !== null && item.font.pixelSize !== undefined) rec.fpx = item.font.pixelSize;
                 console.log(probe.tag + JSON.stringify(rec));
                 session.count++;
