@@ -5742,6 +5742,145 @@ architecture decisions; this file is just sequencing and status.
     passed - mute button and source row dimmed and inert while off/
     booting, last-known labels kept, live again at "On".
 
+- [x] **Phase 9.0.0 — Design pass: how transparency state reaches
+  Theme.qml.** Done 2026-09-08 on branch `feature/transparency` (this
+  entry previously named `feature/appearance-transparency`; the branch
+  actually created is `feature/transparency` - corrected here, nothing
+  else about the phase's scope changed). Design/investigation only, per
+  the brief: no 9.1.0/9.2.0 wiring shipped. Deliverables: the new
+  `plasmoid/contents/ui/TransparencySettings.qml` (the mechanism, left
+  untracked for the owner to add), CLAUDE.md's "Shared cross-view state"
+  note (Theme.qml paragraph), and the findings below. Owner decisions
+  taken during planning: **`transparencyPercent` is OPACITY** (alpha =
+  percent / 100; 94 reproduces the OSD's 0.94, 100 is opaque) - the row
+  text "Let the desktop show through" reads as transparency, but the
+  stored number is opacity, so 9.1.0 must not invert it; and the
+  slider-range question is decided from the sweep below, not assumed.
+  - **Gate 1 - the setting is real, and its visibility is bounded by
+    wallpaper contrast, not by Plasma.** All three surfaces are
+    `PlasmaCore.Dialog` + `NoBackground` (FlyoutPopup.qml:123,
+    VolumeToast.qml:103, VolumeHoverTooltip.qml:88); CLAUDE.md's
+    "infeasible" verdict only ever applied to the shell's `PlasmaWindow`
+    popup. Blur-behind is unavailable and stays so (dialog.cpp clears
+    the blur region under NoBackground; no QML-reachable KWin blur API),
+    so the effect is a plain composite `out = a*tint + (1-a)*behind`.
+    Measured live with a screen-sized ARGB `qml` window of mock panel
+    cards (same tint/border/text/button colours as Theme.qml) at
+    100/97/94/90/85/82/70/50 % over three backdrops in one capture -
+    the real wallpaper (`5825739.jpg`), opaque grey 128, opaque white
+    255 (scratchpad `sweep.qml`, values agree with the formula to <1
+    level). Max-channel 8-bit delta between adjacent steps:
+    - over white: 7.1 / 7.0 / 9.1 / 12.1 / 7.9 / 28.3 / 46.9 (about
+      2.35 levels per 1 %);
+    - over grey 128: 3.1 / 3.0 / 4.1 / 6.1 / 3.9 / 13.3 / 20.9 (about
+      1.1 per 1 %);
+    - over the owner's wallpaper (file median luminance 44, only 14 %
+      of pixels above 128): about 0.25 levels per 1 % at the median -
+      100/97/94/90 are indistinguishable except over the planet
+      highlight, 85/82 show its glow, 70/50 are clearly see-through.
+    Legibility of `textDim` (#9a9a9f) over white: fine at 82 (tint 61),
+    weak but readable at 70 (tint 90), gone at 50 (tint 136, the label
+    vanishes); over grey 128 it still reads at 50 (tint 72). Buttons
+    (`surface*`) and the overlay cards stay opaque at every step, so a
+    low alpha reads as solid islands on a see-through sheet.
+    Consequences for 9.1.0 (recommendations, owner's call): a 1 % step
+    is below perception everywhere but pure white, so `stepSize: 2`
+    (94 stays reachable); a slider floor of **50** (the lowest value
+    still legible over anything but pure white; 70 is the always-legible
+    bound - documented, not recommended as the floor because it removes
+    a real option for dark wallpapers like this one). 0..100 as mocked
+    keeps a 0-49 zone that is achievable but useless.
+  - **Provenance of 0.82 and 0.94 - both from the mockups, both resting
+    on blur that never existed.** `git show d5f4d60` (Phase 4.0):
+    `design/mockups/devialet_tray_flyout_mockup.html` line 82,
+    `.flyout.blur-enabled{ background: linear-gradient(... rgba(23,23,
+    26,0.82) ...) }` - the value WAS in the mockup, in its blur-on
+    variant; the current v11 moved the base rule to `--panel-alpha:1`
+    and left `.blur-enabled` as a pure `backdrop-filter`, which is why
+    the parked entry could not find it. 0.94 is
+    `design/mockups/OSD/devialet_volume_osd_mockup_v3.html:61`, paired
+    with `backdrop-filter: blur(18px)` on line 65. Neither was invented
+    or mis-attributed; both assume an 18 px backdrop blur Plasma never
+    provided, so neither number has a rationale left. Commit 601e14a
+    (removed in e084543) wired `transparencyEnabled ? 0.82 : 1.0` once;
+    the slider (mockup literal 72) was never wired - its default is a
+    placeholder, not a design decision.
+  - **Gate 2 - mechanism: `TransparencySettings.qml`, root-anchored and
+    forwarded like `VolumeSettings.qml`; alpha stays OUT of Theme.qml.**
+    Plain QtObject: `required property bool enabled`, `required property
+    int percent`, `readonly property real alpha` (1.0 when disabled,
+    clamped 0..1 otherwise), `function withAlpha(color)` (reads
+    `root.alpha` live - same reactive-function idiom as
+    `VolumeSettings.clamp()`). main.qml instantiates it once bound to
+    `Plasmoid.configuration.transparencyEnabled/transparencyPercent` and
+    forwards it CompactRepresentation -> FlyoutPopup -> FlyoutContent,
+    and from CompactRepresentation into VolumeToast/VolumeHoverTooltip.
+    Theme.qml keeps ONE opaque base pair (`panelTintTop` #17171a /
+    `panelTintBottom` #121214) and loses both alpha-bearing pairs;
+    consumers write `transparencySettings.withAlpha(theme.panelTintTop)`.
+    Rejected: a `required property` on Theme.qml - `Theme {}` is
+    instantiated in four files including `ConfigGeneral.qml:44`, a
+    separate ConfigDialog QML tree with no path to main.qml's root
+    objects, so `required` breaks that page and a defaulted property
+    silently permits the divergence the pattern exists to prevent.
+    Rejected: folding into VolumeSettings.qml - unrelated domain, the
+    name would lie, and that file's header scopes it to volume-range
+    math the same way PendingAmpState's header kept `ampPowerState` out.
+    Theme.qml therefore REMAINS the per-file exception in CLAUDE.md's
+    note; the note now says why (alpha moved out because it is
+    cross-view state).
+  - **Gate 3 - live on ConfigDialog Apply/OK, not reload.** Free (the
+    `Plasmoid.configuration` binding in main.qml is the same mechanism
+    Phase 8.4.0 already relies on), a reload-only design would need MORE
+    code and show a stale panel beside a toggle claiming otherwise, and
+    a slider is only usable if the effect is visible while tuning.
+    Limit stated: live on Apply/OK, not while dragging (the shell pushes
+    `cfg_*` back only on Apply). **PoC, done and reverted:** the exact
+    9.1.0 wiring (TransparencySettings in main.qml + forwarding through
+    the three files + the flyout's two GradientStops on `withAlpha`)
+    plus a PoC-only Timer writing `Plasmoid.configuration.
+    transparencyPercent/Enabled` in-process (the same property-map write
+    the dialog's Apply performs) every 10 s: 90 -> 94 -> 70 -> 50 -> off
+    -> back to 90/on. Daemon stopped, `fakeamp.py --open --state amp=1
+    auto-short_..._pow=On_..._list=closed_slist=closed` opened the real
+    flyout hands-free over a full-screen white `qml` window (renders at
+    224 as an inactive window - measured, not assumed), six full-screen
+    captures ~3 s after each write, alpha recovered by inverting the
+    composite along a plain tint strip inside the left border:
+    **0.904 / 0.943 / 0.702 / 0.506 / 1.001 / 0.904**, journal
+    `[POC] alpha ->` lines matching, no `plasmashell --replace` between
+    captures. Off is exactly 1.0. The four edited files were `git
+    checkout`-reverted, the package re-upgraded and the shell restarted;
+    the Timer's last step wrote the shipped defaults back, which
+    KConfigSkeleton stores as "revert to default", so no
+    `transparencyEnabled`/`transparencyPercent` key is left in the
+    applet's General group (only the stale `transparencyLevel=100` /
+    `blurBackground=false` orphans main.xml already documents).
+    Owner soak item (pointer-only, per the usual rule): move the real
+    slider and click Apply once with the flyout open, confirm it
+    changes without a reload - the PoC drove the identical write path
+    but not the dialog's own buttons.
+  - **Default recommendation (for 9.1.0 to apply, not this phase):
+    `transparencyEnabled: true`, `transparencyPercent: 94`.** ON because
+    it is the designed look (both mockups default the switch on, the
+    OSD/tooltip have shipped at 0.94 since Phase 4.5.3) and at 94 % the
+    legibility risk is nil; OFF would buy identical rendering on every
+    wallpaper at the cost of the feature being invisible by default. 94
+    over the owner's own wallpaper is a hint (about 1.5 levels at the
+    median, visible only over highlights) - stated plainly, it matches
+    the owner's preference for how the OSD already looks; 85-90 is the
+    alternative if a visibly translucent default on dark wallpapers is
+    wanted. Changing main.xml + `ConfigGeneral.shippedDefaults` belongs
+    in 9.1.0 because nothing reads the entries yet (a 9.0.0 change would
+    have no observable effect to verify) and 9.1.0's own verification
+    then covers it. The dev machine stores no value for either key, so
+    9.1.0's test starts from the shipped default.
+  - Harness note for 9.3.0: the PoC recipe above (stopped daemon,
+    `fakeamp.py --open`, white backdrop window, capture, invert the
+    composite on a plain strip) measures a surface's real alpha without
+    touching the mouse; the OSD/tooltip need their own trigger (toast:
+    a volume write via the fake daemon; tooltip: hover, owner soak).
+
 
 ## Up next
 
@@ -5796,55 +5935,79 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Phase 9.0.0 — Design pass: how transparency state reaches
-  Theme.qml.** Depends on 8.0.0 (done — UI/KConfig already exist,
-  `transparencyEnabled`/`transparencyPercent`). Branch:
-  feature/appearance-transparency (own branch, own top-level phase
-  number — this is a genuinely separate feature that only happened
-  to share a UI section with the volume-limits work, not a
-  continuation of Phase 8.x.x; explicitly not numbered 8.5.0, which
-  was already used and closed for an unrelated verification pass).
-  `Theme.qml` is deliberately re-instantiated per file today (a real,
-  intentional design choice, not an oversight) — this phase decides
-  whether that changes, or whether a shared value can reach it
-  without breaking that convention (e.g. a `TransparencySettings.qml`
-  sibling to `VolumeSettings.qml`, forwarded the same root-anchored
-  way, with `Theme.qml` reading from it rather than becoming shared
-  itself). Needs its own investigation, similar in shape to
-  `VolumeSettings.qml`'s own design phase.
-  - Decide and state explicitly: does a ConfigDialog change need to
-    update live (the same reactivity guarantee `VolumeSettings`
-    gives volume), or is a reload acceptable for a rarely-touched
-    appearance setting? Don't default silently either way.
-  - Investigate before assuming the setting means anything: confirm
-    against CLAUDE.md's documented real-transparency findings
-    (`PlasmaWindow`/`BackgroundHints.NoBackground`) whether the
-    configured percentage actually corresponds to a real, visible
-    effect, or whether a user could configure a value with no
-    achievable difference on this system. Report findings before
-    building UI/wiring around an assumption.
-  - Report the chosen mechanism before implementing 9.1.0/9.2.0.
-
 - [ ] **Phase 9.1.0 — Wire the flyout's own gradient.** Depends on
-  9.0.0. Replace `Theme.qml`'s fixed `panelGradientTop/Bottom` literal
-  (currently 0.82) with the resolved value from 9.0.0's mechanism.
-  Smallest, most isolated surface — good first real target once the
-  sharing mechanism is settled.
+  9.0.0 (done). Re-apply 9.0.0's PoC wiring for real: instantiate
+  `TransparencySettings` in main.qml bound to `Plasmoid.configuration.
+  transparencyEnabled/transparencyPercent` (percent is OPACITY, alpha =
+  percent/100 - do not invert), forward it as a `required property`
+  through CompactRepresentation -> FlyoutPopup -> FlyoutContent, and
+  point FlyoutContent's two GradientStops at
+  `root.transparencySettings.withAlpha(root.theme.panelTintTop/Bottom)`.
+  Theme.qml: add the opaque base pair `panelTintTop` (#17171a) /
+  `panelTintBottom` (#121214) and delete `panelGradientTop/Bottom`
+  (0.82) - `osdGradientTop/Bottom` go in 9.2.0. Apply 9.0.0's default
+  recommendation in main.xml AND `ConfigGeneral.shippedDefaults`
+  (`transparencyEnabled` true, `transparencyPercent` 94 - owner to
+  confirm, 85-90 is the stated alternative) and the slider range/step
+  recommendation (`from: 50`, `stepSize: 2` - owner's call, see 9.0.0's
+  Gate 1 numbers); drop the "UI-only for now" comments in main.xml and
+  ConfigGeneral.qml. Verify: live Apply changes the open flyout's alpha
+  with no reload (PoC recipe in 9.0.0), off measures exactly 1.0, and
+  the value survives a settings-dialog reopen and a widget reload.
+
+- [ ] **Phase 9.1.1 — Control chrome opacity: buttons, source chip, and
+  overlay cards track panel alpha with a floor.** Depends on 9.0.0
+  (TransparencySettings.qml/alpha exists). Owner observation during
+  9.0.0's sweep: interactive controls (volume +/- buttons, mute
+  button, power button, the source row, the current-source chip next
+  to the dB readout) and the AmpListOverlay/SourceListOverlay dropdown
+  cards all stay fully opaque regardless of panel alpha — a structural
+  fact of the current design (Gate 1's own finding), not a considered
+  choice for these specific elements. At low panel-alpha settings this
+  reads as visually inconsistent: a heavily see-through background
+  with fully solid chrome floating on top.
+  - Investigate and recommend the formula before implementing: a floor
+    (chrome never renders below some minimum opacity, e.g. ~85-90%,
+    regardless of how transparent the panel gets) vs. a fixed offset
+    added to the panel's own alpha (chrome = panel alpha + 10%, which
+    could still go quite transparent at low panel settings and may not
+    achieve the "stands out against the background" goal the owner
+    described). State the reasoning and a recommended concrete value,
+    grounded in actually looking at it across the panel's alpha range
+    on the real desktop, not a guess.
+  - Apply the same treatment to AmpListOverlay/SourceListOverlay's
+    dropdown cards for visual consistency (owner decision,
+    2026-09-08) — note their opaque background today exists for a
+    different, unrelated historical reason (matching mockup card
+    styling, nothing to do with panel transparency); confirm this
+    change doesn't conflict with or need to revisit that reasoning,
+    just adds alpha tracking on top of it.
+  - Decide where this computed "chrome alpha" lives — likely a second
+    computed property on TransparencySettings.qml (e.g.
+    controlAlpha) alongside the existing panel alpha, following the
+    same withAlpha()-style helper pattern — rather than duplicating
+    the floor/offset math at each consuming component.
+  - Verify live across the panel alpha range (100% down to 0%):
+    chrome stays legible and visually "stands out" at every setting,
+    confirmed by eye, not just by the formula's math checking out.
 
 - [ ] **Phase 9.2.0 — Wire OSD toast + hover tooltip.** Depends on
-  9.0.0. Replace `Theme.qml`'s fixed `osdGradientTop/Bottom` literal
-  (currently 0.94) with the same resolved value from 9.0.0. Grouped
-  together rather than split, since both are meant to land on the
-  same alpha per the owner's prior decision (2026-09-05) and likely
-  share more implementation similarity with each other than either
-  does with the flyout.
+  9.1.0. `VolumeToast.qml` and `VolumeHoverTooltip.qml` gain `required
+  property TransparencySettings transparencySettings`, bound from
+  CompactRepresentation.qml where both are instantiated; their gradients
+  read `withAlpha(theme.panelTintTop/Bottom)`; delete Theme.qml's
+  `osdGradientTop/Bottom` (0.94) and its now-false blur-based comment.
+  Grouped rather than split because both land on the same alpha per the
+  owner's 2026-09-05 decision and share the same instantiation site.
 
 - [ ] **Phase 9.3.0 — Verification pass.** Depends on 9.0.0-9.2.0.
   Confirm all three surfaces (flyout, OSD toast, hover tooltip)
-  genuinely land on identical alpha for a given configured
-  percentage; confirm the off state is truly fully opaque (1.0), not
-  just a very high value; soak-test visually across a few different
-  configured percentages, live.
+  genuinely land on identical alpha for a given configured percentage
+  (measure each with 9.0.0's inversion method over the white backdrop,
+  not by eye); confirm the off state reads `alpha === 1.0` and measures
+  1.00, not just a high value; soak-test visually across a few
+  configured percentages live, including the literal ConfigDialog
+  slider + Apply with the flyout open (owner soak - pointer-only).
 
 ## Bugs
 
@@ -5958,8 +6121,20 @@ architecture decisions; this file is just sequencing and status.
       better by default, but making it a setting means it doesn't need
       to be re-litigated - the person can just tune it. Low priority,
       not blocking any current phase.
+      **Superseded (2026-09-08) by Phase 9.x: the Appearance section's
+      Transparency toggle + slider (Phase 8.0.0 UI, 9.0.0 design, 9.1.0/
+      9.2.0 wiring) is exactly this control, applied to all three
+      surfaces at once - see Phase 9.0.0 in Done.**
 - [ ] **Unify flyout/OSD/tooltip alpha; revisit once transparency
       toggle + slider is re-scoped (deferred until after Phase 7.x.x).**
+      **Re-scoped (2026-09-08) as Phase 9.0.0 (see Done) - kept for its
+      history. Corrections from that phase: 0.82 WAS in the mockup
+      (`.flyout.blur-enabled` at d5f4d60, not invented), and 0.94 has the
+      same shape (OSD mockup v3 line 61 + backdrop blur) - both rest on a
+      CSS blur Plasma never provided. The design goes further than the
+      "flyout reads osdGradient" suggestion below: both alpha pairs leave
+      Theme.qml, which keeps one opaque base tint, and the alpha comes
+      from `TransparencySettings.qml`.**
       `Theme.qml` currently defines two separate translucency levels:
       `panelGradientTop`/`Bottom` at alpha 0.82 (the flyout) and
       `osdGradientTop`/`Bottom` at alpha 0.94
