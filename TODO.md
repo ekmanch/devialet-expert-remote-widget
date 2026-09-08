@@ -5796,19 +5796,55 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Feat — Wire Appearance transparency into real
-  rendering.** Depends on 8.0.0 (done — UI/KConfig already exist,
-  `transparencyEnabled`/`transparencyPercent`). Per owner decision
-  (2026-09-05): all three surfaces (flyout, OSD toast, hover
-  tooltip) end up on the same alpha, off = fully opaque (1.0).
-  Requires touching `Theme.qml`'s `panelGradientTop/Bottom` and
-  `osdGradientTop/Bottom` (currently fixed literals, 0.82/0.94) and
-  deciding how a value gets from the shared `VolumeSettings`-style
-  object (or a new one) into `Theme.qml`, which today is
-  deliberately re-instantiated per file, not shared — this will
-  need its own design pass, similar to the `VolumeSettings.qml`
-  one. Explicitly deferred by the owner until after Phase 8.x.x is
-  otherwise done.
+- [ ] **Phase 9.0.0 — Design pass: how transparency state reaches
+  Theme.qml.** Depends on 8.0.0 (done — UI/KConfig already exist,
+  `transparencyEnabled`/`transparencyPercent`). Branch:
+  feature/appearance-transparency (own branch, own top-level phase
+  number — this is a genuinely separate feature that only happened
+  to share a UI section with the volume-limits work, not a
+  continuation of Phase 8.x.x; explicitly not numbered 8.5.0, which
+  was already used and closed for an unrelated verification pass).
+  `Theme.qml` is deliberately re-instantiated per file today (a real,
+  intentional design choice, not an oversight) — this phase decides
+  whether that changes, or whether a shared value can reach it
+  without breaking that convention (e.g. a `TransparencySettings.qml`
+  sibling to `VolumeSettings.qml`, forwarded the same root-anchored
+  way, with `Theme.qml` reading from it rather than becoming shared
+  itself). Needs its own investigation, similar in shape to
+  `VolumeSettings.qml`'s own design phase.
+  - Decide and state explicitly: does a ConfigDialog change need to
+    update live (the same reactivity guarantee `VolumeSettings`
+    gives volume), or is a reload acceptable for a rarely-touched
+    appearance setting? Don't default silently either way.
+  - Investigate before assuming the setting means anything: confirm
+    against CLAUDE.md's documented real-transparency findings
+    (`PlasmaWindow`/`BackgroundHints.NoBackground`) whether the
+    configured percentage actually corresponds to a real, visible
+    effect, or whether a user could configure a value with no
+    achievable difference on this system. Report findings before
+    building UI/wiring around an assumption.
+  - Report the chosen mechanism before implementing 9.1.0/9.2.0.
+
+- [ ] **Phase 9.1.0 — Wire the flyout's own gradient.** Depends on
+  9.0.0. Replace `Theme.qml`'s fixed `panelGradientTop/Bottom` literal
+  (currently 0.82) with the resolved value from 9.0.0's mechanism.
+  Smallest, most isolated surface — good first real target once the
+  sharing mechanism is settled.
+
+- [ ] **Phase 9.2.0 — Wire OSD toast + hover tooltip.** Depends on
+  9.0.0. Replace `Theme.qml`'s fixed `osdGradientTop/Bottom` literal
+  (currently 0.94) with the same resolved value from 9.0.0. Grouped
+  together rather than split, since both are meant to land on the
+  same alpha per the owner's prior decision (2026-09-05) and likely
+  share more implementation similarity with each other than either
+  does with the flyout.
+
+- [ ] **Phase 9.3.0 — Verification pass.** Depends on 9.0.0-9.2.0.
+  Confirm all three surfaces (flyout, OSD toast, hover tooltip)
+  genuinely land on identical alpha for a given configured
+  percentage; confirm the off state is truly fully opaque (1.0), not
+  just a very high value; soak-test visually across a few different
+  configured percentages, live.
 
 ## Bugs
 
