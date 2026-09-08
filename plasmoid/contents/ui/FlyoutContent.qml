@@ -40,7 +40,11 @@
 // back then) now shares `ActiveSourceIndex`'s debounce guard
 // (`lastSourceChangeAtMs`) alongside it, for the identical reason Power/
 // PowerState gained one in 7.5.0: this phase gives it its first local
-// writer.
+// writer. Phase 8.0.1 wires the configured startup volume into both
+// selectSource() (same-invocation `--startup-volume-db`) and a deferred
+// send after a widget-initiated power-on (`pendingStartupVolumeIp` /
+// `startupVolumeTimer` / `sendStartupVolume()`, documented at that
+// block), arming PendingAmpState's post-boot display hold on "On".
 
 pragma ComponentBehavior: Bound
 
@@ -61,6 +65,12 @@ Item {
     // call pendingAmpState.notifyVolume() - see VolumeBlock.qml's header
     // comment for why this is deliberately not a new local mirror.
     required property PendingAmpState pendingAmpState
+    // Shared, root-anchored volume-range config (floor/hard-limit/step/
+    // startup dB) - see VolumeSettings.qml's own header comment. Replaces
+    // this file's former local volumeStepDb/volumeCeilingDb/volumeFloorDb
+    // properties, which independently duplicated CompactRepresentation.
+    // qml's own copy of the same three numbers.
+    required property VolumeSettings volumeSettings
     // Bound one-way from FlyoutPopup.visible - drives the amp-list reset on
     // flyout hide below (and is the future binding target for the deferred
     // pop-in animation, 7.7.0 polish).
@@ -153,16 +163,29 @@ Item {
     // SourceListOverlay.qml's onClicked), so no bounds check needed here,
     // matching FullRepresentation.qml's original onActivated body.
     function selectSource(index, name) {
-        if (root.ampIp === "") return;
+        // Power gate (2026-09-08 follow-up) - the row is already inert
+        // unless "On" (SourceSelector.interactive); repeated here for the
+        // overlay's own click path.
+        if (root.ampIp === "" || root.powerState !== "On") return;
         root.activeSourceIndex = index;
         root.activeSourceName = name;
         root.lastSourceChangeAtMs = root.now();
-        root.runCtl("source " + index);
+        // Phase 8.0.1: the configured startup volume replaces the CLI's
+        // hardcoded -40 as the forced post-switch volume (known-gotchas
+        // #5). Pre-clamped here to [floor, hardLimit] like every other
+        // volume-set path (Phase 8.4.0's invariant; nothing downstream
+        // would re-apply the floor), and the CLI applies the ceiling again
+        // itself - the same defense-in-depth as Phase 8.1.0. Sent in the
+        // same invocation as the switch: Gate #1 (2026-09-07) honored the
+        // zero-delay source+volume pair 6/6 on the real amp. Then the same
+        // notifyVolume() step every other volume-set call site does, so
+        // the flyout/OSD/tooltip show the post-switch volume at once.
+        const target = root.volumeSettings.clamp(root.volumeSettings.startupVolumeDb);
+        root.runCtl("source " + index + " --hard-limit-db " + root.volumeSettings.hardLimitDb
+                    + " --startup-volume-db " + target);
+        root.pendingAmpState.notifyVolume(target);
     }
 
-    readonly property real volumeStepDb: Plasmoid.configuration.volumeStepDb
-    readonly property real volumeCeilingDb: -15.0
-    readonly property real volumeFloorDb: -60.0
     readonly property string devialetCtlCommand: "devialet-ctl"
 
     // ---- Phase 7.5.0: action row (mute/power) state ----
@@ -188,10 +211,14 @@ Item {
     // firing its D-Bus call, so a rapid second step still reads the value
     // this call is about to set), not a local copy.
     function stepVolume(direction) {
-        if (root.ampIp === "") return;
-        const base = root.pendingAmpState.volumeDb !== undefined ? root.pendingAmpState.volumeDb : root.volumeFloorDb;
-        const stepped = base + direction * root.volumeStepDb;
-        const clamped = Math.min(root.volumeCeilingDb, Math.max(root.volumeFloorDb, stepped));
+        // Power gate (2026-09-08 follow-up): VolumeBlock already disables
+        // its inputs unless powerState === "On" (see its `interactive`);
+        // this repeats the check for autoRepeat ticks already queued when
+        // the state flips, and mirrors CompactRepresentation.stepVolume().
+        if (root.ampIp === "" || root.powerState !== "On") return;
+        // Step/clamp math now lives in VolumeSettings.stepped() - see that
+        // file's header comment.
+        const clamped = root.volumeSettings.stepped(root.pendingAmpState.volumeDb, direction);
         // Mirrors CompactRepresentation.qml's stepVolume() - a volume
         // change from any input (panel-icon scroll or the flyout's own
         // +/- buttons/slider) auto-unmutes for real, matching KDE's own
@@ -203,29 +230,36 @@ Item {
             root.runCtl("mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        root.runCtl("volume " + clamped);
+        root.runCtl("volume " + clamped + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
         root.pendingAmpState.notifyVolume(clamped);
     }
 
-    // Slider release - the value is already the authoritative drag result
-    // (computed inside VolumeBlock from its own live value), sent as-is.
+    // Slider release - the value is the drag result computed inside
+    // VolumeBlock from its own live value (bounded by the Slider's own
+    // from/to already), but now also passed through the same shared
+    // clamp() every other volume-adjusting path uses - defense-in-depth so
+    // no dB value this widget sends ever depends solely on the Slider's
+    // own bounds being correct, matching the Rust protocol crate's own
+    // "clamp internally, don't trust the caller" convention.
     function releaseVolume(value) {
-        if (root.ampIp === "") return;
+        if (root.ampIp === "" || root.powerState !== "On") return;
+        const clamped = root.volumeSettings.clamp(value);
         // Same auto-unmute-on-volume-change as stepVolume() above - a
         // slider drag counts as a volume-adjusting input too.
         if (root.pendingAmpState.muted) {
             root.runCtl("mute off");
             root.pendingAmpState.notifyMute(false);
         }
-        root.runCtl("volume " + value);
-        root.pendingAmpState.notifyVolume(value);
+        root.runCtl("volume " + clamped + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
+        root.pendingAmpState.notifyVolume(clamped);
     }
 
     // Mirrors CompactRepresentation.qml's toggleMute() exactly (Phase
     // 5.0.2 Step B shape) - reads pendingAmpState.muted directly, no local
     // mirror, no debounce (see this file's header comment).
     function toggleMute() {
-        if (root.ampIp === "") return;
+        // Power gate (2026-09-08 follow-up) - see ActionRow.muteInteractive.
+        if (root.ampIp === "" || root.powerState !== "On") return;
         const newMuted = !root.pendingAmpState.muted;
         root.runCtl("mute " + (newMuted ? "on" : "off"));
         root.pendingAmpState.notifyMute(newMuted);
@@ -270,6 +304,17 @@ Item {
         root.power = newPower;
         root.powerState = newPower ? "Booting" : "Off";
         root.lastPowerChangeAtMs = root.now();
+        // Phase 8.0.1: arm (or, on a power-off click, disarm) the
+        // post-boot startup volume - see the block after this function.
+        // After the optimistic assignments: the "Booting" they trigger in
+        // onPowerStateChanged is a no-op there anyway.
+        if (newPower) {
+            root.pendingStartupVolumeIp = root.ampIp;
+        } else {
+            root.pendingStartupVolumeIp = "";
+            startupVolumeTimer.stop();
+            root.pendingAmpState.endBootHold();
+        }
         if (newPower) {
             // Told the daemon first, then the real command - see
             // beginPowerOnBoot()'s own doc for why this ordering leaves no
@@ -278,6 +323,113 @@ Item {
             root.beginPowerOnBoot();
         }
         root.runCtl("power " + (newPower ? "on" : "off"));
+    }
+
+    // ---- Phase 8.0.1: startup volume after a widget-initiated power-on ----
+    // Owner decision (TODO.md Phase 8.0.1): widget-initiated power-on only;
+    // an external power-on (remote, front panel) is deliberately not
+    // covered. Entirely in QML, no daemon/D-Bus change: the daemon's
+    // existing PowerState ("Off"/"Booting"/"On", Phase 4.3.0's boot
+    // tracking) is the boot-confirmation signal, observed here because
+    // this file owns the codebase's only PowerState mirror and the only
+    // `power on` call site. Power-on and the volume cannot share one
+    // devialet-ctl invocation - the CLI is fire-and-exit and cannot wait
+    // for the boot (measured 15.0-18.6 s across 21 boots) - so the
+    // follow-up is a plain `volume` invocation once "On" is observed.
+    //
+    // Why 500 ms after "On" (startupVolumeAfterBootMs) and not 0: a volume
+    // command that reaches the amp before its own post-boot startup-volume
+    // application is dropped outright (docs/known-gotchas.md #9; raw UDP
+    // capture, never applied-then-overwritten). That application's latency
+    // after the first power-on broadcast is not fixed - observed at or
+    // before the first "On" (3 boots), ~+200 ms (9), +394 ms (1) and
+    // >+400 ms (3). Early-exit sweep, delay measured from the first raw
+    // power-on packet (1-40 ms *before* the daemon's "On", so every figure
+    // is conservative here): +2 ms 0/1, +100 ms 1/2 (the failure had the
+    // application at +394 ms), +200 ms 9/9 (every pass had it at
+    // <= +202 ms, i.e. inside the observed spread), +500 ms 3/3 (packets at
+    // +200/+400 still pre-application; it surfaced with the send), +1018
+    // and +2030 ms 1/1 each. 500 is the smallest round value above the
+    // latest observed amp-side application, and imperceptible after a
+    // 15 s boot.
+    //
+    // State: one string, the IP captured at click time ("" = not armed),
+    // so a multi-amp switch mid-boot can't misfire on the wrong amp (Phase
+    // 8.4.0's "only the currently-connected amp" scoping). Lives here, not
+    // in PendingAmpState (which owns only AmpIp/VolumeDb/Muted by its own
+    // header rule) and not at main.qml's root: FlyoutPopup is a plain
+    // Dialog child of CompactRepresentation with no Loader, so this item
+    // stays resident while the flyout is hidden during the boot.
+    //
+    // Ordering (Phase 8.4.0's observe-then-react check): onPowerStateChanged
+    // fires synchronously at the guarded assignment in ampProps.
+    // onPropertiesChanged below; it reads only root.powerState and the
+    // local flag, and the deferred send reads root.ampIp (assigned before
+    // PowerState in that handler, and ~16 s stale anyway) plus config -
+    // nothing reads pendingAmpState.volumeDb, so the AmpIp-before-VolumeDb
+    // ordering that forced Qt.callLater in 8.4.0 doesn't apply, and the
+    // Timer defers the send past the whole handler regardless. Every armed
+    // state resolves: the daemon guarantees Booting -> On or Off within
+    // BOOT_TIMEOUT, and "Off" (timeout or a power-off click) disarms.
+    //
+    // Display: on "On" the hold in PendingAmpState.qml is armed with the
+    // target so no surface shows the amp's pre-shutdown or misreported
+    // post-boot value (gotcha #8) in the ~700 ms before the send lands;
+    // the send itself reads the hold's current target, so a user volume
+    // change inside that window wins on the amp too (see that file's
+    // header for the measurements).
+    property string pendingStartupVolumeIp: ""
+    readonly property int startupVolumeAfterBootMs: 500
+
+    Timer {
+        id: startupVolumeTimer
+        interval: root.startupVolumeAfterBootMs
+        repeat: false
+        onTriggered: root.sendStartupVolume()
+    }
+
+    onPowerStateChanged: {
+        // A source list left open when the amp goes off/booting closes -
+        // its row is no longer interactive (2026-09-08 follow-up).
+        if (root.powerState !== "On") root.sourceListOpen = false;
+        if (root.pendingStartupVolumeIp === "") return;
+        if (root.powerState === "On") {
+            if (root.ampIp !== root.pendingStartupVolumeIp) {
+                // The selected amp changed mid-boot - this "On" is not the
+                // amp we powered on. Disarm; never fire at the wrong amp.
+                root.pendingStartupVolumeIp = "";
+                startupVolumeTimer.stop();
+                return;
+            }
+            root.pendingAmpState.beginBootHold(root.pendingStartupVolumeIp, root.startupVolumeTarget());
+            startupVolumeTimer.restart();
+        } else if (root.powerState === "Off") {
+            root.pendingStartupVolumeIp = "";
+            startupVolumeTimer.stop();
+            root.pendingAmpState.endBootHold();
+        }
+        // "Booting": nothing to do yet.
+    }
+
+    // Configured startup volume, pre-clamped to [floor, hardLimit] - see
+    // selectSource() for why both ends are applied here.
+    function startupVolumeTarget() {
+        return root.volumeSettings.clamp(root.volumeSettings.startupVolumeDb);
+    }
+
+    function sendStartupVolume() {
+        const ip = root.pendingStartupVolumeIp;
+        root.pendingStartupVolumeIp = "";
+        if (ip === "" || ip !== root.ampIp) return;
+        // Latest intended value: the hold's target if a user change inside
+        // the window re-targeted it, else the configured startup volume.
+        const held = root.pendingAmpState.bootHoldIp !== "";
+        const target = held ? root.pendingAmpState.bootHoldDb : root.startupVolumeTarget();
+        // No `mute off` here - volume and mute are independent opcodes
+        // (Phase 8.4.0's rule); a startup volume is not a user's
+        // volume-adjusting gesture.
+        root.runCtl("volume " + target + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
+        root.pendingAmpState.notifyVolume(target);
     }
 
     // Fires devialet-ctl once per connectSource() call, then disconnects
@@ -531,10 +683,11 @@ Item {
             theme: root.theme
             ampIp: root.ampIp
             volumeDb: root.pendingAmpState.volumeDb
-            volumeFloorDb: root.volumeFloorDb
-            volumeCeilingDb: root.volumeCeilingDb
-            volumeStepDb: root.volumeStepDb
+            volumeSettings: root.volumeSettings
             activeSourceName: root.activeSourceName
+            // Same guarded mirror that arms the boot hold (see
+            // onPowerStateChanged above) - slider and hold flip together.
+            powerState: root.powerState
             onStepRequested: direction => root.stepVolume(direction)
             onSliderReleased: value => root.releaseVolume(value)
         }
@@ -557,6 +710,7 @@ Item {
             sources: root.sources
             activeSourceIndex: root.activeSourceIndex
             activeSourceName: root.activeSourceName
+            powerState: root.powerState
             listOpen: root.sourceListOpen
             onToggleRequested: root.sourceListOpen = !root.sourceListOpen
         }

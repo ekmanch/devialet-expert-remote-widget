@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet ConfigDialog — Mockup v13 (single tab)</title>
+<title>Devialet ConfigDialog — Mockup v14 (single tab)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -212,6 +212,14 @@
   .danger-btn:hover{ border-color:var(--danger); color:var(--danger-bright); }
   .danger-btn.confirming{ background:rgba(181,84,74,0.16); border-color:var(--danger); color:var(--danger-bright); }
 
+  /* neutral action button — for non-destructive in-page actions like Defaults */
+  .neutral-btn{
+    padding:7px 14px; border-radius:8px; font-size:12px; font-weight:600;
+    background:var(--surface); border:1px solid var(--divider); color:var(--text);
+    cursor:pointer; white-space:nowrap; flex-shrink:0;
+  }
+  .neutral-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
+
   /* numeric dB stepper, for precise threshold values a slider can't cleanly host */
   .db-stepper{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .db-stepper-btn{
@@ -259,10 +267,9 @@
     height:52px; flex-shrink:0;
     border-top:1px solid var(--win-border);
     background:var(--win-titlebar);
-    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    display:flex; align-items:center; justify-content:flex-end; gap:10px;
     padding:0 16px;
   }
-  .kcm-buttonbar-group{ display:flex; align-items:center; gap:10px; }
   .kcm-btn{
     display:flex; align-items:center; gap:6px;
     padding:7px 16px; border-radius:999px; font-size:12px; cursor:pointer;
@@ -282,7 +289,7 @@
 </head>
 <body>
 
-<div class="mockup-tag">MOCKUP · CONFIGDIALOG v13 — SINGLE TAB, Soft limit removed</div>
+<div class="mockup-tag">MOCKUP · CONFIGDIALOG v14 — SINGLE TAB, Defaults moved in-page</div>
 
 <div style="display:flex; flex-direction:column; align-items:center;">
   <div class="kcm-window">
@@ -417,6 +424,15 @@
             </div>
             <div class="kcm-switch" id="loginSwitch" onclick="toggleSwitch(this)"></div>
           </div>
+
+          <p class="kcm-section-label">Reset</p>
+          <div class="kcm-row">
+            <div class="kcm-row-text">
+              <span class="kcm-row-name">Restore defaults</span>
+              <span class="kcm-row-desc">Resets every setting on this page back to its shipped values</span>
+            </div>
+            <div class="neutral-btn" id="defaultsBtn" onclick="handleDefaults()">Defaults</div>
+          </div>
         </div>
 
         <!-- ============ KEYBOARD SHORTCUTS (Plasma default) ============ -->
@@ -445,12 +461,9 @@
     </div>
 
     <div class="kcm-buttonbar">
-      <div class="kcm-btn" id="defaultsBtn" onclick="handleDefaults(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>Defaults</div>
-      <div class="kcm-buttonbar-group">
-        <div class="kcm-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>Cancel</div>
-        <div class="kcm-btn disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Apply</div>
-        <div class="kcm-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>OK</div>
-      </div>
+      <div class="kcm-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>Cancel</div>
+      <div class="kcm-btn disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Apply</div>
+      <div class="kcm-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>OK</div>
     </div>
   </div>
 
@@ -458,7 +471,8 @@
     <b>Copper</b> = our General page, fully custom-drawn QML (own switches/sliders, own type), matched against your real Darkly window background rather than an invented palette.<br>
     Window titlebar (gear/pin left, chevron-down/chevron-up/X right), sidebar chrome + blue selection color, and the Shortcuts/About page content are Plasma's — sampled from your screenshot so the window as a whole reads as one native piece, with our page as the one that happens to have personality.<br>
     Keyboard Shortcuts and About icons are now hand-redrawn approximations of your real icon theme's glyphs (keyboard+gear badge, solid blue "i" circle) rather than the generic placeholders used in earlier versions — close, but not a pixel-perfect extraction of the actual SVG assets, since I don't have access to your icon theme's source files.<br>
-    Volume limits use +/− steppers rather than a slider — interdependent thresholds sharing one slider track gets visually cramped and easy to mis-drag, whereas a stepper gives exact, unambiguous values. Min-above-hard shows an inline warning as a placeholder for real validation. Stepper bounds are the real Expert Pro line range (−96 to 0 dB). Holding a +/− button repeats at 100ms after a short initial delay, same cadence as the flyout's own volume buttons. Minimum volume trims the unused low end of the slider's range rather than acting as a safety ceiling — it's a usability control, not a protection one. Soft limit removed in this version, per request — Hard limit is now the only ceiling.
+    Volume limits use +/− steppers rather than a slider — interdependent thresholds sharing one slider track gets visually cramped and easy to mis-drag, whereas a stepper gives exact, unambiguous values. Min-above-hard shows an inline warning as a placeholder for real validation. Stepper bounds are the real Expert Pro line range (−96 to 0 dB). Holding a +/− button repeats at 100ms after a short initial delay, same cadence as the flyout's own volume buttons. Minimum volume trims the unused low end of the slider's range rather than acting as a safety ceiling — it's a usability control, not a protection one. Soft limit removed in this version, per request — Hard limit is now the only ceiling.<br>
+    <b>Defaults moved into the page content</b> (new "Reset" section, bottom of General) rather than the footer — the ConfigDialog's Cancel/Apply/OK bar is fixed native chrome, not something a plasmoid's config.qml can add buttons to. This is option 2 from the Claude Code research: keeps the existing ConfigGeneral.qml/KCM page and its Apply/OK flow as-is, at the cost of not matching the original footer-button mockup exactly.
   </div>
 </div>
 

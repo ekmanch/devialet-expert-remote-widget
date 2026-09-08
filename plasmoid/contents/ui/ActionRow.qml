@@ -74,6 +74,15 @@ GridLayout {
     signal muteToggleRequested()
     signal powerToggleRequested()
 
+    // 2026-09-08 follow-up: mute is interactive only with the amp on -
+    // the same `interactive` gate VolumeBlock.qml got the same day, for
+    // the same reason (the amp drops the command while off/booting and
+    // the daemon's 400 ms pending mask snaps the optimistic state back).
+    // Applied to the mute button alone, not the row: the power button
+    // beside it must stay live while the amp is off. The label keeps its
+    // last-known Mute/Unmute text, only dimmed.
+    readonly property bool muteInteractive: actionRow.ampIp !== "" && actionRow.powerState === "On"
+
     Layout.fillWidth: true
     Layout.topMargin: 14
     Layout.bottomMargin: 4
@@ -91,7 +100,9 @@ GridLayout {
         objectName: "muteButton"
         Layout.fillWidth: true
         Layout.preferredHeight: 38
-        enabled: actionRow.ampIp !== ""
+        enabled: actionRow.muteInteractive
+        // Same 0.4 factor as the group dims / Phase 8.3.0's steppers.
+        opacity: actionRow.muteInteractive ? 1.0 : 0.4
         onClicked: actionRow.muteToggleRequested()
 
         background: Rectangle {

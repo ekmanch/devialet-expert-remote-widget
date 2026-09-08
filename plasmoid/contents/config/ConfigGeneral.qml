@@ -52,7 +52,108 @@ KCM.SimpleKCM {
     // a real precedent doing the same (luisbocanegra.panel.colorizer's
     // configWidgetIslands.qml, property alias cfg_*).
     property real cfg_volumeStepDb: 1.0
+    // KCMUtils' generic ConfigModule loader (not this shell's own
+    // AppletConfiguration.qml - grepped it directly, no match there)
+    // expects a cfg_<name>Default companion for every cfg_<name> binding
+    // it discovers, for its own defaults-comparison bookkeeping - found
+    // live as a real (harmless but real) "Setting initial properties
+    // failed: ConfigGeneral does not have a property called
+    // cfg_volumeStepDbDefault" warning in the journal before these
+    // existed, for every one of this file's cfg_* properties, not just
+    // the ones added this pass. Sourced from shippedDefaults below rather
+    // than re-typing the literals a third time.
+    readonly property real cfg_volumeStepDbDefault: root.shippedDefaults.volumeStepDb
     readonly property var stepValues: [0.5, 1, 2]
+
+    // Appearance section - see main.xml's own comment on these two
+    // entries for why wiring them into the real flyout/OSD/tooltip alpha
+    // is deferred.
+    property bool cfg_transparencyEnabled: true
+    property int cfg_transparencyPercent: 90
+    readonly property bool cfg_transparencyEnabledDefault: root.shippedDefaults.transparencyEnabled
+    readonly property int cfg_transparencyPercentDefault: root.shippedDefaults.transparencyPercent
+
+    // Phase 8.0.0: volume-limit settings (main.xml entries volumeFloorDb/
+    // hardLimitDb/startupVolumeDb) - same cfg_<entryName> convention as
+    // cfg_volumeStepDb above. Real Expert Pro line range for every
+    // DbStepper below (CLAUDE.md/mockup: -96..0 dB).
+    property real cfg_volumeFloorDb: -45.0
+    property real cfg_hardLimitDb: -10.0
+    property real cfg_startupVolumeDb: -40.0
+    readonly property real cfg_volumeFloorDbDefault: root.shippedDefaults.volumeFloorDb
+    readonly property real cfg_hardLimitDbDefault: root.shippedDefaults.hardLimitDb
+    readonly property real cfg_startupVolumeDbDefault: root.shippedDefaults.startupVolumeDb
+    readonly property real dbRangeMin: -96.0
+    readonly property real dbRangeMax: 0.0
+
+    // Phase 8.3.0: floor and hard limit must stay strictly ordered
+    // (floor < hard limit, never equal - a 0dB-wide range is meaningless).
+    // One stepper increment is the minimum usable gap. Named rather than
+    // relying on DbStepper's own default `stepDb: 1` so the two steppers
+    // below and this gap agree by construction, not by coincidence.
+    readonly property real limitStepDb: 1.0
+
+    // Self-heal: called whenever either limit changes, for any reason - a
+    // user step (already prevented from producing an invalid pair by the
+    // steppers' own to/from binding below, so this is a no-op in that
+    // case), Defaults/Reset (see its own onClicked comment for the
+    // widen-first write order that keeps every intermediate pair valid
+    // too), or any other in-process write to either cfg_* property.
+    //
+    // Does NOT reach external KConfig file corruption while the widget is
+    // already running, despite this being the original intent (see
+    // main.qml's own comment on its VolumeSettings.Component.onCompleted
+    // check for the full story) - investigated live (Phase 8.3.0,
+    // 2026-09-06) and found structurally unreachable from applet QML:
+    // `Plasmoid.configuration` is one `KConfigPropertyMap` object, created
+    // once per plasmashell process and shared by every QML file in this
+    // KPackage (confirmed identical object address across two separate
+    // ConfigGeneral.qml page instantiations, and the live flyout showing
+    // the same stale values as this page at the same moment). It reads
+    // the file correctly exactly once, at that KConfigPropertyMap's own
+    // construction (i.e. at process start - main.qml's on-load check is
+    // reliable specifically because it runs at that exact point), and
+    // never re-reads it afterward for an external write, for the life of
+    // that process - not on this page's own Component.onCompleted firing
+    // again for a fresh page instance, not across real close/reopen
+    // cycles, not for kwriteconfig6 vs. a raw editor save (both equally
+    // stale). Only a full plasmashell restart re-reads the file. No QML-
+    // level API to force a reload was found; hand-rolling one (reading
+    // the raw INI file directly, bypassing KConfig) would duplicate and
+    // diverge from Plasma's own config format/semantics for a rare,
+    // non-adversarial scenario (CLAUDE.md's "not something the owner is
+    // defending against maliciously") - not worth it. Floor gets the more
+    // negative (quieter) of the pair, hard limit the less negative one,
+    // matching every other floor/hardLimit pair in this file (shipped
+    // defaults: floor -45.0 < hardLimit -10.0).
+    function healLimitOrdering() {
+        if (root.cfg_volumeFloorDb >= root.cfg_hardLimitDb) {
+            console.log("[ConfigGeneral] floor/hardLimit invalid (" + root.cfg_volumeFloorDb +
+                        " >= " + root.cfg_hardLimitDb + ") - self-healing to -40.0/-39.0");
+            root.cfg_volumeFloorDb = -40.0;
+            root.cfg_hardLimitDb = -39.0;
+        }
+    }
+
+    onCfg_volumeFloorDbChanged: root.healLimitOrdering()
+    onCfg_hardLimitDbChanged: root.healLimitOrdering()
+
+    // Mirrors main.xml's own <default> entries - feeds both the
+    // cfg_<name>Default properties above (what KCMUtils' generic loader
+    // expects) and the Reset section's "Defaults" button below (what a
+    // user click actually resets to). Still a real duplication in spirit
+    // (this project has no generated kcfg-defaults QML accessor that
+    // reads main.xml directly) but now only entered once, in one place,
+    // rather than three times. Update this alongside main.xml if a
+    // default ever changes.
+    readonly property var shippedDefaults: ({
+        transparencyEnabled: true,
+        transparencyPercent: 90,
+        volumeStepDb: 1.0,
+        startupVolumeDb: -40.0,
+        volumeFloorDb: -45.0,
+        hardLimitDb: -10.0
+    })
 
     // Read-only live count for the "Forget All (N)" button's idle label -
     // explicitly sanctioned by this phase's scope (display only, not
@@ -137,8 +238,86 @@ KCM.SimpleKCM {
             Item { Layout.fillWidth: true }
         }
 
+        // ---- Appearance ----
+        // UI only for now, per explicit owner instruction (2026-09-05) -
+        // see main.xml's own comment on transparencyEnabled/
+        // transparencyPercent for why wiring this into the flyout/OSD/
+        // tooltip's real alpha is deferred until after Phase 8.x.x.
+        SectionLabel { text: "Appearance"; first: true }
+
+        SettingsRow {
+            name: "Transparency"
+            desc: "Let the desktop show through the panel"
+
+            SettingsSwitch {
+                id: transparencySwitch
+                checked: root.cfg_transparencyEnabled
+                onCheckedChanged: root.cfg_transparencyEnabled = checked
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: -6
+            Layout.bottomMargin: 8
+            spacing: 10
+            // Mockup's .kcm-sub-row.disabled - dims/disables the slider
+            // whenever Transparency is off, matching toggleTransSub().
+            opacity: transparencySwitch.checked ? 1.0 : 0.35
+            enabled: transparencySwitch.checked
+
+            Slider {
+                id: transparencySlider
+                Layout.fillWidth: true
+                from: 0
+                to: 100
+                stepSize: 1
+                value: root.cfg_transparencyPercent
+                onMoved: root.cfg_transparencyPercent = value
+
+                // Same copper track/handle styling as VolumeBlock.qml's
+                // volumeSlider (contents/ui/) - kept as an inline style
+                // here rather than a new shared component, since this is
+                // the only slider control in the settings page so far.
+                background: Rectangle {
+                    x: transparencySlider.leftPadding
+                    y: transparencySlider.topPadding + transparencySlider.availableHeight / 2 - height / 2
+                    implicitHeight: 4
+                    width: transparencySlider.availableWidth
+                    height: 4
+                    radius: 999
+                    color: root.theme.surface3
+
+                    Rectangle {
+                        width: transparencySlider.visualPosition * parent.width
+                        height: parent.height
+                        radius: 999
+                        color: root.theme.copper
+                    }
+                }
+
+                handle: Rectangle {
+                    x: transparencySlider.leftPadding + transparencySlider.visualPosition * (transparencySlider.availableWidth - width)
+                    y: transparencySlider.topPadding + transparencySlider.availableHeight / 2 - height / 2
+                    width: 15
+                    height: 15
+                    radius: 999
+                    color: root.theme.copperBright
+                }
+            }
+
+            Label {
+                text: Math.round(transparencySlider.value) + "%"
+                font.family: root.theme.fontMono
+                font.pixelSize: 11
+                color: root.theme.copperBright
+                Layout.preferredWidth: 34
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
         // ---- Volume ----
-        SectionLabel { text: "Volume"; first: true }
+        SectionLabel { text: "Volume" }
 
         SettingsRow {
             name: "Volume step size"
@@ -192,6 +371,62 @@ KCM.SimpleKCM {
                         }
                     }
                 }
+            }
+        }
+
+        SettingsRow {
+            name: "Startup / source-switch volume"
+            desc: "Applied after a widget-initiated power-on, and on every source switch"
+
+            DbStepper {
+                value: root.cfg_startupVolumeDb
+                from: root.dbRangeMin
+                to: root.dbRangeMax
+                onStepped: (value) => root.cfg_startupVolumeDb = value
+            }
+        }
+
+        // ---- Volume Limits ----
+        // Mockup note (see design/mockups/settings_window/
+        // devialet_config_dialog_mockup_v13_single_tab.html's own legend):
+        // +/- steppers rather than a slider, since two interdependent
+        // thresholds sharing one slider track is cramped and easy to
+        // mis-drag - a stepper gives exact, unambiguous values. Volume
+        // floor is ordered before Volume ceiling to match the mockup;
+        // don't rearrange.
+        SectionLabel { text: "Volume Limits" }
+
+        SettingsRow {
+            name: "Volume floor"
+            desc: "Slider floor — hides the unused low end so real-world volumes are easier to select"
+
+            DbStepper {
+                value: root.cfg_volumeFloorDb
+                from: root.dbRangeMin
+                // Phase 8.3.0: can never reach (let alone pass) the current
+                // hard limit - capped one step below it, not at dbRangeMax.
+                // DbStepper's own `enabled: value < to` disables "+" the
+                // moment this cap is reached, and its clamp() (Math.min)
+                // makes the boundary step land exactly on it, never past.
+                to: root.cfg_hardLimitDb - root.limitStepDb
+                stepDb: root.limitStepDb
+                onStepped: (value) => root.cfg_volumeFloorDb = value
+            }
+        }
+
+        SettingsRow {
+            name: "Volume ceiling"
+            desc: "Absolute ceiling — the amp is never sent a volume above this"
+            showDivider: false
+
+            DbStepper {
+                value: root.cfg_hardLimitDb
+                // Phase 8.3.0: mirror of the floor stepper above - can
+                // never reach the current floor, capped one step above it.
+                from: root.cfg_volumeFloorDb + root.limitStepDb
+                to: root.dbRangeMax
+                stepDb: root.limitStepDb
+                onStepped: (value) => root.cfg_hardLimitDb = value
             }
         }
 
@@ -260,8 +495,95 @@ KCM.SimpleKCM {
         SettingsRow {
             name: "Launch at login"
             desc: "Starts the background daemon via systemd --user"
+            // Default true - a real install should autostart the daemon
+            // out of the box. Still a dead placeholder otherwise: this
+            // isn't wired to real `systemctl --user is-enabled` state yet
+            // (that's Phase 4.4.6, not yet implemented - see TODO.md) or
+            // backed by KConfig at all (per CLAUDE.md, it never should be -
+            // systemd's own enablement state is the source of truth, not a
+            // stored bool), so this default only affects what the toggle
+            // visually shows before that wiring lands.
+            SettingsSwitch { id: loginSwitch; checked: true }
+        }
+
+        // ---- Reset ----
+        // Phase 8.0.0 follow-up: the mockup's original "Defaults" button
+        // lived in the ConfigDialog's own footer (v13), but that footer
+        // (Cancel/Apply/OK) is fixed shell chrome from
+        // AppletConfiguration.qml - a plasmoid's config.qml has no way to
+        // add a button to it (confirmed by reading that file directly, no
+        // Loader/Repeater/conditional slot exists there for a 4th button).
+        // v14 moves it into the page content instead, as this section -
+        // see that mockup's own updated legend for the same reasoning.
+        SectionLabel { text: "Reset" }
+
+        SettingsRow {
+            name: "Restore defaults"
+            desc: "Resets every setting on this page back to its shipped values"
             showDivider: false
-            SettingsSwitch { id: loginSwitch; checked: false }
+
+            Rectangle {
+                id: defaultsBtn
+                radius: root.theme.radiusSm
+                implicitWidth: defaultsLabel.implicitWidth + 28
+                implicitHeight: defaultsLabel.implicitHeight + 14
+                color: root.theme.surface
+                border.width: 1
+                border.color: defaultsArea.containsMouse ? root.theme.copperDim : root.theme.divider
+
+                Label {
+                    id: defaultsLabel
+                    anchors.centerIn: parent
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    text: "Defaults"
+                    color: defaultsArea.containsMouse ? root.theme.copperBright : root.theme.text
+                }
+
+                MouseArea {
+                    id: defaultsArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // Writes straight to the cfg_* properties, same as
+                    // every other control on this page - the shell's own
+                    // generic isConfigurationChanged() dirty-check (which
+                    // already drives Apply for every other row here)
+                    // picks this up for free, no extra wiring needed.
+                    // Values must stay in sync with main.xml's own
+                    // <default> entries - see root.shippedDefaults above.
+                    onClicked: {
+                        root.cfg_transparencyEnabled = root.shippedDefaults.transparencyEnabled;
+                        root.cfg_transparencyPercent = root.shippedDefaults.transparencyPercent;
+                        root.cfg_volumeStepDb = root.shippedDefaults.volumeStepDb;
+                        root.cfg_startupVolumeDb = root.shippedDefaults.startupVolumeDb;
+                        // Phase 8.3.0: widen the hard limit to dbRangeMax
+                        // *first* - a lone extra write, not just reordering
+                        // the two lines below - before touching either
+                        // limit toward its real shipped default. Each of
+                        // the three writes below is individually valid
+                        // against whatever the other one currently holds
+                        // (dbRangeMax is >= every reachable floor; the new
+                        // floorDefault is < dbRangeMax; the new
+                        // hardLimitDefault is > the new floorDefault), so
+                        // healLimitOrdering() above - which reacts to every
+                        // single write via onCfg_*Changed, not just the
+                        // final pair - never sees a transient invalid pair
+                        // partway through and self-heals over one of these
+                        // three intended values. Without this widen step, a
+                        // prior pair near the opposite extreme (e.g. floor
+                        // -90/hardLimit -89) sets floorDb -45 first, which
+                        // is >= the still-stale hardLimit -89, triggers a
+                        // self-heal to -40/-39 mid-click, and the final
+                        // hardLimitDb write below then leaves floorDb at
+                        // -40 instead of the intended -45 - caught by
+                        // tracing exactly this sequence, not observed live.
+                        root.cfg_hardLimitDb = root.dbRangeMax;
+                        root.cfg_volumeFloorDb = root.shippedDefaults.volumeFloorDb;
+                        root.cfg_hardLimitDb = root.shippedDefaults.hardLimitDb;
+                    }
+                }
+            }
         }
     }
 }

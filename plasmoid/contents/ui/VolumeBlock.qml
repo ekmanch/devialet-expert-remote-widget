@@ -67,10 +67,30 @@ ColumnLayout {
     // undefined | number - see header comment, fed from
     // FlyoutContent's root.pendingAmpState.volumeDb.
     required property var volumeDb
-    required property real volumeFloorDb
-    required property real volumeCeilingDb
-    required property real volumeStepDb
+    // Shared, root-anchored volume-range config (floor/hard-limit/step dB)
+    // - see VolumeSettings.qml's own header comment. Replaces this file's
+    // former 3 separate required real properties (volumeFloorDb/
+    // volumeCeilingDb/volumeStepDb); passed as one object rather than
+    // exploded fields, matching this file's own existing `theme` property
+    // convention.
+    required property VolumeSettings volumeSettings
     required property string activeSourceName
+    // Phase 8.0.1 follow-up (owner request, 2026-09-08): the daemon's
+    // PowerState ("Off"/"Booting"/"On"), fed from FlyoutContent's own
+    // guarded mirror - the same property whose change handler arms
+    // PendingAmpState's post-boot hold, so the controls below become
+    // interactive in the very tick the hold arms, never before.
+    required property string powerState
+
+    // Every volume input is interactive only with an amp connected AND
+    // powered on. Before this the gate was `ampIp !== ""` alone, so during
+    // "Off"/"Booting" the slider looked live while the amp dropped the
+    // command; the daemon's 400 ms pending mask (Phase 5.0.0) then
+    // reverted the optimistic value to the amp's real status byte - a
+    // visible snap-back within a fraction of a second. Nothing here
+    // changes that mask; the control is simply not offered. The dB
+    // readout stays (the amp reports its volume in standby), only dimmed.
+    readonly property bool interactive: volumeBlock.ampIp !== "" && volumeBlock.powerState === "On"
 
     // -1 / +1, one per button click/autoRepeat tick or wheel notch.
     signal stepRequested(int direction)
@@ -85,8 +105,10 @@ ColumnLayout {
     Layout.rightMargin: 16
     spacing: 10
     // Same whole-group dim Android's setGroupEnabled()/disabledAlpha uses
-    // when nothing is selected - ported 1:1 from FullRepresentation.qml.
-    opacity: volumeBlock.ampIp === "" ? 0.4 : 1.0
+    // when nothing is selected - ported 1:1 from FullRepresentation.qml,
+    // and the same 0.4 factor Phase 8.3.0 reused for blocked steppers.
+    // Now also applied while the amp is off or booting (`interactive`).
+    opacity: volumeBlock.interactive ? 1.0 : 0.4
 
     RowLayout {
         id: dbSourceRow
@@ -178,7 +200,7 @@ ColumnLayout {
             id: volumeDownButton
             objectName: "volumeDownButton"
             text: "−"
-            enabled: volumeBlock.ampIp !== ""
+            enabled: volumeBlock.interactive
             autoRepeat: true
             autoRepeatDelay: 300
             autoRepeatInterval: 100
@@ -211,10 +233,10 @@ ColumnLayout {
             // buttons' 26px row height - see Phase 4.2.2 (finding 8 is
             // this same, already-clean shape, re-verified here).
             implicitHeight: 26
-            from: volumeBlock.volumeFloorDb
-            to: volumeBlock.volumeCeilingDb
-            stepSize: volumeBlock.volumeStepDb
-            enabled: volumeBlock.ampIp !== ""
+            from: volumeBlock.volumeSettings.floorDb
+            to: volumeBlock.volumeSettings.hardLimitDb
+            stepSize: volumeBlock.volumeSettings.stepDb
+            enabled: volumeBlock.interactive
 
             // External state (the daemon-resolved pending-or-confirmed
             // value) drives `value` except while actively dragging - see
@@ -223,7 +245,7 @@ ColumnLayout {
             Binding {
                 target: volumeSlider
                 property: "value"
-                value: (volumeBlock.ampIp !== "" && volumeBlock.volumeDb !== undefined) ? volumeBlock.volumeDb : volumeBlock.volumeFloorDb
+                value: (volumeBlock.ampIp !== "" && volumeBlock.volumeDb !== undefined) ? volumeBlock.volumeDb : volumeBlock.volumeSettings.floorDb
                 when: !volumeSlider.pressed
             }
 
@@ -297,7 +319,7 @@ ColumnLayout {
             id: volumeUpButton
             objectName: "volumeUpButton"
             text: "+"
-            enabled: volumeBlock.ampIp !== ""
+            enabled: volumeBlock.interactive
             autoRepeat: true
             autoRepeatDelay: 300
             autoRepeatInterval: 100

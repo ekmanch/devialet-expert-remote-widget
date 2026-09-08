@@ -4738,6 +4738,1011 @@ architecture decisions; this file is just sequencing and status.
     `theme.radiusOverlay`; the mockup's flyout itself is 16.) CLAUDE.md's
     seam section carries a superseded note.
 
+- [x] **Phase 8.0.0 — Persistence + ConfigDialog settings UI.** Done
+      2026-09-05 — the three dB settings shipped with full ConfigDialog
+      UI and real KConfig persistence; the `devialet-ctl` CLI-wiring
+      piece was investigated (mechanism decided) but deliberately left
+      unimplemented, now tracked as Phase 8.0.1. Several unplanned
+      follow-ups landed in the same session — see this entry's own
+      closing summary for the full arc.
+  - **KConfig schema** (`main.xml`): `volumeFloorDb` (-45.0),
+    `hardLimitDb` (-10.0), `startupVolumeDb` (-40.0) — all `Double`,
+    defaults read directly from the mockup's own `LIMIT_DEFAULTS` JS,
+    not assumed carried over from an earlier draft.
+  - **Settings-page UI** (`ConfigGeneral.qml`): new `DbStepper.qml`
+    shared +/- component (`contents/config/`) — hold-to-repeat reuses
+    `QtQuick.Controls.Button`'s own `autoRepeat` (300ms delay/100ms
+    interval, matching the flyout's real `VolumeBlock.qml` buttons, not
+    the mockup's own placeholder 400ms/100ms JS timers). Added the
+    "Startup / source-switch volume" row to the Volume section and a
+    new "Volume Limits" section (Volume floor, Volume ceiling, an
+    inline ordering warning as an explicit Phase 8.3.0 placeholder).
+    Range -96..0 dB throughout, per the real Expert Pro line spec.
+  - **Verified directly against the real KConfig file**, not just
+    trusted: wrote test values via `kwriteconfig6`, confirmed the panel
+    scripting API's `readConfig()` reads them back correctly only after
+    a fresh `plasmashell --replace` — the same in-memory-cache
+    staleness this file already documents for the flyout size-key bug
+    (a still-running shell doesn't see an external write) applies here
+    too.
+  - **`devialet-ctl` CLI wiring: investigated, not implemented** (this
+    phase's own explicit gate). Confirmed the one real invocation site
+    (`FlyoutContent.qml`'s `selectSource()` → `runCtl("source " +
+    index)` → `Plasma5Support.DataSource.connectSource()`), and the
+    chosen mechanism: an optional trailing CLI argument,
+    `devialet-ctl --ip <ip> source <index> [<startup-volume-db>]`,
+    falling back to the existing hardcoded `SOURCE_SWITCH_VOLUME_DB`
+    when omitted. Confirmed no conflict with the existing source-switch
+    debounce guard (`lastSourceChangeAtMs` only covers
+    ActiveSourceName/Index, never volume). Tracked as Phase 8.0.1.
+  - **Follow-up (owner request, same session): one shared interface for
+    flyout/OSD/tooltip volume range.** Investigated and found the
+    volume range was not centralized at all, even before this phase —
+    two independent hardcoded `-15.0`/`-60.0` copies
+    (`FlyoutContent.qml`, `CompactRepresentation.qml`), with the OSD
+    toast and hover tooltip never seeing floor/ceiling themselves (only
+    a pre-computed fraction from `CompactRepresentation.qml`). Fixed
+    with a new **`VolumeSettings.qml`** — a plain `QtObject`, same shape
+    as the existing `PendingAmpState.qml` precedent, instantiated once
+    in `main.qml` (bound to `Plasmoid.configuration.volumeFloorDb/
+    hardLimitDb/volumeStepDb/startupVolumeDb`) and forwarded via
+    `required property` down both branches: `CompactRepresentation.qml
+    → FlyoutPopup.qml → FlyoutContent.qml → VolumeBlock.qml`, and
+    directly into `CompactRepresentation.qml`'s own scroll-volume/
+    fraction logic. Centralizes the actual `clamp()`/`stepped()`/
+    `fractionFor()` math too, not just the numbers.
+    `FlyoutContent.qml`'s `releaseVolume()` also gained a `clamp()`
+    call on slider release (owner-approved scope addition — it
+    previously trusted the Slider's own from/to unclamped). Added a
+    "Shared cross-view state" convention note to CLAUDE.md documenting
+    the pattern, contrasted with `Theme.qml`'s deliberate non-sharing.
+    **Side effect: Phase 8.2.0's core ask (slider bounds span floor-to-
+    hard-limit, wired once not per-surface) looks substantially done
+    too** — the flyout's slider `from`/`to` now really is
+    `volumeSettings.floorDb`/`.hardLimitDb`, tracing to the real KConfig
+    entries above, not a hardcoded literal. Not independently
+    owner-verified per 8.2.0's own checklist yet (dragging to the
+    extremes, rapid-repeat overshoot) — flagged there, not marked done
+    here.
+  - **Follow-up: ConfigDialog "Defaults" control.** The mockup's
+    original footer-button placement turned out to be impossible —
+    read the real installed shell (`AppletConfiguration.qml`) directly
+    and confirmed its footer is a hardcoded 3-button row (OK/Apply/
+    Cancel) with no slot for a 4th, since that file is shell-owned
+    (shared by every applet's ConfigDialog on the system), not part of
+    this plasmoid's own package. Investigated a fully-custom settings
+    window as an alternative at the owner's request — confirmed
+    technically feasible (`Plasmoid.configuration` is directly
+    writable from arbitrary QML per real installed precedent,
+    `hasConfigurationInterface = false` can suppress the right-click
+    "Configure..." entry) but a real architecture change with no local
+    precedent; owner chose to keep the standard ConfigDialog. Mockup
+    revised to v14 (Defaults moved into the page content, a new
+    "Reset" section at the bottom) and implemented as such — a
+    "Restore defaults" row whose button resets all six `cfg_*`
+    properties to their shipped values, feeding off the shell's
+    existing generic dirty-tracking with no extra wiring needed.
+  - **Follow-up: Appearance section — UI only, not wired to real
+    rendering.** New `main.xml` entries `transparencyEnabled` (`Bool`,
+    default `true`) and `transparencyPercent` (`Int`, default `90`) —
+    deliberately not named `transparencyLevel`, which collides with a
+    stale orphaned key of that exact name still sitting in real
+    installs' KConfig from the original, removed Phase 4.4.2/4.4.3
+    transparency feature. Toggle + copper-styled slider added as the
+    page's first section, matching mockup v14. Current real alpha
+    values, confirmed for the record: flyout tint 0.82, OSD toast +
+    hover tooltip (shared pair) 0.94 (`Theme.qml`). Owner's decision
+    for the eventual wiring (not done — see Phase 8.0.2): all three
+    surfaces end up on the same alpha (overriding `Theme.qml`'s current
+    documented rationale for keeping OSD/tooltip more opaque), off =
+    fully opaque (alpha 1.0), default 90%.
+  - **Misc fixes found/requested along the way**: General category's
+    sidebar icon now uses the mockup's own dedicated asset
+    (`design/icons/ConfigDialog_tab_general/
+    devialet_config_general_icon_white.svg`, copied into
+    `contents/icons/` — `design/` itself is never shipped); "Launch at
+    login" placeholder now defaults to checked (still not wired to real
+    systemd state — that's Phase 4.4.6, untouched); discovered and
+    fixed a real, pre-existing (not introduced this session) console
+    warning affecting all six `cfg_*` properties — KCMUtils' generic
+    ConfigModule loader expects a `cfg_<name>Default` companion for
+    each one, which none had; added all six, sourced from one
+    `shippedDefaults` object shared with the Reset button.
+  - Verified throughout: `qmllint` clean on every touched file (no new
+    warnings beyond pre-existing false-positive classes already present
+    elsewhere in this codebase); every reload
+    (`kpackagetool6 --upgrade` + `plasmashell --replace`) produced zero
+    QML errors; panel icon screenshot-confirmed rendering correctly
+    after each reload. **Not yet done**: the owner's own hands-on soak
+    (scroll/hover/click, and confirming a ConfigDialog change actually
+    propagates live to all three surfaces).
+
+- [x] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
+  Done 2026-09-06 — owner live-soaked and confirmed. Independent
+  implementation work, but now consumes the setting 8.0.0 persisted
+  rather than a hardcoded test value. Any function in the
+  dependency-free protocol library crate that constructs/sends a
+  volume-set command clamps to the configured hard limit internally —
+  structural, not a check any particular caller (devialet-ctl, the
+  daemon's D-Bus handler, a future client) has to remember to apply.
+  This replaces Phase 3's hardcoded MAX_VOLUME_DB ceiling — confirm no
+  leftover hardcoded ceiling remains anywhere in the crate once this
+  lands. Add cargo tests covering: command at/above/below the limit,
+  limit unset (unbounded), and the boundary value itself. No QML
+  changes this phase.
+  - **Investigation gate result (before implementing the wiring, as this
+    entry's own process required)**: `MAX_VOLUME_DB` had exactly two
+    call sites in the whole codebase, both inside `devialet-ctl`
+    (`volume` and `source`'s forced post-switch volume) — confirmed by
+    grepping the daemon source too, which never constructs a
+    `volume_packet` itself (`NotifyVolumeCommand` only records the
+    optimistic-state mirror, it doesn't build/send a UDP packet). So one
+    clamp point, inside `devialet-ctl`, is structurally sufficient — no
+    second call site in the daemon needs its own value delivery.
+  - **No existing precedent for a Rust component reading Plasma's
+    KConfig directly** — the daemon's only on-disk config code
+    (`crates/devialet-remote-daemon/src/config.rs`) is a bespoke
+    plain-text file for its own persisted amp selection, unrelated to
+    Plasma's real `plasma-org.kde.plasma.desktop-appletsrc` INI format.
+    Building a reader for that (parsing KDE's group format, finding the
+    right containment/applet ID at runtime — the same brittle
+    path-discovery problem the AppletPopup size-key bug documents
+    elsewhere in this file) was judged new scope beyond this phase.
+  - **Chosen mechanism**: `devialet-ctl`'s `volume` and `source`
+    subcommands gain a **required** `--hard-limit-db <db|none>` flag
+    (named, not positional — `source` is expected to gain its own second
+    optional trailing value in Phase 8.0.1, startup-volume-db; two
+    independent optional *positional* slots would be ambiguous about
+    which value fills which when only one is given, two independent
+    named flags aren't). Owner-requested revision from this entry's
+    first draft: the flag is required, not optional-defaulting-to-
+    unbounded — a bare invocation with the flag omitted entirely is now
+    a CLI usage error (exit 1), not a silent "no limit" gap. The literal
+    value `none` (case-insensitive) is the explicit, deliberate way to
+    request unbounded — distinct from simply forgetting the flag.
+    Internally this is `Option<Option<f64>>`: outer `None` = flag not
+    given (error), `Some(None)` = explicit `none`, `Some(Some(db))` = a
+    real limit. QML passes `volumeSettings.hardLimitDb` (always a real
+    number, never `none`) on every invocation that can send a
+    volume-set command (`CompactRepresentation.qml`'s scroll handler,
+    `FlyoutContent.qml`'s step/slider-release/source-switch paths) —
+    all four already held `volumeSettings` as a `required property` from
+    Phase 8.0.0's shared-state work, so no new plumbing was needed to
+    get the value into QML itself.
+  - **Owner-accepted trade-off, stated explicitly rather than left
+    implicit**: this closes the "structural, caller-independent"
+    guarantee only for QML-originated commands, and only in the sense
+    that a bare terminal invocation is now forced to make a deliberate
+    choice (a real limit, or explicit `none`) rather than silently
+    defaulting either way — `devialet-ctl` still has no independent way
+    to know or re-derive the widget's actual configured limit itself
+    without the KConfig-reader work described above, which was
+    investigated and not pursued this phase. A fully caller-independent
+    guarantee (a manual CLI invocation automatically picking up the
+    widget's real configured limit with no flag at all) would require
+    that KConfig reader; owner explicitly accepted this narrower scope
+    rather than building it.
+  - **Owner's live soak (2026-09-06), the phase's real verification**:
+    tried a range of floors (-50dB down to -70dB) and ceilings (-20dB to
+    -10dB) via the real ConfigDialog/flyout against the real amp. Every
+    volume within the currently-configured range sent successfully; no
+    value outside it was reachable. The original snap-back symptom this
+    phase set out to fix (anything below -60dB or above -15dB reverting
+    within about a second) is gone — confirmed across multiple different
+    configured ranges, not just the one pair used during implementation
+    verification.
+
+- [x] **Phase 8.2.0 — QML: slider bounds now span floor to hard limit.**
+  Done. Confirmed (re-read directly, this pass) that
+  the implementation is exactly as the prior note claimed:
+  `VolumeBlock.qml`'s Slider `from`/`to` bind to
+  `volumeSettings.floorDb`/`.hardLimitDb` (lines 218-219), which trace
+  through `main.qml` to `Plasmoid.configuration.volumeFloorDb`/
+  `hardLimitDb`; `CompactRepresentation.stepVolume()` and
+  `FlyoutContent.stepVolume()`/`releaseVolume()` all call the same
+  `VolumeSettings.stepped()`/`.clamp()` (one shared path, not
+  per-surface); `CompactRepresentation.volumeFraction` (one shared
+  `fractionFor()` call) feeds both `VolumeHoverTooltip.volumeFraction`
+  and every `VolumeToast.showVolume()`/`.showMute()` call, so the
+  flyout slider, hover tooltip and OSD toast can't independently
+  disagree about the range - this was a verification pass, no
+  implementation changed.
+
+  **Item 1 (drag/extreme-value clamping) - live-verified, exact.** Set
+  a non-default, closely-spaced pair (`floorDb=-30.0`, `hardLimitDb=
+  -22.0`, 8dB apart - deliberately not the shipped -45/-10 defaults,
+  written to the *correct* kcfg group,
+  `[Containments][46][Applets][128][Configuration][General]` - a first
+  attempt against the bare `[Configuration]` group silently no-op'd,
+  see the false-start note below), reloaded, then drove `VolumeDb` via
+  `tools/flyout-harness`'s `fakeamp.py` (monkeypatched `scenarios.
+  VOL_VALUES` for a custom sweep, `--vary vol`, run
+  `20260906-211508-phase8.2.0-boundcheck`) through 5 points: below
+  floor (-32), at floor (-30), mid (-26), at hard-limit (-22), above
+  hard-limit (-20). Read back `LayoutProbe`'s own coordinate dump
+  (`coords/*.json`) for the Slider's handle/fill rectangles rather than
+  eyeballing pixels:
+
+  | vol sent | dbValueLabel shows | handle visualPosition |
+  |---|---|---|
+  | -32.0 (below floor) | **-30.0** (clamped) | **0.0000** (left edge, not past) |
+  | -30.0 (= floor) | -30.0 | 0.0000 |
+  | -26.0 (mid) | -26.0 | 0.5000 (exact midpoint of an 8dB span) |
+  | -22.0 (= hard limit) | -22.0 | 1.0000 |
+  | -20.0 (above hard limit) | **-22.0** (clamped) | **1.0000** (right edge, not past) |
+
+  Screenshots at -30.0 and -22.0 confirm the same visually (handle
+  flush with the track's left/right ends). This is Qt's own
+  `QQuickSlider` value-clamping (`value` is bounded to `[from, to]`
+  regardless of how it's set, not something this project implements),
+  so the result generalizes to a real mouse drag past the visual track
+  edge too, not just a daemon-fed out-of-range value - a drag physically
+  cannot produce a `value` the Slider itself won't accept.
+
+  **False start worth recording**: the first attempt wrote
+  `volumeFloorDb`/`hardLimitDb` to the bare `[...][Configuration]`
+  group (by analogy with the `popupWidth`/`popupHeight` keys
+  documented elsewhere in this file, which *do* live there) and got a
+  self-consistent but wrong result - a perfect straight-line fit
+  across all 5 points with no clamping at either end, i.e. looked like
+  a real bug (slider ignoring its configured bounds entirely) until
+  cross-checked against the raw KConfig file. Root cause: kcfg entries
+  declared inside `<group name="General">` (`main.xml` line 15) live
+  one level deeper, at `[...][Configuration][General]` - the bare
+  group write landed on inert keys nothing reads, and the *actual*
+  live values were a stray `volumeFloorDb=-50` leftover in `General`
+  from earlier Phase 8.0.0/8.1.0 manual testing (no `hardLimitDb` key
+  there at all, so it was falling back to the kcfg default -10.0) -
+  from=-50/to=-10, exactly matching the wrongly-"confirmed" fit.
+  Lesson for next time: `kreadconfig6`/`grep` the *actual* file
+  contents before trusting a write landed where intended, especially
+  when a sibling key (`popupWidth`) in the same nesting level is a red
+  herring for a different, non-kcfg write path (`AppletPopup::
+  hideEvent()`, unrelated to `Plasmoid.configuration`). Config restored
+  to its exact prior state afterward (`volumeFloorDb=-50`, no
+  `hardLimitDb` key) - not reset to kcfg defaults - since that stray
+  value predates this session and its origin/intent wasn't this pass's
+  to judge; the owner may want to clean it up.
+
+  **Items 2 (rapid-repeat overshoot near a close-together boundary) and
+  3 (toast/tooltip visual agreement with the flyout slider) - verified
+  by code construction, then confirmed live by owner soak below.**
+  - Item 2: every step path (flyout ±buttons' `autoRepeat`, the
+    flyout's own wheel `MouseArea`, and the panel icon's scroll) computes
+    `VolumeSettings.stepped(pendingAmpState.volumeDb, direction)` -
+    `clamp(base + direction*stepDb)`, a plain `Math.min`/`Math.max` -
+    and `PendingAmpState.notifyVolume()` writes the clamped result
+    *synchronously* (`PendingAmpState.qml:87`) before returning, so the
+    very next call (however soon) reads back its own just-clamped
+    output as `base`. Clamp is idempotent, so no call sequence at any
+    rate can walk the value past either bound - this is exactly the
+    Phase 5.0.2 Step B design this phase's own checklist pointed at,
+    and closing the span (8dB tested above vs. the old fixed 45dB one)
+    doesn't change the argument at all, since it never depended on
+    span size.
+  - Item 3: `CompactRepresentation.volumeFraction` (one `readonly
+    property`, one `fractionFor()` call) is the single value forwarded
+    to `VolumeHoverTooltip.volumeFraction` and passed into both
+    `VolumeToast.showVolume()`/`.showMute()` calls - not three
+    independent computations that could drift, the same number reused
+    three times.
+  - Asked the owner for a soak covering: (a) fast repeated clicks on
+    the flyout's ±buttons right at each boundary, (b) fast scroll-wheel
+    notches over the panel icon at each boundary, (c) a fast real
+    slider drag past each visual track edge, and (d) a glance at the
+    OSD toast and hover tooltip immediately after a step near a
+    boundary, to confirm their fill visually lines up with the flyout
+    slider at the same moment.
+
+  **Owner soak (2026-09-06): passed, items 2 and 3 confirmed live.**
+  Reported "works well" after running the checklist above (fast
+  ±button clicks/scroll notches/slider drags at a boundary, no
+  transient overshoot). Screenshot supplied showing the flyout and the
+  OSD toast side by side at the live boundary in play - both read
+  "-50.0 dB", same source chip ("Optical 1"), flyout slider handle at
+  the track's floor end - direct visual confirmation of item 3
+  (toast/tooltip agree with the flyout slider) alongside item 1's
+  clamp holding for a real interactive session, not just the harness's
+  D-Bus-driven sweep above. That -50.0 dB boundary is the stray
+  `volumeFloorDb=-50` leftover value noted above (still live on the
+  dev machine, `hardLimitDb` still unset/-10.0 default) rather than
+  the -30/-22 pair this note originally suggested - doesn't matter for
+  what was being checked (clamping/agreement behavior, not a specific
+  numeric pair), but flagging again in case that stray value is worth
+  clearing (`kwriteconfig6 --file plasma-org.kde.plasma.desktop-
+  appletsrc --group Containments --group 46 --group Applets --group
+  128 --group Configuration --group General --key volumeFloorDb
+  --delete`, then `plasmashell --replace`) now that it's served its
+  accidental purpose here.
+
+- [x] **Phase 8.3.0 — ConfigDialog blocks invalid floor/ceiling
+  ordering at the point of interaction; self-heals if it's ever
+  violated anyway (supersedes prior "real validation" placeholder).**
+  Done. Depends on 8.0.0.
+
+  **Value correction, flagged rather than implemented as literally
+  specified**: the prompt for this phase said "write both back to
+  KConfig as hardLimitDb = -40.0, floorDb = -39.0" - that's inverted
+  against this codebase's own floor < hardLimit convention (floor is
+  the *more negative*/quieter bound everywhere else: shipped defaults
+  floor -45.0 < hardLimit -10.0, `ConfigGeneral.qml`'s own "Volume
+  floor"/"Volume ceiling" descriptions). -39 is numerically *greater*
+  than -40, so `hardLimitDb=-40, floorDb=-39` would leave floor > hard
+  limit - the exact bug this phase exists to prevent. Implemented as
+  **floorDb = -40.0, hardLimitDb = -39.0** instead (same magnitudes,
+  same 1dB gap, correct order) everywhere this pair appears.
+
+  **1. Stepper-level blocking** (`ConfigGeneral.qml`): the floor
+  `DbStepper`'s `to` is now `cfg_hardLimitDb - limitStepDb` (was
+  `dbRangeMax`) and the hard-limit `DbStepper`'s `from` is now
+  `cfg_volumeFloorDb + limitStepDb` (was `dbRangeMin`) - a new
+  `readonly property real limitStepDb: 1.0`, passed explicitly as
+  `stepDb:` to both instead of relying on `DbStepper`'s own default,
+  so the gap and the step size can't drift apart. `DbStepper`'s
+  existing `enabled: value > from` / `value < to` and its
+  `clamp()` (`Math.max`/`Math.min`) already do the actual refusing and
+  boundary-exact clamping for free - both directions guarded
+  independently since each stepper only reads the *other's* live
+  value, not its own.
+  - **UI feedback decision**: disabled cue, not a silent no-op, and
+    not a flash. `DbStepper`'s two buttons gained `opacity: enabled ?
+    1.0 : 0.4` (the same 0.4 factor `VolumeBlock.qml` already uses for
+    its own no-amp-connected dimming, applied per-button here since
+    only one of the pair is ever blocked at a time - a whole-row dim
+    would incorrectly gray out the still-usable button too). No flash:
+    no precedent for one anywhere in this codebase, and a flash
+    retriggering on every `autoRepeat` tick while held at the boundary
+    would look worse than a steady dim, not better.
+  - Removed the mockup-derived `visible: cfg_volumeFloorDb >=
+    cfg_hardLimitDb` warning `Label` ("Volume floor should stay below
+    the volume ceiling.") entirely, confirmed against
+    `devialet_config_dialog_mockup_v14_single_tab.html`'s own
+    `#limitWarning` text before removing it. Grepped the file
+    afterward for `dangerBright`/`limitWarning` - nothing left besides
+    the unrelated Forget-button danger color.
+
+  **2. Self-heal on load** (`main.qml`): a `Component.onCompleted` on
+  the `VolumeSettings { ... }` instantiation checks
+  `Plasmoid.configuration.volumeFloorDb >= .hardLimitDb` and, if so,
+  writes both back (corrected values, see above) before either
+  representation binds to the object - runs once, synchronously, at
+  daemon/widget startup.
+  - **Decision: yes, ConfigDialog also re-checks on open** - the
+    original intent was to also cover a KConfig file edited externally
+    while the widget was already running with a previously-valid pair
+    in memory (main.qml's check only fires once, at construction).
+    Implemented as `onCfg_volumeFloorDbChanged`/
+    `onCfg_hardLimitDbChanged` handlers calling a shared
+    `healLimitOrdering()` - reactive rather than a one-shot open hook,
+    so it self-corrects if *anything* pushes an invalid pair into those
+    two properties. **Does not actually reach the already-running
+    external-corruption case it was written for** - see the owner-soak
+    investigation below for why, found live rather than assumed. Still
+    real and worth keeping: it correctly guards every in-process write
+    to `cfg_volumeFloorDb`/`cfg_hardLimitDb` (the Defaults-button bug
+    below is a genuine example), just not that one specific scenario.
+  - **Real bug found and fixed while implementing this, not
+    hypothetical**: the reactive self-heal above interacts with the
+    existing "Defaults" button, which writes `cfg_volumeFloorDb` then
+    `cfg_hardLimitDb` in sequence. Starting from a legitimately
+    reachable prior state near one extreme (e.g. floor -90/hardLimit
+    -89, reached by decrementing each stepper repeatedly - fully valid
+    under the new mutual constraint the whole time), clicking Defaults
+    wrote floor to -45 *first*, which is `>=` the still-stale
+    hardLimit -89, firing the reactive self-heal mid-click and landing
+    hardLimit at -39; the very next line then overwrote hardLimit with
+    the real shipped default -10, leaving the pair at **floor -40**
+    (from the accidental self-heal) instead of the intended shipped
+    default -45. Fixed by widening first: the handler now writes
+    `cfg_hardLimitDb = dbRangeMax` *before* touching either value
+    toward its real default, then floor, then hardLimit - each of the
+    three writes is individually valid against whatever the other
+    currently holds (dbRangeMax is `>=` every reachable floor by
+    construction), so the reactive heal never fires mid-click. Traced
+    by hand through the reentrant signal-handler call stack for
+    several adversarial prior states (including external-corruption
+    cases with wildly separated values, not just the reachable
+    -90/-89 case) rather than assumed fixed after the one repro.
+
+  **Live-verified this pass (no pointer/screenshot needed):**
+  - **Self-heal on load, exact**: corrupted the live KConfig
+    (`volumeFloorDb=-5.0`, no `hardLimitDb` key → falls back to the
+    kcfg default -10.0, i.e. floor > hardLimit) with plasmashell fully
+    stopped (`pkill -x plasmashell`, confirmed not running), then
+    started it fresh. Config read back **exactly** `volumeFloorDb=-40`,
+    `hardLimitDb=-39` - correct values, correct order. No errors in
+    `journalctl --user _COMM=plasmashell` around startup.
+  - **No broken math after healing**: drove `VolumeDb=-39.5` (the
+    healed range's exact midpoint) through `tools/flyout-harness`'s
+    `fakeamp.py` and screenshotted the real flyout - handle sits
+    exactly centered on the track, label reads "-39.5 dB", nothing
+    NaN/degenerate.
+  - **`ConfigGeneral.qml` loads without a runtime error**: `qmllint`
+    clean on `ConfigGeneral.qml`/`DbStepper.qml`/`main.qml` (the
+    `main.qml` non-zero exit is a pre-existing standalone-qmllint
+    quirk unrelated to this change - confirmed identical on the
+    pre-Phase-8.3.0 file via `git stash`); separately triggered the
+    real dialog via `org.kde.PlasmaShell.evaluateScript` →
+    `widget.showConfigurationInterface()` (found via probing the
+    scripting `Widget` object's own property list - no `.action()`
+    method exists on it, contrary to a first guess) with the daemon
+    live - no QML warnings/errors appeared in the journal.
+  - **Not attempted initially**: a screenshot of the open ConfigDialog
+    itself. The owner had a fullscreen video player active at that
+    point in the session; a window-focused capture grabbed that window
+    instead, and the dialog didn't appear in a KWin window-list probe
+    shortly after (likely lost focus and/or was already dismissed -
+    not chased further at the time to avoid poking at window focus/
+    activation while the owner was actively watching something).
+    Superseded by the owner's own screenshots below once that was no
+    longer a concern.
+
+  **Owner soak (2026-09-06): (a)-(c) confirmed.**
+  Tried multiple different floor/ceiling value pairs in the real
+  ConfigDialog: with the gap at exactly 1dB, the floor stepper's "+"
+  and the hard-limit stepper's "−" both dim and refuse to progress
+  further - matches (a)/(b) exactly, including the boundary-exact
+  case (gap closed to precisely 1dB, not just "roughly close").
+  Screenshot supplied of the real rendered dialog (floor -32dB/ceiling
+  -31dB, a 1dB gap) confirms (c) too: nothing appears between the
+  "Volume ceiling" row and the "Amplifiers" section - the removed
+  warning text is genuinely gone from the rendered page, not just
+  invisible.
+
+  **(d) - self-heal-on-open while already running: investigated live
+  (2026-09-06), found structurally unreachable from applet QML in this
+  Plasma version, not a bug left unfixed.** Owner's own test (external
+  `kwriteconfig6` write while the widget stayed running, no restart)
+  showed the ConfigDialog displaying neither the corrupted value nor a
+  healed one - a third, older value, unchanged across several genuine
+  close/reopen cycles. Chased with `Component.onCompleted`/
+  `onVisibleChanged` diagnostics added temporarily to both
+  `ConfigGeneral.qml` and `main.qml` (removed again before closing this
+  phase) rather than guessed at:
+  - A first hypothesis (raw editor save vs. `kwriteconfig6` - only the
+    latter sends KConfig's own change-notification signal) was ruled
+    out: owner confirmed the corruption was a raw editor save, but a
+    **second** test using `kwriteconfig6` specifically hit the exact
+    same staleness.
+  - The diagnostics then showed the real mechanism: `Plasmoid.
+    configuration` is a single `KConfigPropertyMap` object, created
+    once when the plasmashell process starts and shared by every QML
+    file in this KPackage - `contents/config/ConfigGeneral.qml`
+    included (confirmed reachable there: `Plasmoid.configuration`
+    resolves to a real, non-null `KConfigPropertyMap`, contrary to an
+    earlier, untested assumption elsewhere in this file's history).
+    Logging its object address across two separate `ConfigGeneral.qml`
+    page instantiations (a real close then a real reopen, not just
+    `visible` toggling - `Component.onCompleted` fired again both
+    times) showed the **identical** address, and both times the
+    freshly-created page's own initial `cfg_volumeFloorDb`/
+    `cfg_hardLimitDb` were already stale, matching the shared object's
+    stale in-memory state rather than the file.
+  - Confirmed this isn't a ConfigDialog-only quirk: with the file
+    externally corrupted this way, the **live flyout itself** (via
+    `tools/flyout-harness`, no pointer needed) rendered using the same
+    stale pair, not the file's current one - clamping a swept `VolumeDb`
+    at the stale hard-limit exactly, byte-for-byte consistent with the
+    stale value and nothing else. A real external corruption while the
+    widget is running is invisible to the running widget too, not just
+    to the dialog.
+  - **Root cause, confirmed by reading the actual header** (`/usr/
+    include/KF6/KConfigQml/kconfigpropertymap.h`, on this dev machine -
+    not inferred from behavior alone), **not just "benign," provably
+    inert**: `Plasmoid.configuration` is a `KConfigPropertyMap`. Its
+    `isNotify()`/`setNotify()` pair - the switch for listening to
+    `KConfigBase::Notify`, the exact change-notification signal
+    `kwriteconfig6` sends - is documented "Disabled by default," and
+    its only other write path, `updateValue()`, is called solely from
+    an explicit local property assignment (`Plasmoid.configuration.foo
+    = x`). No polling, no file watcher wired in absent that flag. So
+    the object has no mechanism by which an external write could reach
+    it - not an observed pattern that might have an exception, a
+    documented absence of any such path. Closed the one gap in the
+    empirical coverage this raised on review: every corruption test
+    above touched `floorDb` (or both keys via a fresh restart) - a
+    dedicated follow-up corrupted `hardLimitDb` **alone**, leaving
+    `floorDb` on disk untouched, and got the symmetric result: the
+    live flyout clamped a swept value to the *pre-corruption*
+    `hardLimitDb`, not the corrupted one - proven by the clamped
+    value's own displayed label, not just its slider position (which
+    alone couldn't have distinguished the two). Both keys are
+    independently and symmetrically inert to an external write, exactly
+    as the header predicts. So: the amp keeps getting governed by
+    whatever was last known-good in memory, never by a corrupted
+    on-disk value, until the next restart - provably, not probably.
+  - `Plasmoid.configuration` reads the file correctly exactly once, at
+    that `KConfigPropertyMap`'s own construction - confirmed clean and
+    reproducible twice via the same diagnostics: corrupt the file with
+    the widget NOT running, restart, and the read/heal sequence is
+    exactly right (`floorDb`/`hardLimitDb` bind to the real corrupted
+    values, the `>=` check fires once, both properties update to
+    -40.0/-39.0, nothing re-fires after). This is exactly what
+    main.qml's on-load self-heal already relies on and is why it's
+    reliable - the fresh-process-start case was never in question, only
+    the already-running one.
+  - No QML-level API to force `Plasmoid.configuration` to reparse was
+    found (`writeConfig()` is the only other public method on this
+    class, and it saves outward, not reloads inward). A hand-rolled
+    workaround (reading the raw
+    `plasma-org.kde.plasma.desktop-appletsrc` INI file directly,
+    bypassing KConfig entirely) was considered and rejected - it would
+    duplicate and risk diverging from Plasma's own config format/
+    semantics, for a scenario CLAUDE.md's own Phase 8.3.0 framing
+    already calls out as "not something the owner is defending against
+    maliciously." Same class of wall as the real-transparency
+    investigation elsewhere in this file: investigated live, root-
+    caused (this time down to the actual header, not just observed
+    symptoms), accepted rather than worked around.
+  - `ConfigGeneral.qml`'s `onCfg_volumeFloorDbChanged`/
+    `onCfg_hardLimitDbChanged` handlers (and their `healLimitOrdering()`)
+    are kept - both files' comments corrected to stop claiming they
+    cover the already-running external-corruption case (they never
+    actually could, given the above), while accurately describing what
+    they DO cover: any in-process write to `cfg_volumeFloorDb`/
+    `cfg_hardLimitDb`, which is a real, reachable case on its own (the
+    Defaults-button bug found earlier in this same phase went through
+    exactly this path).
+  - One real regression found and fixed during this investigation, not
+    shipped: an early diagnostic edit accidentally duplicated
+    `onCfg_volumeFloorDbChanged`/`onCfg_hardLimitDbChanged` (the
+    diagnostic block and the pre-existing healing block both declared
+    them), which QML treats as a hard "Property value set multiple
+    times" error - not a warning - and silently blanked the entire
+    ConfigDialog page (matching this file's own documented
+    `ConfigCategory.source` blank-page failure signature for a
+    different root cause). Caught immediately via a live screenshot
+    from the owner, fixed by merging into one handler each, verified
+    clean via `qmllint` (which did **not** catch the duplicate-property
+    error - `qmllint` is necessary but not sufficient for this kind of
+    change; a real load/render check is still needed) and a real
+    dialog open afterward, with a fresh screenshot from the owner
+    confirming the page renders correctly again.
+    
+- [x] **Phase 8.4.0 — Immediate clamp on settings change.**
+  Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the
+  Rust clamp to exist) — can be built alongside or after 8.2.0/8.3.0.
+  Correction to this entry's original wording: the daemon does NOT send
+  the command (its NotifyVolumeCommand only records an optimistic
+  pending_volume_db mirror - see interface.rs and Phase 8.0.1's explicit
+  rejection of the daemon as an autonomous second sender). The real
+  mechanism is main.qml issuing a devialet-ctl invocation via its own
+  Plasma5Support.DataSource (id: clampExec), exactly like every existing
+  volume-change call site (CompactRepresentation.qml's/FlyoutContent.qml's
+  stepVolume()/releaseVolume()), then calling
+  pendingAmpState.notifyVolume() for the optimistic mirror.
+  Both open questions below are now decided (owner, 2026-09-07):
+  - **Both directions are required and symmetric.** A newly-set hard
+    limit below the amp's current live volume immediately pulls it down
+    to the new limit; a newly-raised floor above the amp's current live
+    volume likewise immediately bumps it up to the new floor. Neither
+    is deferred to the next user-initiated volume change.
+  - **Only the currently-connected amp is touched.** Scoped to
+    pendingAmpState.ampIp (mirroring the daemon's real AmpIp property,
+    not SelectedAmpIp's UI-picker bookkeeping) - other/disconnected
+    KnownAmps entries have no live volume to compare against and aren't
+    reachable, matching every other volume call site's own
+    `if (ampIp === "") return` guard.
+  - **The amp stays muted through the correction.** Unlike
+    stepVolume()'s own muted-unmute-on-scroll UX, this path never sends
+    "mute off"/calls notifyMute() - volume and mute are independent
+    protocol commands (separate opcodes; volume_packet carries no mute
+    bit), so a bare volume command doesn't unmute the amp at the
+    protocol level, and the amp should stay silent/muted through a
+    settings-driven correction rather than audibly unmuting.
+  Interaction with Phase 5's pending-command architecture is correct by
+  construction: this reuses PendingAmpState.notifyVolume() itself, the
+  same call every other volume change already goes through - no bypass
+  possible. Implementation-specific risk to verify: a single
+  ConfigDialog Apply/OK can change both volumeFloorDb and hardLimitDb in
+  the same tick (two independent, non-batched property-change signals);
+  the handler coalesces these via Qt.callLater so exactly one
+  fully-settled check runs, not one per changed entry with a transiently
+  wrong intermediate value, and no-ops (sends nothing) when the clamped
+  value already equals the current value.
+
+  **Done 2026-09-07, live-verified against the real amp** (192.168.0.22,
+  "My Devialet-ETH", Devialet Expert 140 Pro). Settings changes driven via
+  the Plasma shell scripting API's `applet.writeConfig()`/`.reloadConfig()`
+  (`org.kde.PlasmaShell.evaluateScript`) rather than synthetic pointer
+  clicks, per this project's established owner-soak-over-scripted-pointer
+  convention - this exercises the exact same in-process
+  `Plasmoid.configuration` write path ConfigDialog's Apply/OK uses, without
+  needing simulated mouse input on the real desktop. Confirmed via
+  `busctl`/`journalctl`, not just code-reading:
+  - Ceiling pulls volume down: real amp -25dB → -30dB on lowering
+    hardLimitDb, one devialet-ctl invocation, exit 0.
+  - Floor pulls volume up: real amp -30dB → -20dB on raising
+    volumeFloorDb, one invocation, exit 0.
+  - No-op: widening the ceiling with volume already in range sent zero
+    devialet-ctl invocations.
+  - Coalescing: changing volumeFloorDb AND hardLimitDb in one
+    writeConfig/reloadConfig batch (mirroring a single Apply click)
+    produced exactly one invocation, not two and not a
+    wrong-then-corrected pair - confirms the Qt.callLater dedup works
+    against real, back-to-back property-change signals, not just in
+    theory.
+  - Muted amp stays muted: clamped -8dB → -10dB while Muted was true;
+    Muted stayed true throughout, and only a `volume` invocation ran (no
+    `mute` command was ever sent alongside it).
+  - Cross-surface consistency: cannot be directly observed - not a gap,
+    a structural non-event. Opening ConfigDialog dismisses the flyout via
+    `hideOnWindowDeactivate`, so the two are never simultaneously visible;
+    there's no window state in which a settings-triggered clamp could
+    show both surfaces at once for a side-by-side check. What stands in
+    for it: `notifyVolume()`'s synchronous write (PendingAmpState.qml)
+    means any later look at either surface is guaranteed correct by
+    construction, not by timing - VolumeBlock.qml's slider (`Binding {
+    when: !volumeSlider.pressed }`) and VolumeHoverTooltip.qml's text are
+    both bound directly to pendingAmpState.volumeDb, which updated
+    correctly on every test above, so whichever surface is checked
+    afterward necessarily shows the right value already.
+  - Multi-amp scope: **live-verified as a follow-up (2026-09-07)** using
+    the Phase 7.2.0 fake D-Bus daemon (`tools/flyout-harness/fakeamp.py`,
+    reused unmodified - no harness extension needed, it already accepts
+    an arbitrary `KnownAmps` array via `FakeAmp.set_amp()`) against the
+    real, already-running plasmoid, rather than continuing to rely on
+    code-reading alone. Fabricated two known amps on fictional IPs
+    (10.255.255.101 "connected"/selected, 10.255.255.102 "disconnected" -
+    deliberately NOT `scenarios.AMP_A`'s real 192.168.0.22, since
+    devialet-ctl sends a real UDP packet independent of the D-Bus daemon
+    being fake; reusing a real amp's real IP here would have sent a real
+    command to real hardware), connected amp at -20dB (in range, so the
+    AmpIp-transition-triggered check - the onAmpIpChanged fix above - is
+    itself exercised as a clean no-op first), then lowered hardLimitDb to
+    -30.0. Captured via a temporary devialet-ctl logging wrapper on the
+    `~/.local/bin/devialet-ctl` symlink (not part of the checked-in
+    harness - journalctl only logs exit code/stderr, not invocation args,
+    and the fake daemon's own D-Bus call log only sees NotifyVolumeCommand,
+    not the UDP-sending CLI, so neither existing mechanism alone could
+    show *which* IP was targeted). Result: exactly one devialet-ctl
+    invocation, `--ip 10.255.255.101 volume -30 --hard-limit-db -30`,
+    zero invocations naming .102 anywhere. Independently corroborated by
+    the fake daemon's own method-call log, which shows exactly one
+    `NotifyVolumeCommand('10.255.255.101', -30.0)` and nothing for .102 -
+    two independent capture mechanisms agreeing.
+    Scope of what this proves vs. doesn't: this verifies the QML-side
+    invocation-targeting guarantee end-to-end against the real, running
+    widget (pendingAmpState.ampIp is the only thing that ever reaches a
+    devialet-ctl --ip argument; KnownAmps is never iterated for this
+    purpose) - it does NOT exercise real multi-amp mDNS discovery/model-
+    name resolution (Phase 3.7) or two real amps broadcasting
+    simultaneously on the LAN, which stays genuinely untested (out of
+    scope here - this follow-up targets the settings-triggered-clamp
+    guarantee specifically, not amp discovery) and would need a second
+    physical amp to close.
+
+  **Real bug found and fixed during this pass**: self-heal
+  (Phase 8.3.0's Component.onCompleted) did NOT reliably trigger the
+  immediate clamp. Reproduced live: corrupted on-disk config to an
+  invalid floor/hardLimit ordering while the amp sat at a volume outside
+  the range self-heal would produce, then restarted plasmashell. Self-heal
+  correctly rewrote the config to -40.0/-39.0 (confirmed on disk and in
+  the journal), but the amp's volume never moved, even after waiting 10+
+  seconds with AmpIp confirmed populated - no delayed fire either.
+  Root-caused: `Component.onCompleted` runs synchronously during
+  construction; `Qt.callLater`'s deferred callback reliably fires on the
+  next event-loop tick, which beats the daemon's async D-Bus reply that
+  populates `pendingAmpState.ampIp` - so `applyImmediateClamp()`'s guard
+  saw `ampIp === ""` and no-op'd, and since floorDb/hardLimitDb don't
+  change again on their own, nothing ever retried the check once the amp
+  actually connected. (This only affects the on-disk-corruption-while-
+  the-widget-wasn't-running scenario - ConfigDialog Apply/OK, the
+  real-world trigger, is unaffected: an amp has always long since
+  connected by the time a user can click Apply.)
+
+  Fix: added `onAmpIpChanged: Qt.callLater(root.applyImmediateClamp)` on
+  `pendingAmpState` in main.qml, so the check re-runs once a connection
+  actually lands, not just when floorDb/hardLimitDb change. Deferred via
+  Qt.callLater for a distinct, verified reason (not just consistency with
+  the floorDb/hardLimitDb handlers): `PendingAmpState.qml`'s
+  `onRefreshed`/`onPropertiesChanged` assign `root.ampIp` before
+  `root.volumeDb` in the same synchronous handler call, so a
+  non-deferred handler here would read a stale/not-yet-updated volumeDb
+  from the very refresh that just delivered the fresh one. Confirmed no
+  interaction with the floorDb/hardLimitDb coalescing: ampIp changes come
+  only from the daemon's async D-Bus signal delivery, never from the same
+  tick as a local Plasmoid.configuration write. Re-verified live after the
+  fix: same corrupted-config-then-restart repro now shows the
+  self-heal console.log line immediately followed by exactly one
+  devialet-ctl invocation, real amp volume pulled from -16dB to the
+  healed -39dB ceiling. Re-ran the ceiling/no-op/coalescing checks above
+  again post-fix to confirm no regression (still exactly one invocation
+  each, correct values).
+
+- [x] **Phase 8.0.1 — devialet-ctl startup-volume CLI wiring.**
+  Depends on 8.0.0 (done — persistence exists) and ideally waits until
+  8.2.0-8.5.0 (floor/hard-limit range work) are done first — this
+  phase is independent of those and doesn't block them, but the branch
+  was primarily about fixing volume clamping, so this can be picked up
+  last within feature/volume-limits, deferred deliberately, not
+  forgotten.
+  Two mechanisms are needed here, not one — scoped and decided below
+  after a design discussion; this phase implements rather than
+  investigates from scratch, EXCEPT for one open question on the
+  source-switch side, flagged below, that still needs a real
+  investigation gate before implementation.
+  - **Source switching — investigate the same-invocation assumption
+    before trusting it.** devialet-ctl source already sends the
+    source-change command and a forced post-switch volume in the same
+    single invocation (Phase 3's existing architecture, currently
+    hardcoded to SOURCE_SWITCH_VOLUME_DB, -40dB) — this has always
+    worked for the existing hardcoded value, but that doesn't confirm
+    the amp accepts a volume command sent in the same breath as a
+    source-change command with zero settling time. Unlike power-on's
+    ~15s boot delay, this window is small and currently unmeasured —
+    possibly genuinely instant, possibly a few hundred ms of the amp
+    ignoring/dropping a volume command that arrives before it's
+    finished switching source internally. Do not assume the existing
+    hardcoded -40dB send has ever actually validated this timing edge
+    case; it may simply not have been noticed if the difference between
+    "-40dB immediately" and "-40dB after some tiny delay" was never
+    visually or audibly distinguishable during Phase 3's original
+    testing. Investigate: send source-change and volume-set
+    back-to-back at max speed against the real amp several times and
+    confirm the volume command is actually honored every time, not
+    silently dropped or overwritten by the amp's own behavior. If it
+    turns out unreliable, the fix mirrors power-on's approach below (a
+    short QML-side delay or a real confirmation signal before sending
+    volume) rather than the naive same-invocation send. Report findings
+    before proceeding either way.
+    - Once confirmed reliable (or fixed): add an optional
+      --startup-volume-db <db> flag to devialet-ctl source. Provided →
+      use that value as the post-switch volume. Omitted → fall back to
+      the existing hardcoded -40dB unchanged, no error (deliberately
+      NOT required, unlike --hard-limit-db — an omitted safety ceiling
+      used to mean "unbounded," a real gap; an omitted startup volume
+      just means "use the existing safe default," which is already
+      correct behavior, so there's nothing to close by requiring it).
+      Confirm the value still gets clamped by --hard-limit-db when both
+      flags are present on the same invocation. Wire
+      FlyoutContent.qml's selectSource() to pass
+      root.volumeSettings.startupVolumeDb alongside the existing
+      volumeSettings.hardLimitDb.
+  - **Power-on: NOT a same-invocation extension** — this needs real new
+    plumbing, not just a CLI flag. Investigated and rejected: sending a
+    volume-set UDP packet in the same devialet-ctl invocation as the
+    power-on command. Reason: the real amp takes roughly 15 seconds to
+    actually power on after receiving the command; a volume packet sent
+    at power-on-command time arrives long before the amp is listening
+    and is almost certainly ignored or overwritten by the amp's own
+    internal default once it actually boots. The command needs to fire
+    only after real boot confirmation, not at send-time.
+    - Also investigated and rejected: making the daemon an autonomous
+      second sender that watches UDP status broadcasts and reactively
+      fires a volume-set command on any off→on transition it observes,
+      regardless of cause (physical remote, front panel, external
+      trigger). Owner explicitly decided this is out of scope —
+      widget-triggered power-on only needs to be covered, not external
+      triggers — so this was rejected as solving a problem that
+      doesn't need solving, at the cost of contradicting Phase 8.1.0's
+      finding that "the daemon never constructs a volume_packet itself"
+      and requiring new D-Bus surface to deliver the daemon a
+      persisted value.
+    - **Chosen mechanism**: stays entirely in QML, no daemon or D-Bus
+      changes. QML already subscribes to the daemon's existing
+      PropertiesChanged D-Bus signal, which already distinguishes
+      "commanded on, still booting" from "confirmed on" (the same
+      boot-timer machinery behind today's flyout "Powering on…" state).
+      On a widget-initiated Power On click, QML sets a local pending
+      flag; when it observes the state genuinely transition from
+      booting to confirmed-on via that existing signal, THEN it fires
+      devialet-ctl <power-on-subcommand — confirm exact name/existing
+      invocation site before implementing> --startup-volume-db <db> (or
+      a separate immediate follow-up invocation if power-on and volume
+      can't share one subcommand — confirm which). This only fires for
+      widget-initiated power-on, matching the owner's explicit
+      decision; an externally-triggered power-on (remote, front panel)
+      is not covered and is not required to be.
+    - Investigate before implementing: the exact devialet-ctl
+      subcommand name and QML call site for power-on today, and
+      whether PendingAmpState.qml is the right place for the new
+      pending-startup-volume flag (it already owns the analogous
+      power-state optimistic tracking) or whether it belongs elsewhere.
+      Report findings before writing code.
+  - **Verify live:** set a non-default startup volume in ConfigDialog.
+    (1) Switch sources on the real amp several times in a row — confirm
+    post-switch volume reliably matches the configured value every
+    time, not just once, given the investigation above may reveal
+    intermittent behavior rather than a clean pass/fail. (2) Power off,
+    then power on via the widget — confirm the amp's volume, once it
+    actually finishes booting (~15s), lands on the configured startup
+    volume, not whatever the amp defaults to on its own. Confirm the
+    flyout does not attempt to send the volume command before boot is
+    confirmed (verify via journalctl/dbus-monitor timing, not just the
+    final result). Confirm a startup volume set above the configured
+    hard limit gets clamped in both the source-switch and power-on
+    paths.
+  
+
+  **Implemented 2026-09-08 (branch feature/volume-limits); automatable
+  verification done and owner soak passed the same day** - the owner
+  ran the plan's items 5-10 live against the real amp (repeated source
+  switches landing on the configured startup volume; widget power-on
+  ×3 including with the flyout closed mid-boot, amp landing on the
+  configured value, not -42; above-limit startup volume clamped on
+  both paths; external power-on sending nothing; front panel and
+  flyout/tooltip agreeing after the send; Gate #3 feel - no -42 flash,
+  configured value at "On", and an in-window slider/scroll change
+  followed immediately with the amp ending on the hand's value) and
+  reported all passed. Both investigation
+  gates were run against the real amp on 2026-09-07 before any code
+  (amp restored to Optical 1 / -25 dB afterwards):
+  - **Gate #1, source switch - same-invocation send is reliable.** 6/6
+    alternating Optical 1 ↔ Roon Ready switches with the target
+    input's per-input memory pre-set to -30 (distinguishable from the
+    forced -40): the first broadcast ~200 ms after the zero-delay
+    source×2 + volume×2 send already carried the new index and -40
+    together and held for 4 s. No delay needed; the flag rides the
+    existing shape.
+  - **Gate #2, power-on.** `devialet-ctl --ip <ip> power on`, called
+    only from FlyoutContent.qml's togglePower(). Power-on and volume
+    cannot share an invocation (one command per process, fire-and-exit,
+    no way to wait for the 15.0-18.6 s boot) - the follow-up is the
+    existing `volume` subcommand ~500 ms after the daemon's PowerState
+    "On". The pending flag lives in FlyoutContent.qml (owner of the
+    only PowerState mirror and the only `power on` call site;
+    PendingAmpState's header forbids other properties; main.qml's root
+    is unnecessary since FlyoutPopup is a plain Dialog child, no
+    Loader, so FlyoutContent stays resident while hidden). Ordering
+    checked per Phase 8.4.0's method: the handler reads only
+    root.powerState and the flag, the Timer defers the send past the
+    whole PropertiesChanged handler, nothing reads
+    pendingAmpState.volumeDb, so no Qt.callLater needed. Two separate
+    amp findings came out of the raw-capture sweep (kept separate on
+    purpose): (a) the post-boot broadcast misreport (-42 broadcast vs
+    -40 front panel, no self-correct) = the "widget doesn't reflect
+    amp-initiated volume changes" bug in ## Bugs, now characterized
+    there and in known-gotchas #8; (b) commands reaching the amp before
+    its own startup-volume application are dropped - early-exit sweep
+    +2 ms 0/1, +100 ms 1/2, +200 ms 9/9 (all with the application at
+    ≤ +202 ms), +500 ms 3/3, +1018/+2030 ms 1/1; chosen
+    `startupVolumeAfterBootMs = 500`, the smallest round value above
+    the latest observed amp-side application (+394 ms). Known-gotchas
+    #9 carries the table.
+  - **Gate #3, post-boot display hold (owner request).** Without it every
+    surface shows -42 for ~300-500 ms between the misreport and the
+    send landing. Lives in PendingAmpState.qml (the one VolumeDb
+    consumer every surface reads) as the second instance of the 400 ms
+    PowerState-guard pattern: armed on "On" with the target, VolumeDb
+    pushes recorded but not applied, released on a **VolumeRaw** push
+    decoding to the held value (the daemon's deliberately unmasked
+    byte; the VolumeDb echo of our own NotifyVolumeCommand fires at the
+    send and proves nothing), 1500 ms bounded fallback to the last real
+    value. A user volume change inside the window re-targets both the
+    hold and the deferred send - verified at the amp level 4/4 (user
+    -30 at +161…+349 ms honored, resend idempotent) against the naive
+    design that lost the user's change 1/1. PendingAmpState's header
+    rule is amended to name VolumeRaw for this one purpose.
+  - **Changes**: `crates/devialet-ctl/src/main.rs` (optional
+    `--startup-volume-db`, `parse_args_from` + first `#[cfg(test)]`
+    module in the crate, 8 tests incl. the clamp composition);
+    `FlyoutContent.qml` (selectSource passes the pre-clamped target and
+    notifies; `pendingStartupVolumeIp`, `startupVolumeTimer`,
+    `onPowerStateChanged`, `sendStartupVolume()`; togglePower arms/
+    disarms); `PendingAmpState.qml` (`beginBootHold`/`endBootHold`,
+    `bootHoldIp/Db`, `lastRealVolumeDb`, `bootHoldTimer`, VolumeRaw
+    branch, notifyVolume re-target); `ConfigGeneral.qml` stepper desc
+    ("Applied after a widget-initiated power-on, and on every source
+    switch" - the old "when the daemon starts" was never true);
+    `interface.rs` comment only; `docs/known-gotchas.md` #8/#9. No
+    daemon behaviour change.
+  - **Automatable verification (2026-09-08)**: `cargo test` 8 + 39
+    passing, clippy clean. CLI byte-level check with a local UDP
+    listener on 45455: `source 0 --hard-limit-db -10
+    --startup-volume-db -30` → packets 3/4 bytes 8-9 == `volume -30`'s;
+    `--startup-volume-db -5` → == `volume -10` (clamped); flag omitted →
+    == `volume -40`, exit 0, no stderr; swapped flag order identical;
+    bad/missing value → exit 1, no packets. Standalone Qt 6 `qml`
+    driver instantiating the real PendingAmpState.qml against
+    tools/flyout-harness/fakeamp.py: 20/20 (arm shows target at once;
+    misreport push not applied; VolumeDb-only echo does not release;
+    raw 129 releases; normal push applies after; user notifyVolume
+    re-targets and only the user's raw releases; fallback fired at
+    1502 ms to the last real value; AmpIp change ends the hold while
+    an unchanged AmpIp re-emit does not; target == misreport confirms
+    immediately; one NotifyVolumeCommand per send). Live plasmashell
+    display check (real daemon stopped, fake daemon on 10.255.255.1,
+    `startupVolumeDb` set to -33 via the scripting API, LayoutProbe
+    dumps of `dbValueLabel`): On + raw 111/-42 → label -33.0, never
+    -42; NotifyVolumeCommand(-33.0) at +503/+502 ms and the journal's
+    `running: devialet-ctl --ip 10.255.255.1 volume -33 --hard-limit-db
+    -10`, exit 0; non-matching raw while held keeps -33.0 (+1250 ms);
+    raw 129 releases and a following -32 push shows -32.0 before the
+    fallback (+1250 ms); unconfirmed → -42.0 at +2250 ms (1500 ms
+    fallback); a boot-timeout "Off" disarms so a later On shows -42.0
+    and sends nothing. Arming was driven by setting
+    `pendingStartupVolumeIp` through the harness UiState hook (the
+    state togglePower() sets) - togglePower()'s own arm/disarm lines
+    and the in-window manual override are pointer-driven and left to
+    the owner soak. Note for future harness runs: the Qt 6 tool is
+    `/usr/lib/qt6/bin/qml` (`/usr/bin/qml` is Qt 5) and needs
+    `QT_FORCE_STDERR_LOGGING=1` or its console output goes to journald.
+
+- [x] **Phase 8.0.1 follow-up — volume inputs gated on PowerState
+  (owner soak finding, 2026-09-08).** Owner observed during a boot:
+  the slider looked live during "Booting" and a drag snapped back to
+  the pre-power-off value within a fraction of a second.
+  - **Root cause, pre-existing (not the boot hold):** the daemon's Phase
+    5.0.0 pending-command mask (`PENDING_COMMAND_TIMEOUT` 400 ms,
+    `resolve_pending_commands`, commit e87afd1). A drag while off/
+    booting sends `volume` + `NotifyVolumeCommand`; the amp drops the
+    UDP command (gotcha #9 shows drops even 2 ms after "On"), nothing
+    confirms it, and the next recompute after the 400 ms deadline (next
+    broadcast, or the 1 s poll tick) reverts VolumeDb to the amp's real
+    status byte. Reproduced daemon-only: `NotifyVolumeCommand(-33)` with
+    no UDP sent → VolumeDb -33 at +1 ms, back to -30 at +472 ms
+    (deadline + one ~200 ms broadcast). Journal from the soak: `power on`
+    at 20:17:20.97, five slider releases at +1.2…+6.5 s during boot.
+    The daemon diff for 8.0.1 is comment-only and the QML volume path's
+    only new line is the hold re-target, a no-op while nothing is held.
+    The mask is doing its job; the fix is to not offer the control.
+  - **Gap was for both "Off" and "Booting", on every input:** every
+    volume input gated on `ampIp !== ""` alone - VolumeBlock's 0.4
+    group dim and the −/slider/+ `enabled`, CompactRepresentation's
+    stepVolume()/onWheel (its own mirror read no power property at
+    all), FlyoutContent's stepVolume()/releaseVolume(), and main.qml's
+    settings-triggered applyImmediateClamp(). Only the power button knew
+    about "Booting".
+  - **Fix:** `VolumeBlock.qml` gains `required property string
+    powerState` and `interactive` (`ampIp !== "" && powerState ===
+    "On"`) driving the group opacity (the same 0.4 factor Phase 8.3.0
+    reused for blocked steppers) and the three `enabled` bindings; the
+    dB readout stays, dimmed. FlyoutContent passes its own guarded
+    `powerState` - the property whose change handler arms the boot
+    hold, so the slider becomes interactive in the tick the hold arms -
+    and guards stepVolume()/releaseVolume() for queued autoRepeat ticks.
+    `main.qml` gets a root-anchored, unguarded PowerState mirror
+    (`ampPowerState`, its own `Dbus.Properties`) forwarded to
+    CompactRepresentation as `powerState` (guards stepVolume(), hence
+    the wheel) and used by applyImmediateClamp(); chosen over a second
+    per-consumer subscription or reaching into FlyoutContent's mirror
+    (CLAUDE.md's shared-state rule). It lags the flyout's optimistic
+    "Booting" by at most one broadcast after a power click. The clamp
+    is also re-run on ampPowerState → "On": the daemon emits one
+    PropertiesChanged message per property, so the existing
+    onAmpIpChanged → Qt.callLater fired between the AmpIp and
+    PowerState messages of one burst and read a stale "Off" (fake
+    daemon: a selection change to an already-on amp with -5 dB sent
+    nothing until this was added). Caveat left documented in main.qml:
+    a clamp fired at the first "On" can land inside gotcha #9's
+    acceptance window; only matters when the amp's own startup volume is
+    outside [floor, hardLimit]. `LayoutProbe.qml` now logs `en`
+    (item.enabled) so a run can assert blocked, not just dimmed.
+  - **Verified (fake daemon, live plasmashell, LayoutProbe dumps of
+    volumeBlock/volumeDownButton/volumeSlider/volumeUpButton/
+    dbValueLabel):** On → opacity 1, all enabled; Off and Booting →
+    opacity 0.4, all disabled, readout still "-25.0"; no amp → 0.4,
+    disabled, "—"; armed while Off stays disabled; Off → On with the
+    misreport → the same dump shows the hold's "-40.0" and the inputs
+    enabled; startup send once; applyImmediateClamp with -5 dB arriving
+    on an Off amp sends nothing, on an On amp clamps once to -10 (fake's
+    NotifyVolumeCommand(-10.0) + one devialet-ctl exit 0). Journal clean
+    of QML errors. Owner soak 2026-09-08: passed - volume controls and
+    panel scroll dimmed and inert while off/booting, live again at "On".
+  - **Same gate extended to Mute and Source (owner screenshot, same
+    day):** with the amp off the flyout still showed "Unmute" in copper
+    and a selectable "Roon Ready" row. `ActionRow.qml` gains
+    `muteInteractive` (`ampIp !== "" && powerState === "On"`) driving
+    the mute button's own `enabled` + 0.4 opacity - on the button, not
+    the row, because the power button beside it must stay live while
+    the amp is off. `SourceSelector.qml` gains `required property string
+    powerState`; its existing `interactive` now also requires "On" and
+    drives the row's opacity (previously keyed on ampIp alone).
+    FlyoutContent forwards `powerState`, guards toggleMute()/
+    selectSource(), and closes an open source list when powerState
+    leaves "On"; CompactRepresentation's middle-click toggleMute() gets
+    the same guard. Labels keep their last-known text, dimmed.
+    `sourceRowArea` got an objectName for the probe. Verified via
+    LayoutProbe (fake daemon, Muted=true, Roon Ready active): On → mute
+    and row enabled/1.0; Off and Booting → both disabled/0.4, "Unmute"
+    and "Roon Ready" still shown, power button enabled for Off and
+    disabled for Booting as before, slider matching; list opened while
+    On closes on Off; no-amp unchanged. 7/7. Owner soak 2026-09-08:
+    passed - mute button and source row dimmed and inert while off/
+    booting, last-known labels kept, live again at "On".
+
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -4791,104 +5796,19 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
 
-- [ ] **Phase 8.0.0 — Persistence + ConfigDialog settings UI.**
-  Depends on updated ConfigDialog mockup (soft limit removed — see
-  note above; confirm the mockup file has actually been revised before
-  starting). No dependency on the Rust clamp work below — this can
-  start immediately. Add three new dB fields to the widget's KConfig
-  schema (main.xml, alongside whatever Phase 4.3.0's settings page
-  already defines), all unset/unbounded by default except where the
-  mockup shows otherwise: minimum volume (floor), hard limit (ceiling),
-  and startup/source-switch volume. Build the actual settings-page UI
-  per the mockup, including the three dB steppers with hold-to-repeat
-  (100ms cadence after initial delay, matching the flyout's own volume
-  buttons) and real Expert Pro range bounds (−96 to 0 dB) on each
-  stepper.
-  - Investigate before implementing: `devialet-ctl source` currently
-    hardcodes the −40dB post-source-switch volume internally, with no
-    existing route from KConfig into the CLI. Determine how the
-    persisted startup/source-switch value actually reaches it — most
-    likely QML passes it as a CLI argument via the same
-    Plasma5Support.DataSource invocation, but confirm against the real
-    invocation site rather than assuming a mechanism. Report the
-    chosen mechanism before wiring it.
-  - Minimum volume (floor) is explicitly a UI/usability setting, not a
-    safety one — it does NOT feed Phase 8.1.0's Rust clamp below. Keep
-    it purely client-side (slider bounds), and don't conflate it with
-    the hard-limit clamp path.
-  - Verify: all three values round-trip correctly (set, close
-    ConfigDialog, reopen, values persisted); daemon can read the
-    persisted hard-limit value even though nothing consumes it yet
-    (Phase 8.1.0 wires that); startup/source-switch value actually
-    reaches `devialet-ctl source` via whichever mechanism was chosen.
-
-- [ ] **Phase 8.1.0 — Rust: hard-limit clamp in the shared protocol crate.**
-  Independent implementation work, but now consumes the setting
-  8.0.0 persisted rather than a hardcoded test value. Any function in
-  the dependency-free protocol library crate that constructs/sends a
-  volume-set command clamps to the configured hard limit internally —
-  structural, not a check any particular caller (devialet-ctl, the
-  daemon's D-Bus handler, a future client) has to remember to apply.
-  This replaces Phase 3's hardcoded MAX_VOLUME_DB ceiling — confirm no
-  leftover hardcoded ceiling remains anywhere in the crate once this
-  lands. Add cargo tests covering: command at/above/below the limit,
-  limit unset (unbounded), and the boundary value itself. No QML
-  changes this phase.
-
-- [ ] **Phase 8.2.0 — QML: slider bounds now span floor to hard limit.**
-  Depends on 8.0.0. The volume slider's `from` becomes the configured
-  minimum volume (floor) and `to` becomes the hard limit — both ends of
-  the track are now configurable, not just the ceiling. Dragging to
-  either end of the track means "at that limit," never past it. Apply
-  to every volume-adjusting surface: the flyout's VolumeBlock slider
-  AND the +/- buttons/panel-icon-scroll step logic (confirm these still
-  share Phase 4/5's common step/clamp path and wire once, not
-  separately per surface).
-
-- [ ] **Phase 8.3.0 — Real validation for limit ordering (floor 
-  hard).**
-  Depends on 8.0.0. Decide and implement actual behavior when floor is
-  set at or above the hard limit: block Apply/OK, auto-clamp the
-  just-edited stepper against the other, or some other explicit rule —
-  state which was chosen and why. Cover the boundary case where the two
-  are set equal.
-
-- [ ] **Phase 8.4.0 — Immediate clamp on settings change.**
-  Depends on 8.0.0 (needs the settings to exist) and 8.1.0 (needs the
-  Rust clamp to exist) — can be built alongside or after 8.2.0/8.3.0.
-  Two directions now, not one:
-  - When a newly-set hard limit is below the amp's current live volume,
-    the daemon immediately sends a real volume-set command dropping
-    the amp to the new limit, rather than waiting for the next
-    user-initiated volume change.
-  - Decide explicitly whether raising the minimum volume (floor) above
-    the amp's current live volume should likewise force an immediate
-    bump up to the new floor, or whether the floor only affects future
-    slider drags and leaves current volume alone — don't default
-    silently, state the decision.
-  Verify this interacts correctly with Phase 5's pending-command
-  architecture (the daemon-initiated change needs to update
-  PendingAmpState/be reflected in the UI the same way a user-initiated
-  change is, not bypass it) and with multiple known amps (does changing
-  the setting affect only the currently-selected/connected amp, or
-  every known amp regardless of connection state? — decide explicitly).
-
-- [ ] **Phase 8.5.0 — Full verification pass.**
-  Depends on 8.0.0-8.4.0. Live-verify: hard limit genuinely
-  unbypassable via devialet-ctl direct invocation and via rapid
-  scroll/slider-drag bursts (Phase 5.0.2's rapid-repeat concern applies
-  here too — confirm several fast steps near either end of the track
-  can't overshoot it even transiently); floor and hard limit both
-  correctly bound the slider's `from`/`to`; startup/source-switch
-  volume round-trips correctly through whatever mechanism 8.0.0 chose
-  and actually reaches `devialet-ctl source`; ordering validation from
-  8.3.0 behaves as decided; settings UI round-trips correctly (set,
-  close ConfigDialog, reopen, values persisted) for all three dB
-  settings; immediate-clamp behavior from 8.4.0 fires correctly in both
-  directions decided there, visible in flyout/tooltip/OSD
-  simultaneously per Phase 7's consistency guarantees; unbounded
-  (unset) behaves identically to today's widget with no limits
-  configured at all.
+- [ ] **Feat — Wire Appearance transparency into real
+  rendering.** Depends on 8.0.0 (done — UI/KConfig already exist,
+  `transparencyEnabled`/`transparencyPercent`). Per owner decision
+  (2026-09-05): all three surfaces (flyout, OSD toast, hover
+  tooltip) end up on the same alpha, off = fully opaque (1.0).
+  Requires touching `Theme.qml`'s `panelGradientTop/Bottom` and
+  `osdGradientTop/Bottom` (currently fixed literals, 0.82/0.94) and
+  deciding how a value gets from the shared `VolumeSettings`-style
+  object (or a new one) into `Theme.qml`, which today is
+  deliberately re-instantiated per file, not shared — this will
+  need its own design pass, similar to the `VolumeSettings.qml`
+  one. Explicitly deferred by the owner until after Phase 8.x.x is
+  otherwise done.
 
 ## Bugs
 
@@ -4961,11 +5881,35 @@ architecture decisions; this file is just sequencing and status.
     (amp-initiated volume changes not picked up unless the widget/app
     has sent a volume command at least once itself) rather than
     something specific to this widget's implementation.
-  - Not investigated yet - root cause could be in the daemon (not
-    picking up/re-broadcasting an amp-initiated UDP volume change) or
-    the widget (not reacting to a D-Bus property it does receive).
-    Likely also affects volume changes from the amp's own front panel
-    or another remote, not just power-cycling - worth confirming.
+  - **Characterized 2026-09-07 (Phase 8.0.1's Gate #2 investigation),
+    root cause is the amp's firmware, not the daemon or the widget.**
+    Method: an independent raw UDP capture on port 45454 (a second
+    SO_REUSEADDR socket logging byte 562 bit 0x80 = power and byte 565
+    = raw volume, dB = (raw - 195) / 2) merged with `busctl` polling of
+    the daemon on one clock, across 21+ real power cycles. Findings:
+    - The daemon tracks every raw-byte change within 1-40 ms and the
+      D-Bus push follows immediately - nothing in UDP → daemon → D-Bus
+      → QML drops or lags an amp-initiated change. The earlier "could
+      be daemon or widget" guess is ruled out on this path.
+    - The first `power_on` packet after boot still carries the
+      pre-shutdown byte (raw 145 = -25); ~200 ms later the broadcast
+      switches to **raw 111 = -42.0** and stays there for 30 s+ with no
+      command in flight. The owner read the front panel at that moment:
+      **-40**, the configurator's startup setting. So the amp is really
+      at -40 and its own broadcast is wrong by 2 dB - the "stale -42
+      while the amp is at -40" seen above was the widget faithfully
+      showing the amp's misreport, not a stale local value.
+    - It does not self-correct. Any volume command (any value) makes
+      the broadcast track the real level again immediately (verified
+      each time the test restored -25 after a boot) - which is exactly
+      why touching the slider "fixed" it. Now docs/known-gotchas.md #8.
+  - Consequence for scope: Phase 8.0.1's post-boot startup send (500 ms
+    after a widget-initiated boot confirms) incidentally re-syncs the
+    broadcast for that path only. An external power-on (physical
+    remote, front panel) stays exposed to the misreport by design
+    (owner decision: widget-initiated only). Kept open for that case;
+    front-panel/remote volume changes on an already-running amp were
+    not tested here and remain unverified.
 
 ## Not yet scoped / parked
 

@@ -18,7 +18,7 @@ mod status;
 
 pub use command::{
     build_command_packet, mute_packet, next_counter, power_packet, source_packet, volume_packet,
-    MAX_VOLUME_DB, PACKET_LEN, SOURCE_SWITCH_VOLUME_DB,
+    PACKET_LEN, SOURCE_SWITCH_VOLUME_DB,
 };
 pub use crc16::crc16_ccitt_false;
 pub use dbconvert::db_convert;

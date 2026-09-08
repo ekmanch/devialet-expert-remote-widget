@@ -63,9 +63,13 @@ import org.kde.plasma.configuration
 // ConfigCategoryDelegate.qml, the real sidebar delegate) - the same
 // mechanism Plasmoid.icon already uses, so an arbitrary resolvable path
 // works here too, unlike metadata.json's KPlugin.Icon (Phase 4.1 finding:
-// QIcon::fromTheme()-only). Reuses the exact SVG already bundled for the
-// panel icon (plasmoid/contents/icons/devialet_icon_glow_dot.svg, Phase
-// 4.2.5) rather than duplicating the asset.
+// QIcon::fromTheme()-only). Originally reused the panel icon SVG
+// (devialet_icon_glow_dot.svg); per the settings-window mockup's own
+// dedicated sidebar icon, now uses a separate asset instead
+// (devialet_config_general_icon_white.svg, copied from
+// design/icons/ConfigDialog_tab_general/ into contents/icons/ - design/
+// itself is a source-only location outside the KPackage payload, same
+// convention as this project's bundled fonts).
 //
 // A bare relative string (`icon: "../icons/devialet_icon_glow_dot.svg"`)
 // rendered as a broken-image placeholder live, confirmed by testing -
@@ -85,7 +89,7 @@ import org.kde.plasma.configuration
 ConfigModel {
     ConfigCategory {
         name: i18n("General")
-        icon: Qt.resolvedUrl("../icons/devialet_icon_glow_dot.svg")
+        icon: Qt.resolvedUrl("../icons/devialet_config_general_icon_white.svg")
         source: "../config/ConfigGeneral.qml"
     }
 }
