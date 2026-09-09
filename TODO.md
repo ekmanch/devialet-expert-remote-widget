@@ -5881,6 +5881,80 @@ architecture decisions; this file is just sequencing and status.
     touching the mouse; the OSD/tooltip need their own trigger (toast:
     a volume write via the fake daemon; tooltip: hover, owner soak).
 
+- [x] **Phase 9.1.0 — Wire the flyout's own gradient.** Done 2026-09-09
+  on `feature/transparency`. Re-applied 9.0.0's PoC wiring for real
+  (not reverted this time): `TransparencySettings` instantiated in
+  main.qml bound to `Plasmoid.configuration.transparencyEnabled/
+  transparencyPercent`, forwarded as a `required property` through
+  CompactRepresentation -> FlyoutPopup -> FlyoutContent;
+  FlyoutContent's two GradientStops read
+  `root.transparencySettings.withAlpha(root.theme.panelTintTop/Bottom)`.
+  Theme.qml: added the opaque base pair `panelTintTop` (#17171a) /
+  `panelTintBottom` (#121214), deleted `panelGradientTop/Bottom` (the
+  old hardcoded 0.82) - `osdGradientTop/Bottom` deliberately untouched,
+  still 9.2.0's job. Dropped the "UI-only for now" comments in main.xml
+  and ConfigGeneral.qml.
+  - **Default: 88, not 9.0.0's suggested 94** - explicit instruction
+    for this phase (owner's stated 85-90 range, 88 as the midpoint,
+    flagged as adjustable not fixed). `transparencyEnabled: true`
+    unchanged. Set in main.xml's `<default>` and
+    `ConfigGeneral.shippedDefaults` (which also drives the Reset
+    button and the `cfg_transparencyPercent` KCMUtils-required default
+    companion).
+  - **Slider range deliberately NOT narrowed this phase** - explicit
+    instruction, kept at the mocked 0..100/step-1 rather than 9.0.0's
+    recommended 50..100/step-2, so the owner can try the full range
+    live first. A comment at the slider in ConfigGeneral.qml records
+    this and points at 9.0.0's Gate 1 sweep (below ~50% the panel
+    gradient effectively disappears while chrome stays opaque - 9.1.1's
+    job). **Open item, owner's call**: narrow the range once tried, or
+    leave it - not decided by this phase.
+  - **Verification, hands-free (`fakeamp.py --open` over the real
+    daemon stopped, full-screen white QML backdrop, `spectacle -b -f`
+    capture, alpha recovered by inverting the composite against
+    `panelTintTop`/`panelTintBottom` on a clean patch of the flyout -
+    same method as 9.0.0's own PoC measurement).** Driven via a
+    temporary in-process `Timer` writing
+    `Plasmoid.configuration.transparencyEnabled/transparencyPercent`
+    directly (same write path a ConfigDialog Apply performs -
+    identical technique to 9.0.0's own PoC), added to main.qml for the
+    duration of the measurement and fully removed afterward - `git
+    diff` confirmed clean before commit. Measured on the real,
+    already-open flyout with no `plasmashell --replace` between each
+    config write and its capture:
+    - Shipped default (`enabled: true`, `percent: 88`, nothing on disk
+      for either key): measured alpha **0.880** (top gradient stop) /
+      0.877 (bottom stop) against a clean patch, i.e. matching to
+      <0.5 levels.
+    - `enabled: false`: measured alpha **1.0 exactly** at the top
+      gradient stop (composite pixel identical to the opaque tint
+      colour, no residual blend); bottom-stop patch read 0.995 (a
+      1-level 8-bit rounding/AA-edge artifact near the rounded corner,
+      not a real deviation) - matches 9.0.0's own "off is exactly 1.0"
+      finding.
+    - Confirms live-on-config-write with no reload (the mechanism
+      Gate 3 already established) and the disabled state's exact
+      opacity (the specific thing 9.3.0's verification pass will also
+      check across all three surfaces).
+  - Config on disk left clean after the measurement:
+    `transparencyEnabled`/`transparencyPercent` keys deleted via
+    `kwriteconfig6 --delete` (reverting to the shipped default, same
+    as 9.0.0's own PoC teardown) rather than left at the PoC's last
+    written value; daemon restarted for real, plasmashell restarted
+    once more on the final (non-PoC) code with a clean reload log (no
+    QML errors).
+  - **Owner soak (pointer-only, real ConfigDialog): passed.** Owner
+    dragged the real slider and clicked the real Apply button with the
+    flyout open, and reported it "looks good" from live testing -
+    confirms the dialog's own controls drive the same live path the
+    hands-free measurement above exercised via the temp Timer, not
+    just the underlying mechanism in isolation.
+  - **Still open**: whether to narrow the slider range from the full
+    0..100/step-1 kept this phase (see above) - owner has now tried it
+    live per the plan, decision not yet stated. Also still unverified:
+    nothing regressed in Theme.qml's palette/font properties
+    (fontDisplay/fontMono/palette colors untouched by this diff, but
+    not re-screenshotted against a pre-9.1.0 baseline).
 
 ## Up next
 
@@ -5934,26 +6008,6 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-
-- [ ] **Phase 9.1.0 — Wire the flyout's own gradient.** Depends on
-  9.0.0 (done). Re-apply 9.0.0's PoC wiring for real: instantiate
-  `TransparencySettings` in main.qml bound to `Plasmoid.configuration.
-  transparencyEnabled/transparencyPercent` (percent is OPACITY, alpha =
-  percent/100 - do not invert), forward it as a `required property`
-  through CompactRepresentation -> FlyoutPopup -> FlyoutContent, and
-  point FlyoutContent's two GradientStops at
-  `root.transparencySettings.withAlpha(root.theme.panelTintTop/Bottom)`.
-  Theme.qml: add the opaque base pair `panelTintTop` (#17171a) /
-  `panelTintBottom` (#121214) and delete `panelGradientTop/Bottom`
-  (0.82) - `osdGradientTop/Bottom` go in 9.2.0. Apply 9.0.0's default
-  recommendation in main.xml AND `ConfigGeneral.shippedDefaults`
-  (`transparencyEnabled` true, `transparencyPercent` 94 - owner to
-  confirm, 85-90 is the stated alternative) and the slider range/step
-  recommendation (`from: 50`, `stepSize: 2` - owner's call, see 9.0.0's
-  Gate 1 numbers); drop the "UI-only for now" comments in main.xml and
-  ConfigGeneral.qml. Verify: live Apply changes the open flyout's alpha
-  with no reload (PoC recipe in 9.0.0), off measures exactly 1.0, and
-  the value survives a settings-dialog reopen and a widget reload.
 
 - [ ] **Phase 9.1.1 — Control chrome opacity: buttons, source chip, and
   overlay cards track panel alpha with a floor.** Depends on 9.0.0

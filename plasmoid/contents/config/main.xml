@@ -15,15 +15,15 @@
   <group name="General">
     <!-- Appearance section, per
          design/mockups/settings_window/devialet_config_dialog_mockup_v14_single_tab.html.
-         UI-only for now, per explicit owner instruction (2026-09-05) -
-         these two entries are not yet read anywhere outside
-         ConfigGeneral.qml; wiring them into the flyout/OSD/tooltip's real
-         alpha (Theme.qml's panelGradientTop/Bottom, osdGradientTop/Bottom)
-         is deferred until after Phase 8.x.x, and will apply to all three
-         surfaces identically (owner's explicit choice, overriding
-         Theme.qml's current distinct flyout-vs-OSD/tooltip alpha
-         baselines - see that file's own comment for the reasoning being
-         overridden).
+         Wired for real in Phase 9.1.0: transparencyEnabled/
+         transparencyPercent drive the flyout's live panel-tint alpha via
+         TransparencySettings.qml (percent is OPACITY, not transparency -
+         alpha = percent/100). osdGradientTop/Bottom (the OSD toast/hover
+         tooltip) are still on their own hardcoded alpha - Phase 9.2.0
+         unifies those onto the same mechanism, not this entry's job.
+         88 is the current default (owner's chosen 85-90 range, midpoint -
+         adjustable, not a hard requirement); see TODO.md's Phase 9.0.0
+         entry for the sweep this is based on.
 
          transparencyPercent deliberately does NOT reuse the name
          "transparencyLevel" - a stale orphaned key of exactly that name
@@ -39,7 +39,7 @@
       <default>true</default>
     </entry>
     <entry name="transparencyPercent" type="Int">
-      <default>90</default>
+      <default>88</default>
     </entry>
 
     <!-- Phase 4.4.2: volume step size used by the main view's +/- buttons

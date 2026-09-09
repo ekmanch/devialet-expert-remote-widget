@@ -47,21 +47,31 @@ QtObject {
     readonly property color warning: "#a3813a"
     readonly property color warningBright: "#e0b563"
 
-    // Flyout panel gradient + blur-enabled tint, from .flyout /
-    // .flyout.blur-enabled in the mockup - see FullRepresentation.qml's
-    // root background for how this is layered on top of Plasma's own
-    // (genuinely blurred) Dialog background rather than replacing it.
-    readonly property color panelGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.82)
-    readonly property color panelGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.82)
+    // Flyout panel tint, opaque base colours only (Phase 9.1.0). The old
+    // panelGradientTop/Bottom baked a hardcoded 0.82 alpha in here,
+    // inherited from a mockup variant that assumed an 18px backdrop blur
+    // Plasma never provided (see TODO.md's Phase 9.0.0 entry, "Provenance
+    // of 0.82 and 0.94"). Alpha is now user-configured, live, and shared
+    // across every translucent surface via TransparencySettings.qml -
+    // FlyoutContent.qml applies it with
+    // `transparencySettings.withAlpha(theme.panelTintTop/Bottom)`. Kept
+    // as plain #rrggbb rather than Qt.rgba(...,1.0) so callers can't
+    // accidentally use these without going through withAlpha() first.
+    readonly property color panelTintTop: "#17171a"
+    readonly property color panelTintBottom: "#121214"
 
     // Phase 4.5.0/4.5.3: translucent graphite gradient shared by the OSD
     // toast (VolumeToast.qml) and the hover tooltip (VolumeHoverTooltip.
-    // qml) - a distinct, slightly more opaque pair from panelGradientTop/
-    // Bottom above (0.94 vs 0.82), since neither of those two windows
-    // gets the flyout's own genuine KWin blur-behind to soften a lower
-    // alpha the way the flyout's tint does. Centralized here (Phase 4.5.3
-    // item 2) so both files reference one definition instead of repeating
-    // the same rgba literals.
+    // qml) - historically a distinct, slightly more opaque pair from the
+    // flyout's own tint (0.94 vs the old hardcoded 0.82), since neither of
+    // those two windows gets the flyout's own genuine KWin blur-behind to
+    // soften a lower alpha the way the flyout's tint does. Centralized
+    // here (Phase 4.5.3 item 2) so both files reference one definition
+    // instead of repeating the same rgba literals. Still hardcoded as of
+    // Phase 9.1.0 - the flyout's own tint is now panelTintTop/Bottom above
+    // (opaque base colours, alpha applied live via TransparencySettings)
+    // - unifying this pair onto the same live mechanism is Phase 9.2.0's
+    // job, not this one's.
     readonly property color osdGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.94)
     readonly property color osdGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.94)
 

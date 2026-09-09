@@ -201,6 +201,19 @@ PlasmoidItem {
         }
     }
 
+    // Phase 9.1.0: same root-anchored-and-forwarded pattern as
+    // VolumeSettings above - see TransparencySettings.qml's own header
+    // comment and CLAUDE.md's "Shared cross-view state" note. Anchored
+    // here for the identical reason: CompactRepresentation and the flyout
+    // (and, from Phase 9.2.0, the OSD toast/hover tooltip) are not
+    // guaranteed co-resident, so anything meant to be shared between them
+    // can't live inside any one of them.
+    TransparencySettings {
+        id: transparencySettings
+        enabled: Plasmoid.configuration.transparencyEnabled
+        percent: Plasmoid.configuration.transparencyPercent
+    }
+
     // Phase 8.4.0: dedicated executable-engine DataSource for
     // applyImmediateClamp() below - NOT shared with CompactRepresentation
     // .qml's or FlyoutContent.qml's own `exec` (those are per-representation
@@ -311,6 +324,7 @@ PlasmoidItem {
         plasmoidItem: root
         pendingAmpState: pendingAmpState
         volumeSettings: volumeSettings
+        transparencySettings: transparencySettings
         powerState: root.ampPowerState
     }
 

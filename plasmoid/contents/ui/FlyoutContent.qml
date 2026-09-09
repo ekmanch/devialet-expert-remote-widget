@@ -71,6 +71,10 @@ Item {
     // properties, which independently duplicated CompactRepresentation.
     // qml's own copy of the same three numbers.
     required property VolumeSettings volumeSettings
+    // Shared, root-anchored transparency alpha (Phase 9.1.0) - see
+    // TransparencySettings.qml's own header comment. Drives the panel
+    // tint gradient below.
+    required property TransparencySettings transparencySettings
     // Bound one-way from FlyoutPopup.visible - drives the amp-list reset on
     // flyout hide below (and is the future binding target for the deferred
     // pop-in animation, 7.7.0 polish).
@@ -646,6 +650,14 @@ Item {
     // Rectangle, so nothing constrains the radius and the mockup's own
     // value applies. AmpHeader's hover fill rounds its top corners to the
     // same radius so it can't paint square corners over these.
+    //
+    // Phase 9.1.0: the gradient's alpha is now the user-configured
+    // transparency setting, not a hardcoded value baked into Theme.qml -
+    // theme.panelTintTop/Bottom are the opaque base colours only (see
+    // Theme.qml's own comment), and transparencySettings.withAlpha()
+    // reads the live alpha on every call, so a ConfigDialog Apply/OK
+    // re-paints this immediately (no reload), per TransparencySettings.
+    // qml's own header comment.
     Rectangle {
         anchors.fill: parent
         radius: root.theme.radiusLg
@@ -653,8 +665,8 @@ Item {
         border.width: 1
         border.color: root.theme.divider
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.theme.panelGradientTop }
-            GradientStop { position: 1.0; color: root.theme.panelGradientBottom }
+            GradientStop { position: 0.0; color: root.transparencySettings.withAlpha(root.theme.panelTintTop) }
+            GradientStop { position: 1.0; color: root.transparencySettings.withAlpha(root.theme.panelTintBottom) }
         }
     }
 
