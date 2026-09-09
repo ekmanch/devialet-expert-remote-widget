@@ -70,6 +70,9 @@ GridLayout {
     required property bool power
     // "Off" | "Booting" | "On"
     required property string powerState
+    // Phase 9.1.1: chrome alpha (mute/power button backgrounds) - see
+    // TransparencySettings.qml's controlAlpha comment.
+    required property TransparencySettings transparencySettings
 
     signal muteToggleRequested()
     signal powerToggleRequested()
@@ -105,9 +108,16 @@ GridLayout {
         opacity: actionRow.muteInteractive ? 1.0 : 0.4
         onClicked: actionRow.muteToggleRequested()
 
+        // Phase 9.1.1: the non-muted (plain surface) branch tracks panel
+        // alpha with a floor - see TransparencySettings.qml's controlAlpha
+        // comment. The muted branch's 0.14 copper tint is a deliberate,
+        // orthogonal state-highlight (not "is this button solid against
+        // the desktop"), left untouched.
         background: Rectangle {
             radius: actionRow.theme.radiusMd
-            color: actionRow.muted ? Qt.rgba(actionRow.theme.copper.r, actionRow.theme.copper.g, actionRow.theme.copper.b, 0.14) : actionRow.theme.surface
+            color: actionRow.muted
+                ? Qt.rgba(actionRow.theme.copper.r, actionRow.theme.copper.g, actionRow.theme.copper.b, 0.14)
+                : actionRow.transparencySettings.withControlAlpha(actionRow.theme.surface)
             border.width: 1
             border.color: actionRow.muted ? actionRow.theme.copperDim : (parent.hovered ? actionRow.theme.copperDim : actionRow.theme.divider)
         }
@@ -167,9 +177,11 @@ GridLayout {
         enabled: actionRow.ampIp !== "" && actionRow.powerState !== "Booting"
         onClicked: actionRow.powerToggleRequested()
 
+        // Phase 9.1.1: tracks panel alpha with a floor - see
+        // TransparencySettings.qml's controlAlpha comment.
         background: Rectangle {
             radius: actionRow.theme.radiusMd
-            color: actionRow.theme.surface
+            color: actionRow.transparencySettings.withControlAlpha(actionRow.theme.surface)
             border.width: 1
             // Booting takes priority over the hover colors below it,
             // which stay completely untouched - the mockup's

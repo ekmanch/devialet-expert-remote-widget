@@ -74,6 +74,9 @@ ColumnLayout {
     // exploded fields, matching this file's own existing `theme` property
     // convention.
     required property VolumeSettings volumeSettings
+    // Phase 9.1.1: chrome alpha (volume +/- buttons, source chip) - see
+    // TransparencySettings.qml's controlAlpha comment.
+    required property TransparencySettings transparencySettings
     required property string activeSourceName
     // Phase 8.0.1 follow-up (owner request, 2026-09-08): the daemon's
     // PowerState ("Off"/"Booting"/"On"), fed from FlyoutContent's own
@@ -167,7 +170,11 @@ ColumnLayout {
             // out at 0 - see this file's header comment.
             Layout.maximumWidth: 140
             radius: 999
-            color: volumeBlock.theme.surface
+            // Phase 9.1.1: tracks panel alpha with a floor - see
+            // TransparencySettings.qml's controlAlpha comment. Was a flat
+            // theme.surface (always fully opaque regardless of panel
+            // transparency) before this phase.
+            color: volumeBlock.transparencySettings.withControlAlpha(volumeBlock.theme.surface)
             border.width: 1
             border.color: volumeBlock.theme.divider
             implicitWidth: sourceChipLabel.implicitWidth + 18
@@ -208,9 +215,11 @@ ColumnLayout {
 
             implicitWidth: 26
             implicitHeight: 26
+            // Phase 9.1.1: tracks panel alpha with a floor - see
+            // TransparencySettings.qml's controlAlpha comment.
             background: Rectangle {
                 radius: volumeBlock.theme.radiusSm
-                color: volumeBlock.theme.surface
+                color: volumeBlock.transparencySettings.withControlAlpha(volumeBlock.theme.surface)
                 border.width: 1
                 border.color: parent.hovered ? volumeBlock.theme.copperDim : volumeBlock.theme.divider
             }
@@ -327,9 +336,11 @@ ColumnLayout {
 
             implicitWidth: 26
             implicitHeight: 26
+            // Phase 9.1.1: tracks panel alpha with a floor - see
+            // TransparencySettings.qml's controlAlpha comment.
             background: Rectangle {
                 radius: volumeBlock.theme.radiusSm
-                color: volumeBlock.theme.surface
+                color: volumeBlock.transparencySettings.withControlAlpha(volumeBlock.theme.surface)
                 border.width: 1
                 border.color: parent.hovered ? volumeBlock.theme.copperDim : volumeBlock.theme.divider
             }

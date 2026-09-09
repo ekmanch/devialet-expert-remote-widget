@@ -696,6 +696,7 @@ Item {
             ampIp: root.ampIp
             volumeDb: root.pendingAmpState.volumeDb
             volumeSettings: root.volumeSettings
+            transparencySettings: root.transparencySettings
             activeSourceName: root.activeSourceName
             // Same guarded mirror that arms the boot hold (see
             // onPowerStateChanged above) - slider and hold flip together.
@@ -711,6 +712,7 @@ Item {
             muted: root.pendingAmpState.muted
             power: root.power
             powerState: root.powerState
+            transparencySettings: root.transparencySettings
             onMuteToggleRequested: root.toggleMute()
             onPowerToggleRequested: root.togglePower()
         }
@@ -723,6 +725,7 @@ Item {
             activeSourceIndex: root.activeSourceIndex
             activeSourceName: root.activeSourceName
             powerState: root.powerState
+            transparencySettings: root.transparencySettings
             listOpen: root.sourceListOpen
             onToggleRequested: root.sourceListOpen = !root.sourceListOpen
         }
@@ -759,6 +762,7 @@ Item {
         theme: root.theme
         knownAmps: root.knownAmps
         ampIp: root.ampIp
+        transparencySettings: root.transparencySettings
         onClosed: root.ampListOpen = false
         onAmpChosen: ip => root.selectAmpByIp(ip)
     }
@@ -775,6 +779,7 @@ Item {
         theme: root.theme
         enabledSources: sourceSelector.enabledSources
         activeSourceIndex: root.activeSourceIndex
+        transparencySettings: root.transparencySettings
         onClosed: root.sourceListOpen = false
         onSourceChosen: (index, name) => {
             root.sourceListOpen = false;

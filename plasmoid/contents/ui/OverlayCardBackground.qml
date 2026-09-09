@@ -18,9 +18,19 @@ Kirigami.ShadowedRectangle {
     id: card
 
     required property Theme theme
+    // Phase 9.1.1 REVISION: overlay alpha (the card's own fill) - a
+    // genuine floor, deliberately NOT controlAlpha's compositing-
+    // corrected offset - see TransparencySettings.qml's overlayAlpha
+    // comment for why list cards get their own, independent formula.
+    // Layered on top of this card's own opaque-by-design mockup styling
+    // (see this file's header comment) rather than replacing it - the
+    // gradient/border/radius/shadow shape is unchanged, only the fill's
+    // alpha now tracks the panel with a floor instead of always being
+    // 1.0.
+    required property TransparencySettings transparencySettings
 
     radius: card.theme.radiusOverlay
-    color: card.theme.overlayGradientTop
+    color: card.transparencySettings.withOverlayAlpha(card.theme.overlayGradientTop)
     border.width: 1
     border.color: card.theme.overlayBorder
     // Approximates `box-shadow: 0 18px 44px -10px rgba(0,0,0,0.6)`.
@@ -35,8 +45,8 @@ Kirigami.ShadowedRectangle {
         radius: card.theme.radiusOverlay - 1
         antialiasing: true
         gradient: Gradient {
-            GradientStop { position: 0.0; color: card.theme.overlayGradientTop }
-            GradientStop { position: 1.0; color: card.theme.overlayGradientBottom }
+            GradientStop { position: 0.0; color: card.transparencySettings.withOverlayAlpha(card.theme.overlayGradientTop) }
+            GradientStop { position: 1.0; color: card.transparencySettings.withOverlayAlpha(card.theme.overlayGradientBottom) }
         }
     }
 }

@@ -57,6 +57,9 @@ ColumnLayout {
     // command while off/booting). The last-known source name stays
     // shown, dimmed.
     required property string powerState
+    // Phase 9.1.1: chrome alpha (the source row's own background) - see
+    // TransparencySettings.qml's controlAlpha comment.
+    required property TransparencySettings transparencySettings
     // Owner-driven open state (FlyoutContent.sourceListOpen) - drives the
     // caret only; the Popup itself is opened/closed by the owner.
     required property bool listOpen
@@ -109,7 +112,9 @@ ColumnLayout {
         Layout.fillWidth: true
         implicitHeight: sourceRow.rowHeight + 18
         radius: sourceSelector.theme.radiusMd
-        color: sourceSelector.theme.surface
+        // Phase 9.1.1: tracks panel alpha with a floor - see
+        // TransparencySettings.qml's controlAlpha comment.
+        color: sourceSelector.transparencySettings.withControlAlpha(sourceSelector.theme.surface)
         border.width: 1
         border.color: sourceRowArea.containsMouse && sourceSelector.interactive ? sourceSelector.theme.copperDim : sourceSelector.theme.divider
 
