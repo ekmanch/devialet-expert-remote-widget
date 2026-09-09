@@ -277,6 +277,16 @@ KCM.SimpleKCM {
             Slider {
                 id: transparencySlider
                 Layout.fillWidth: true
+                // Widens the click/drag hit area beyond the visual 4px
+                // track/15px handle drawn below - a QQC2 Slider's own
+                // interaction region is governed by its component bounds
+                // (0..implicitHeight), not by what's actually painted
+                // inside them, so this alone is what makes off-center
+                // clicks/drags land. Same value, same reasoning, as
+                // VolumeBlock.qml's volumeSlider (contents/ui/) - see
+                // its own comment ("Widens the click/drag hit area to
+                // match the sibling -/+ buttons' 26px row height").
+                implicitHeight: 26
                 from: 0
                 to: 100
                 stepSize: 1
@@ -311,6 +321,46 @@ KCM.SimpleKCM {
                     height: 15
                     radius: 999
                     color: root.theme.copperBright
+                }
+
+                // Scroll-to-adjust, same mechanism as VolumeBlock.qml's
+                // volumeSlider (contents/ui/) - see its own comment for
+                // the acceptedButtons: Qt.NoButton reasoning (lets press/
+                // drag pass through to the Slider underneath) and the
+                // 120-unit notch-accumulation convention (matches
+                // org.kde.desktop's own Slider.qml). Duplicated rather
+                // than shared with volumeSlider's copy - this project's
+                // own established convention for per-control wheel-
+                // handling logic even where near-identical (see
+                // CompactRepresentation.qml's header comment on why its
+                // own wheel handler doesn't share code with VolumeBlock's
+                // either). One notch = one stepSize (1, matching this
+                // slider's own stepSize below `to`/`from`), the same
+                // "notch = the control's own stepSize" relationship
+                // volumeSlider uses (stepDb there). Direction: scroll up
+                // (positive angleDelta.y, uninverted) increases the
+                // value, confirmed against volumeSlider's own
+                // stepRequested(1) = increase, not assumed.
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+
+                    property int wheelDelta: 0
+
+                    onWheel: (wheel) => {
+                        if (transparencySlider.pressed) return;
+
+                        const delta = (wheel.angleDelta.y || -wheel.angleDelta.x) * (wheel.inverted ? -1 : 1);
+                        wheelDelta += delta;
+                        while (wheelDelta >= 120) {
+                            wheelDelta -= 120;
+                            root.cfg_transparencyPercent = Math.min(transparencySlider.to, root.cfg_transparencyPercent + transparencySlider.stepSize);
+                        }
+                        while (wheelDelta <= -120) {
+                            wheelDelta += 120;
+                            root.cfg_transparencyPercent = Math.max(transparencySlider.from, root.cfg_transparencyPercent - transparencySlider.stepSize);
+                        }
+                    }
                 }
             }
 

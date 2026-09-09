@@ -6395,6 +6395,86 @@ architecture decisions; this file is just sequencing and status.
     sweep Timer removed and confirmed via `git diff` before the real
     daemon/shell were restored. Not committed - working-tree only.
 
+- [x] **Phase 9.1.2 — Transparency slider: scroll-to-adjust + larger
+  hit target.** Done 2026-09-09, on `feature/transparency`.
+  - **The CLAUDE.md "HoverHandler doesn't capture pointer during
+    drags" note this phase's own brief cited does not actually exist**
+    in CLAUDE.md - checked directly (`grep`) before relying on it,
+    found only in this same TODO.md entry's own prior wording, not in
+    CLAUDE.md itself. Didn't block on the discrepancy - went straight
+    to the authoritative source (`VolumeBlock.qml`'s `volumeSlider`,
+    the actual working implementation) instead of the secondhand
+    claim, per the phase's own "read that actual mechanism directly...
+    before touching ConfigGeneral.qml" instruction.
+  - **Hit-target mechanism, read from `volumeSlider` directly**: not
+    an invisible larger MouseArea or padding - a QQC2 `Slider`'s own
+    interaction region is governed by its component bounds
+    (`0..implicitHeight`), not by what's actually painted inside it.
+    `volumeSlider` sets `implicitHeight: 26` while its visible track is
+    a 4px `Rectangle` and its handle a 15px circle drawn centered
+    within that taller invisible bounds - the mismatch between visible
+    and interactive size IS the fix, no separate hit-area layer needed.
+    Applied the identical `implicitHeight: 26` to `transparencySlider`.
+  - **Scroll mechanism, read from `volumeSlider` directly**: a
+    `MouseArea { anchors.fill: parent; acceptedButtons: Qt.NoButton }`
+    child of the Slider - `Qt.NoButton` lets press/drag pass through
+    to the Slider underneath untouched, so the MouseArea only ever
+    intercepts wheel events. Accumulates `wheel.angleDelta.y` (falling
+    back to `-angleDelta.x`, respecting `wheel.inverted`) into a
+    counter and steps once per whole 120-unit notch (the standard wheel
+    tick, matching org.kde.desktop's own `Slider.qml` convention) -
+    ported the exact same accumulation loop.
+  - **Step size and direction, confirmed by reading code, not
+    assumed**: `volumeSlider`'s wheel handler emits `stepRequested(±1)`,
+    which `FlyoutContent.qml` resolves through `volumeSettings.stepped()`
+    - one notch moves the value by exactly the slider's own `stepSize`
+    (`volumeSettings.stepDb`). Direction: a notch that accumulates
+    positive (`angleDelta.y > 0`, not inverted - scroll up in the
+    standard convention) calls `stepRequested(1)`, and `stepped()` adds
+    `+1 * stepDb` - scroll up increases the value. Applied identically:
+    one notch = `transparencySlider.stepSize` (1, matching its own
+    configured `stepSize`), scroll up increases
+    `root.cfg_transparencyPercent`, both clamped to the slider's own
+    `from`/`to` (0/100).
+  - **Duplicated, not shared, deliberately**: the two sliders live in
+    separate KPackage subtrees (`contents/ui/` vs `contents/config/`)
+    with different write-back mechanisms (`stepRequested` signal ->
+    `FlyoutContent` owns the D-Bus/exec call, vs. a direct
+    `root.cfg_transparencyPercent` write) and different value domains
+    (dB range vs. 0-100%) - forcing a shared component would need a
+    generic step-direction callback layered over two structurally
+    different write paths for ~15 lines of logic used in exactly two
+    places. This project already has a documented precedent for
+    exactly this call: `CompactRepresentation.qml`'s own wheel handler
+    deliberately doesn't share code with `VolumeBlock.qml`'s, even
+    though they're near-identical, because per-control interaction
+    logic is kept independent by convention here (see that file's own
+    header comment). Followed the same precedent rather than
+    introducing a new abstraction.
+  - **Scope confirmed via `git diff`**: only `transparencySlider`'s own
+    block changed in `ConfigGeneral.qml` (the `implicitHeight` line +
+    the new `MouseArea`) - no other stepper, toggle, or section
+    touched. `VolumeBlock.qml` was read but never edited - `git diff`
+    on it is empty, so no regression risk to the volume slider at all.
+  - **Verified**: `qmllint` clean (only pre-existing, unrelated
+    warnings elsewhere in the file); a full `kpackagetool6 --upgrade` +
+    `plasmashell --replace` reload produced no QML errors. Attempted to
+    open the real ConfigDialog via the Plasma scripting API
+    (`widgetById(...).showConfigurationInterface()`, the same
+    evaluateScript technique CLAUDE.md documents using elsewhere) for a
+    screenshot - the call didn't error but no config window appeared
+    in a KWin window-list script dump either time, so this didn't
+    produce a reliable render check; not pursued further given the
+    established project convention (this session's own memory: "owner
+    soak beats scripted real-pointer tests") and this phase's own
+    closing line already reserving scroll/off-center-drag confirmation
+    for the owner's live soak. **Not verified by me**: the actual
+    interactive scroll-changes-value and off-center-click-grabs-slider
+    behavior - implemented and code-verified against the proven,
+    already-shipped `volumeSlider` mechanism exactly, but the live
+    pointer confirmation is the owner's to do, as the phase brief
+    itself specifies. Not committed - working-tree only.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
