@@ -167,7 +167,18 @@ all three.
   instead (`readonly property Theme theme: Theme {}`) — don't apply the
   root-anchored pattern where nothing actually needs to stay in sync;
   that's needless plumbing for a value that was never at risk of
-  disagreeing with itself.
+  disagreeing with itself. Phase 9.0.0 made this boundary explicit: the
+  translucency alphas that used to sit in `Theme.qml` (0.82 flyout /
+  0.94 OSD-tooltip pairs) *are* cross-view state - the owner's decision
+  is that all three surfaces paint one configured alpha - so they move
+  out of `Theme.qml` into `TransparencySettings.qml` (root-anchored and
+  forwarded exactly like `VolumeSettings.qml`, exposing `alpha` and
+  `withAlpha(color)`), while `Theme.qml` keeps only the opaque base tint
+  colours and stays per-file. Not a `required property` on `Theme.qml`:
+  `Theme {}` is also instantiated by `ConfigGeneral.qml`, a separate
+  ConfigDialog QML tree with no path to `main.qml`'s root objects, so a
+  required input would break that page and a defaulted one would let
+  surfaces silently diverge again.
 - **In-process alternative (cxx-qt) considered and rejected**: the listener
   could in principle run inside plasmashell's own process via a cxx-qt QML
   plugin instead of as a standalone daemon, eliminating the need for a

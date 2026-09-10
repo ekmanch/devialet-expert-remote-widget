@@ -53,6 +53,10 @@ MouseArea {
     // startup dB) - see VolumeSettings.qml's own header comment and this
     // file's header comment above.
     required property VolumeSettings volumeSettings
+    // Shared, root-anchored transparency alpha (Phase 9.1.0) - see
+    // TransparencySettings.qml's own header comment and this file's
+    // header comment above.
+    required property TransparencySettings transparencySettings
     // 2026-09-08 follow-up: the amp's PowerState, from main.qml's root-
     // anchored mirror (ampPowerState) - forwarded like pendingAmpState/
     // volumeSettings rather than reaching into the flyout's own guarded
@@ -261,6 +265,9 @@ MouseArea {
         // Same forwarding, for the shared volume-range config - see
         // VolumeSettings.qml's header comment.
         volumeSettings: root.volumeSettings
+        // Same forwarding, for the shared transparency alpha (Phase
+        // 9.1.0) - see TransparencySettings.qml's header comment.
+        transparencySettings: root.transparencySettings
 
         // Phase 4.5.3 item 4's fix, flyout-side: hides the hover tooltip
         // whenever this popup opens, or the tooltip would silently start

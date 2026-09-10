@@ -65,11 +65,10 @@ KCM.SimpleKCM {
     readonly property real cfg_volumeStepDbDefault: root.shippedDefaults.volumeStepDb
     readonly property var stepValues: [0.5, 1, 2]
 
-    // Appearance section - see main.xml's own comment on these two
-    // entries for why wiring them into the real flyout/OSD/tooltip alpha
-    // is deferred.
+    // Appearance section - wired for real in Phase 9.1.0 (see main.xml's
+    // own comment on these two entries and TransparencySettings.qml).
     property bool cfg_transparencyEnabled: true
-    property int cfg_transparencyPercent: 90
+    property int cfg_transparencyPercent: 88
     readonly property bool cfg_transparencyEnabledDefault: root.shippedDefaults.transparencyEnabled
     readonly property int cfg_transparencyPercentDefault: root.shippedDefaults.transparencyPercent
 
@@ -148,7 +147,7 @@ KCM.SimpleKCM {
     // default ever changes.
     readonly property var shippedDefaults: ({
         transparencyEnabled: true,
-        transparencyPercent: 90,
+        transparencyPercent: 88,
         volumeStepDb: 1.0,
         startupVolumeDb: -40.0,
         volumeFloorDb: -45.0,
@@ -239,10 +238,10 @@ KCM.SimpleKCM {
         }
 
         // ---- Appearance ----
-        // UI only for now, per explicit owner instruction (2026-09-05) -
-        // see main.xml's own comment on transparencyEnabled/
-        // transparencyPercent for why wiring this into the flyout/OSD/
-        // tooltip's real alpha is deferred until after Phase 8.x.x.
+        // Wired for real in Phase 9.1.0 - the slider below drives the real
+        // flyout's panel-tint alpha live (TransparencySettings.qml), not
+        // just this dialog's own preview. OSD toast/hover tooltip alpha is
+        // still separate (Phase 9.2.0's job); see main.xml's own comment.
         SectionLabel { text: "Appearance"; first: true }
 
         SettingsRow {
@@ -266,9 +265,28 @@ KCM.SimpleKCM {
             opacity: transparencySwitch.checked ? 1.0 : 0.35
             enabled: transparencySwitch.checked
 
+            // Phase 9.1.0: deliberately kept at the mocked full 0..100
+            // range/step-1, NOT narrowed to 9.0.0's recommended 50..100/
+            // step-2 (below ~50% the panel gradient effectively
+            // disappears while the opaque chrome stays fully solid on top
+            // - Phase 9.1.1's job to address separately). Owner wants to
+            // try the full range live first with the real wiring below
+            // before deciding whether to narrow it - see TODO.md's Phase
+            // 9.0.0 "Gate 1" sweep findings for the numbers behind that
+            // recommendation.
             Slider {
                 id: transparencySlider
                 Layout.fillWidth: true
+                // Widens the click/drag hit area beyond the visual 4px
+                // track/15px handle drawn below - a QQC2 Slider's own
+                // interaction region is governed by its component bounds
+                // (0..implicitHeight), not by what's actually painted
+                // inside them, so this alone is what makes off-center
+                // clicks/drags land. Same value, same reasoning, as
+                // VolumeBlock.qml's volumeSlider (contents/ui/) - see
+                // its own comment ("Widens the click/drag hit area to
+                // match the sibling -/+ buttons' 26px row height").
+                implicitHeight: 26
                 from: 0
                 to: 100
                 stepSize: 1
@@ -303,6 +321,46 @@ KCM.SimpleKCM {
                     height: 15
                     radius: 999
                     color: root.theme.copperBright
+                }
+
+                // Scroll-to-adjust, same mechanism as VolumeBlock.qml's
+                // volumeSlider (contents/ui/) - see its own comment for
+                // the acceptedButtons: Qt.NoButton reasoning (lets press/
+                // drag pass through to the Slider underneath) and the
+                // 120-unit notch-accumulation convention (matches
+                // org.kde.desktop's own Slider.qml). Duplicated rather
+                // than shared with volumeSlider's copy - this project's
+                // own established convention for per-control wheel-
+                // handling logic even where near-identical (see
+                // CompactRepresentation.qml's header comment on why its
+                // own wheel handler doesn't share code with VolumeBlock's
+                // either). One notch = one stepSize (1, matching this
+                // slider's own stepSize below `to`/`from`), the same
+                // "notch = the control's own stepSize" relationship
+                // volumeSlider uses (stepDb there). Direction: scroll up
+                // (positive angleDelta.y, uninverted) increases the
+                // value, confirmed against volumeSlider's own
+                // stepRequested(1) = increase, not assumed.
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+
+                    property int wheelDelta: 0
+
+                    onWheel: (wheel) => {
+                        if (transparencySlider.pressed) return;
+
+                        const delta = (wheel.angleDelta.y || -wheel.angleDelta.x) * (wheel.inverted ? -1 : 1);
+                        wheelDelta += delta;
+                        while (wheelDelta >= 120) {
+                            wheelDelta -= 120;
+                            root.cfg_transparencyPercent = Math.min(transparencySlider.to, root.cfg_transparencyPercent + transparencySlider.stepSize);
+                        }
+                        while (wheelDelta <= -120) {
+                            wheelDelta += 120;
+                            root.cfg_transparencyPercent = Math.max(transparencySlider.from, root.cfg_transparencyPercent - transparencySlider.stepSize);
+                        }
+                    }
                 }
             }
 

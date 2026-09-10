@@ -5742,6 +5742,747 @@ architecture decisions; this file is just sequencing and status.
     passed - mute button and source row dimmed and inert while off/
     booting, last-known labels kept, live again at "On".
 
+- [x] **Phase 9.0.0 — Design pass: how transparency state reaches
+  Theme.qml.** Done 2026-09-08 on branch `feature/transparency` (this
+  entry previously named `feature/appearance-transparency`; the branch
+  actually created is `feature/transparency` - corrected here, nothing
+  else about the phase's scope changed). Design/investigation only, per
+  the brief: no 9.1.0/9.2.0 wiring shipped. Deliverables: the new
+  `plasmoid/contents/ui/TransparencySettings.qml` (the mechanism, left
+  untracked for the owner to add), CLAUDE.md's "Shared cross-view state"
+  note (Theme.qml paragraph), and the findings below. Owner decisions
+  taken during planning: **`transparencyPercent` is OPACITY** (alpha =
+  percent / 100; 94 reproduces the OSD's 0.94, 100 is opaque) - the row
+  text "Let the desktop show through" reads as transparency, but the
+  stored number is opacity, so 9.1.0 must not invert it; and the
+  slider-range question is decided from the sweep below, not assumed.
+  - **Gate 1 - the setting is real, and its visibility is bounded by
+    wallpaper contrast, not by Plasma.** All three surfaces are
+    `PlasmaCore.Dialog` + `NoBackground` (FlyoutPopup.qml:123,
+    VolumeToast.qml:103, VolumeHoverTooltip.qml:88); CLAUDE.md's
+    "infeasible" verdict only ever applied to the shell's `PlasmaWindow`
+    popup. Blur-behind is unavailable and stays so (dialog.cpp clears
+    the blur region under NoBackground; no QML-reachable KWin blur API),
+    so the effect is a plain composite `out = a*tint + (1-a)*behind`.
+    Measured live with a screen-sized ARGB `qml` window of mock panel
+    cards (same tint/border/text/button colours as Theme.qml) at
+    100/97/94/90/85/82/70/50 % over three backdrops in one capture -
+    the real wallpaper (`5825739.jpg`), opaque grey 128, opaque white
+    255 (scratchpad `sweep.qml`, values agree with the formula to <1
+    level). Max-channel 8-bit delta between adjacent steps:
+    - over white: 7.1 / 7.0 / 9.1 / 12.1 / 7.9 / 28.3 / 46.9 (about
+      2.35 levels per 1 %);
+    - over grey 128: 3.1 / 3.0 / 4.1 / 6.1 / 3.9 / 13.3 / 20.9 (about
+      1.1 per 1 %);
+    - over the owner's wallpaper (file median luminance 44, only 14 %
+      of pixels above 128): about 0.25 levels per 1 % at the median -
+      100/97/94/90 are indistinguishable except over the planet
+      highlight, 85/82 show its glow, 70/50 are clearly see-through.
+    Legibility of `textDim` (#9a9a9f) over white: fine at 82 (tint 61),
+    weak but readable at 70 (tint 90), gone at 50 (tint 136, the label
+    vanishes); over grey 128 it still reads at 50 (tint 72). Buttons
+    (`surface*`) and the overlay cards stay opaque at every step, so a
+    low alpha reads as solid islands on a see-through sheet.
+    Consequences for 9.1.0 (recommendations, owner's call): a 1 % step
+    is below perception everywhere but pure white, so `stepSize: 2`
+    (94 stays reachable); a slider floor of **50** (the lowest value
+    still legible over anything but pure white; 70 is the always-legible
+    bound - documented, not recommended as the floor because it removes
+    a real option for dark wallpapers like this one). 0..100 as mocked
+    keeps a 0-49 zone that is achievable but useless.
+  - **Provenance of 0.82 and 0.94 - both from the mockups, both resting
+    on blur that never existed.** `git show d5f4d60` (Phase 4.0):
+    `design/mockups/devialet_tray_flyout_mockup.html` line 82,
+    `.flyout.blur-enabled{ background: linear-gradient(... rgba(23,23,
+    26,0.82) ...) }` - the value WAS in the mockup, in its blur-on
+    variant; the current v11 moved the base rule to `--panel-alpha:1`
+    and left `.blur-enabled` as a pure `backdrop-filter`, which is why
+    the parked entry could not find it. 0.94 is
+    `design/mockups/OSD/devialet_volume_osd_mockup_v3.html:61`, paired
+    with `backdrop-filter: blur(18px)` on line 65. Neither was invented
+    or mis-attributed; both assume an 18 px backdrop blur Plasma never
+    provided, so neither number has a rationale left. Commit 601e14a
+    (removed in e084543) wired `transparencyEnabled ? 0.82 : 1.0` once;
+    the slider (mockup literal 72) was never wired - its default is a
+    placeholder, not a design decision.
+  - **Gate 2 - mechanism: `TransparencySettings.qml`, root-anchored and
+    forwarded like `VolumeSettings.qml`; alpha stays OUT of Theme.qml.**
+    Plain QtObject: `required property bool enabled`, `required property
+    int percent`, `readonly property real alpha` (1.0 when disabled,
+    clamped 0..1 otherwise), `function withAlpha(color)` (reads
+    `root.alpha` live - same reactive-function idiom as
+    `VolumeSettings.clamp()`). main.qml instantiates it once bound to
+    `Plasmoid.configuration.transparencyEnabled/transparencyPercent` and
+    forwards it CompactRepresentation -> FlyoutPopup -> FlyoutContent,
+    and from CompactRepresentation into VolumeToast/VolumeHoverTooltip.
+    Theme.qml keeps ONE opaque base pair (`panelTintTop` #17171a /
+    `panelTintBottom` #121214) and loses both alpha-bearing pairs;
+    consumers write `transparencySettings.withAlpha(theme.panelTintTop)`.
+    Rejected: a `required property` on Theme.qml - `Theme {}` is
+    instantiated in four files including `ConfigGeneral.qml:44`, a
+    separate ConfigDialog QML tree with no path to main.qml's root
+    objects, so `required` breaks that page and a defaulted property
+    silently permits the divergence the pattern exists to prevent.
+    Rejected: folding into VolumeSettings.qml - unrelated domain, the
+    name would lie, and that file's header scopes it to volume-range
+    math the same way PendingAmpState's header kept `ampPowerState` out.
+    Theme.qml therefore REMAINS the per-file exception in CLAUDE.md's
+    note; the note now says why (alpha moved out because it is
+    cross-view state).
+  - **Gate 3 - live on ConfigDialog Apply/OK, not reload.** Free (the
+    `Plasmoid.configuration` binding in main.qml is the same mechanism
+    Phase 8.4.0 already relies on), a reload-only design would need MORE
+    code and show a stale panel beside a toggle claiming otherwise, and
+    a slider is only usable if the effect is visible while tuning.
+    Limit stated: live on Apply/OK, not while dragging (the shell pushes
+    `cfg_*` back only on Apply). **PoC, done and reverted:** the exact
+    9.1.0 wiring (TransparencySettings in main.qml + forwarding through
+    the three files + the flyout's two GradientStops on `withAlpha`)
+    plus a PoC-only Timer writing `Plasmoid.configuration.
+    transparencyPercent/Enabled` in-process (the same property-map write
+    the dialog's Apply performs) every 10 s: 90 -> 94 -> 70 -> 50 -> off
+    -> back to 90/on. Daemon stopped, `fakeamp.py --open --state amp=1
+    auto-short_..._pow=On_..._list=closed_slist=closed` opened the real
+    flyout hands-free over a full-screen white `qml` window (renders at
+    224 as an inactive window - measured, not assumed), six full-screen
+    captures ~3 s after each write, alpha recovered by inverting the
+    composite along a plain tint strip inside the left border:
+    **0.904 / 0.943 / 0.702 / 0.506 / 1.001 / 0.904**, journal
+    `[POC] alpha ->` lines matching, no `plasmashell --replace` between
+    captures. Off is exactly 1.0. The four edited files were `git
+    checkout`-reverted, the package re-upgraded and the shell restarted;
+    the Timer's last step wrote the shipped defaults back, which
+    KConfigSkeleton stores as "revert to default", so no
+    `transparencyEnabled`/`transparencyPercent` key is left in the
+    applet's General group (only the stale `transparencyLevel=100` /
+    `blurBackground=false` orphans main.xml already documents).
+    Owner soak item (pointer-only, per the usual rule): move the real
+    slider and click Apply once with the flyout open, confirm it
+    changes without a reload - the PoC drove the identical write path
+    but not the dialog's own buttons.
+  - **Default recommendation (for 9.1.0 to apply, not this phase):
+    `transparencyEnabled: true`, `transparencyPercent: 94`.** ON because
+    it is the designed look (both mockups default the switch on, the
+    OSD/tooltip have shipped at 0.94 since Phase 4.5.3) and at 94 % the
+    legibility risk is nil; OFF would buy identical rendering on every
+    wallpaper at the cost of the feature being invisible by default. 94
+    over the owner's own wallpaper is a hint (about 1.5 levels at the
+    median, visible only over highlights) - stated plainly, it matches
+    the owner's preference for how the OSD already looks; 85-90 is the
+    alternative if a visibly translucent default on dark wallpapers is
+    wanted. Changing main.xml + `ConfigGeneral.shippedDefaults` belongs
+    in 9.1.0 because nothing reads the entries yet (a 9.0.0 change would
+    have no observable effect to verify) and 9.1.0's own verification
+    then covers it. The dev machine stores no value for either key, so
+    9.1.0's test starts from the shipped default.
+  - Harness note for 9.3.0: the PoC recipe above (stopped daemon,
+    `fakeamp.py --open`, white backdrop window, capture, invert the
+    composite on a plain strip) measures a surface's real alpha without
+    touching the mouse; the OSD/tooltip need their own trigger (toast:
+    a volume write via the fake daemon; tooltip: hover, owner soak).
+
+- [x] **Phase 9.1.0 — Wire the flyout's own gradient.** Done 2026-09-09
+  on `feature/transparency`. Re-applied 9.0.0's PoC wiring for real
+  (not reverted this time): `TransparencySettings` instantiated in
+  main.qml bound to `Plasmoid.configuration.transparencyEnabled/
+  transparencyPercent`, forwarded as a `required property` through
+  CompactRepresentation -> FlyoutPopup -> FlyoutContent;
+  FlyoutContent's two GradientStops read
+  `root.transparencySettings.withAlpha(root.theme.panelTintTop/Bottom)`.
+  Theme.qml: added the opaque base pair `panelTintTop` (#17171a) /
+  `panelTintBottom` (#121214), deleted `panelGradientTop/Bottom` (the
+  old hardcoded 0.82) - `osdGradientTop/Bottom` deliberately untouched,
+  still 9.2.0's job. Dropped the "UI-only for now" comments in main.xml
+  and ConfigGeneral.qml.
+  - **Default: 88, not 9.0.0's suggested 94** - explicit instruction
+    for this phase (owner's stated 85-90 range, 88 as the midpoint,
+    flagged as adjustable not fixed). `transparencyEnabled: true`
+    unchanged. Set in main.xml's `<default>` and
+    `ConfigGeneral.shippedDefaults` (which also drives the Reset
+    button and the `cfg_transparencyPercent` KCMUtils-required default
+    companion).
+  - **Slider range deliberately NOT narrowed this phase** - explicit
+    instruction, kept at the mocked 0..100/step-1 rather than 9.0.0's
+    recommended 50..100/step-2, so the owner can try the full range
+    live first. A comment at the slider in ConfigGeneral.qml records
+    this and points at 9.0.0's Gate 1 sweep (below ~50% the panel
+    gradient effectively disappears while chrome stays opaque - 9.1.1's
+    job). **Open item, owner's call**: narrow the range once tried, or
+    leave it - not decided by this phase.
+  - **Verification, hands-free (`fakeamp.py --open` over the real
+    daemon stopped, full-screen white QML backdrop, `spectacle -b -f`
+    capture, alpha recovered by inverting the composite against
+    `panelTintTop`/`panelTintBottom` on a clean patch of the flyout -
+    same method as 9.0.0's own PoC measurement).** Driven via a
+    temporary in-process `Timer` writing
+    `Plasmoid.configuration.transparencyEnabled/transparencyPercent`
+    directly (same write path a ConfigDialog Apply performs -
+    identical technique to 9.0.0's own PoC), added to main.qml for the
+    duration of the measurement and fully removed afterward - `git
+    diff` confirmed clean before commit. Measured on the real,
+    already-open flyout with no `plasmashell --replace` between each
+    config write and its capture:
+    - Shipped default (`enabled: true`, `percent: 88`, nothing on disk
+      for either key): measured alpha **0.880** (top gradient stop) /
+      0.877 (bottom stop) against a clean patch, i.e. matching to
+      <0.5 levels.
+    - `enabled: false`: measured alpha **1.0 exactly** at the top
+      gradient stop (composite pixel identical to the opaque tint
+      colour, no residual blend); bottom-stop patch read 0.995 (a
+      1-level 8-bit rounding/AA-edge artifact near the rounded corner,
+      not a real deviation) - matches 9.0.0's own "off is exactly 1.0"
+      finding.
+    - Confirms live-on-config-write with no reload (the mechanism
+      Gate 3 already established) and the disabled state's exact
+      opacity (the specific thing 9.3.0's verification pass will also
+      check across all three surfaces).
+  - Config on disk left clean after the measurement:
+    `transparencyEnabled`/`transparencyPercent` keys deleted via
+    `kwriteconfig6 --delete` (reverting to the shipped default, same
+    as 9.0.0's own PoC teardown) rather than left at the PoC's last
+    written value; daemon restarted for real, plasmashell restarted
+    once more on the final (non-PoC) code with a clean reload log (no
+    QML errors).
+  - **Owner soak (pointer-only, real ConfigDialog): passed.** Owner
+    dragged the real slider and clicked the real Apply button with the
+    flyout open, and reported it "looks good" from live testing -
+    confirms the dialog's own controls drive the same live path the
+    hands-free measurement above exercised via the temp Timer, not
+    just the underlying mechanism in isolation.
+  - **Still open**: whether to narrow the slider range from the full
+    0..100/step-1 kept this phase (see above) - owner has now tried it
+    live per the plan, decision not yet stated. Also still unverified:
+    nothing regressed in Theme.qml's palette/font properties
+    (fontDisplay/fontMono/palette colors untouched by this diff, but
+    not re-screenshotted against a pre-9.1.0 baseline).
+
+- [x] **Phase 9.1.1 — Control chrome opacity: buttons, source chip, and
+  overlay cards track panel alpha with a floor.** Done 2026-09-09 on
+  `feature/transparency`.
+  - **Investigation gate resolved: floor, not offset - `controlAlphaFloor:
+    0.88`.** Math alone already disqualifies a fixed offset at the low
+    end (`min(1.0, alpha + 0.10)` bottoms out at 0.10 when alpha is 0 -
+    i.e. chrome would go nearly invisible exactly where "stands out" is
+    needed most), but this was also checked live, not just reasoned:
+    wired `controlAlpha = Math.max(alpha, 0.88)` into the real
+    mute/power buttons, the source row and the source-list overlay card,
+    then swept the real ConfigDialog's `transparencyPercent` through 0,
+    50 and ~100 via the same hands-free temp-Timer + `fakeamp.py --open`
+    + white-backdrop method as 9.0.0/9.1.0, capturing each with
+    `spectacle`. At percent=0 (panel fully invisible) every piece of
+    chrome - Mute/Power buttons, the "Optical 1" source chip, the source
+    row, and the source-list dropdown card (opened via
+    `fakeamp.py --state ...slist=open`) - rendered as a clearly solid,
+    legible dark box against the light backdrop; at percent=50 the panel
+    itself read as visibly see-through (wallpaper/backdrop showing)
+    while the same chrome stayed crisp and solid, a clean visual
+    hierarchy rather than a jarring mismatch; at percent~100 chrome and
+    panel were visually identical (both fully opaque, matching
+    `Math.max`'s guarantee of no seam once alpha clears the floor).
+    0.88 chosen to match the panel's own shipped default (Phase 9.1.0)
+    - not a reference to that constant, a separately-stated value that
+    happens to agree, so the two can be retuned independently - which
+    means chrome and panel land on exactly the same alpha out of the
+    box and diverge only below it.
+  - **Mechanism**: `TransparencySettings.qml` gained
+    `controlAlphaFloor`, `controlAlpha` (`Math.max(alpha,
+    controlAlphaFloor)`), and `withControlAlpha(color)` (same
+    reactive-live-read idiom as `withAlpha()`).
+  - **Applied to**: `VolumeBlock.qml` (the two volume +/- buttons'
+    background, and the source chip's background - both were a flat
+    `theme.surface` before), `ActionRow.qml` (the power button's
+    background, and the mute button's *non-muted-branch* background
+    only - its muted-state 0.14 copper tint is a deliberate, orthogonal
+    state-highlight, not panel-transparency-related, left untouched),
+    `SourceSelector.qml` (the source row's background), and
+    `OverlayCardBackground.qml` (the shared background component behind
+    both `AmpListOverlay.qml` and `SourceListOverlay.qml` - its outer
+    fill and both inner gradient stops; the border stayed untouched,
+    matching how the flyout's own panel divider border wasn't touched
+    in 9.1.0 either).
+  - **Overlay cards' opaque background reasoning re-confirmed, not
+    conflicted with**: `OverlayCardBackground.qml`'s own header comment
+    already states the styling is a direct mockup port
+    (`.overlay-popup`) with no relation to panel transparency - this
+    phase layers `controlAlpha` on top of that existing gradient/
+    border/radius/shadow shape, it doesn't replace or redesign it.
+  - **Forwarding chain**: `FlyoutContent.qml` already held
+    `root.transparencySettings` (9.1.0) but wasn't forwarding it
+    further - this phase adds `required property TransparencySettings
+    transparencySettings` to `VolumeBlock.qml`, `ActionRow.qml`,
+    `SourceSelector.qml`, `AmpListOverlay.qml`, `SourceListOverlay.qml`
+    and `OverlayCardBackground.qml`, and wires `transparencySettings:
+    root.transparencySettings` (or the equivalent one level down) into
+    all five `FlyoutContent.qml` instantiation sites plus the two
+    `OverlayCardBackground { }` instantiations inside the overlay
+    files - the overlay cards specifically needed their own new
+    forwarding hop that the panel gradient never required in 9.1.0, per
+    this phase's own item 4.
+  - Config on disk left clean after the investigation sweep
+    (`transparencyPercent` override deleted via `kwriteconfig6
+    --delete`, same as 9.1.0's teardown); daemon restarted for real,
+    plasmashell restarted once more on the final (non-PoC) code with a
+    clean reload log (no QML errors) and no leftover `[POC911]` log
+    lines.
+  - **Theme.qml untouched this phase** (`git diff` confirms) - palette/
+    font properties are unaffected by construction, not just by
+    inspection.
+  - **Not verified this phase (owner soak, pointer-only)**: dragging
+    the real ConfigDialog slider across its full range with the flyout
+    open and confirming chrome "stands out" by eye at values between
+    the three swept points; the AmpListOverlay card specifically (only
+    SourceListOverlay was opened live - AmpListOverlay shares the exact
+    same `OverlayCardBackground.qml` instance type and forwarding
+    pattern, so this is a construction-level guarantee, not a live
+    observation of that specific card).
+  - **REVISED 2026-09-09: the `Math.max(alpha, 0.88)` floor above is
+    rejected by the owner** after live testing - an enormous,
+    disconnected gap between a near-invisible panel and fully-solid
+    chrome. Still committed as-is in `TransparencySettings.qml`
+    (nothing here has been changed) pending a replacement formula - see
+    the sweep entry immediately below, which produced a 20-combo visual
+    reference (not a final formula) for the owner to pick from.
+  - **Follow-up sweep (2026-09-09, same day): visual reference for a
+    small-offset formula, no formula implemented.** Investigated
+    `controlAlpha = min(1.0, panelAlpha + offset)` visually instead of
+    a floor, per the owner's explicit framing ("chrome that tracks the
+    panel's alpha closely with a small offset, not a fixed floor").
+    Rendered all of {volume +/- buttons, mute/power buttons, the
+    source row, the source chip, and the AmpListOverlay/
+    SourceListOverlay card backgrounds} at one shared value together
+    (not buttons in isolation) against the owner's real, live desktop
+    wallpaper (deliberately NOT the synthetic white backdrop 9.0.0/
+    9.1.0 used for pixel-precision alpha measurement - this sweep is a
+    subjective look, not a measurement) for panel alpha in {0, 20, 50,
+    70, 90}% crossed with chrome alpha at panel+{0,5,10,15}% (panel+
+    {0,5,10}% only at 90%), plus a 100%/100% opaque reference - 20
+    combos, each captured twice (closed and with the source list open,
+    via `fakeamp.py`'s existing `sourceListOpen` UiState hook rather
+    than new automation) - 40 screenshots total, assembled into two
+    labeled contact-sheet collages (one per view) and sent to the
+    owner. Mechanism: a temporary `debugChromeOverride` property on
+    `TransparencySettings.qml` (bypasses the formula entirely so panel
+    and chrome alpha can be driven independently) plus a temporary
+    driver `Timer` in `main.qml` logging a `[SWEEP911] step=...` marker
+    per combo; a standalone Python script
+    (kept alongside the collages, not committed - see below) imported
+    `tools/flyout-harness/fakeamp.py`'s `FakeAmp` class directly
+    (rather than the one-shot CLI, which can't change `UiState` after
+    launch) to toggle the source list live between captures, tailed
+    plasmashell's own journal for the step markers to synchronize
+    `spectacle` captures, and drove two ~header-controlled batches (12
+    then 8 steps, 30s/step) plus a 1-step fixup batch for `p000_c000`
+    (lost in batch A to a real startup race: `Component.onCompleted`
+    fired and logged before the external journal-tailing watcher had
+    attached - fixed for batch B by moving the first step into
+    `onTriggered` instead, `idx` starting at -1). Both temporary
+    additions were fully removed and confirmed via `git diff` before
+    the real daemon/shell were restored; one capture
+    (`p090_c095_expanded`) shows the standard view instead of the
+    dropdown - a one-off UI-state-timing miss, not resent given the
+    other two P90 expanded tiles already cover that panel level.
+  - **Read of the results (mine, not a decision - owner picks after
+    reviewing the collages)**: the offset's visual effect is
+    concentrated in the low-to-mid panel range (0-50%) - at panel 70%+
+    every tested offset already reads as essentially solid, so the
+    formula barely matters there. At panel 0%, even the full +15
+    offset stays close to invisible (inherent to "track closely," not
+    a bug - a small offset cannot rescue near-zero alpha without
+    stopping being small). The clearest, most legible progression was
+    at panel 50%: chrome 50% (offset 0) already reads as a soft but
+    real button shape; chrome 65% (offset +15) reads as clearly solid
+    without ever looking disconnected from the panel beneath it - no
+    step in the whole sweep produced the earlier floor's jarring gap.
+    Tentative read: **+10 to +15 percentage points** (i.e.
+    `min(1.0, alpha + 0.10..0.15)`) is the best-looking offset band
+    across the sweep; a single constant offset in that band looked
+    visually consistent at every panel level tested, i.e. the sweep
+    did not surface a need for a non-constant/piecewise formula -
+    stated as an observation, not a recommendation to skip the owner's
+    own review of the collages.
+  - Collages and the full 40-image sweep are in the session's
+    scratchpad (not committed to the repo) - `sweep911_collage_standard
+    .png` / `sweep911_collage_expanded.png`, sent to the owner directly
+    (`p{panel}_c{chrome}_{standard|expanded}.png` for the individual
+    frames if a closer look at one combo is wanted).
+  - **Superseded same day - see the entry immediately below.** The
+    owner's own follow-up request diagnosed a real compositing bug in
+    the flat-offset premise this sweep was built to explore (see
+    below), so no value from these collages was ever picked - the
+    formula shape itself changed instead.
+
+- [x] **Phase 9.1.1 REVISION 2 — compositing-corrected controlAlpha +
+  independent overlayAlpha floor.** Done 2026-09-09, same day as the
+  reference sweep above, on `feature/transparency`.
+  - **Root cause (owner-identified, confirmed exactly by the numbers
+    below): chrome is painted on top of the panel's own translucent
+    layer in the same scene, so two alphas compound via Porter-Duff
+    "over"** (`effective = 1 - (1-panelAlpha)*(1-chromeAlpha)`), not
+    plain addition. A flat `chromeAlpha = panelAlpha + 0.10` therefore
+    overshoots badly once panel alpha is no longer near 0: computed
+    exactly from the reference sweep's own flat-offset combos - panel
+    20%+chrome 30% -> **44%** effective, panel 50%+chrome 60% ->
+    **80%** effective, panel 70%+chrome 80% -> **94%** effective (the
+    owner's own cited example) - all far past the intended flat
+    +10 points.
+  - **Fix: solve backwards from the target EFFECTIVE opacity.**
+    `TransparencySettings.qml`'s `controlAlpha` now computes
+    `targetEffective = Math.min(1.0, alpha + controlOffsetTarget)`
+    (`controlOffsetTarget = 0.10`) then inverts the Porter-Duff formula
+    for the raw chrome alpha that actually produces it:
+    `controlAlpha = 1 - (1 - targetEffective) / (1 - alpha)`, with
+    `alpha >= 1.0` guarded to return `1.0` directly (the algebraic form
+    divides by `1 - alpha`, undefined at exactly 1.0). Verified once in
+    isolation (a standalone `qml` script computing both `controlAlpha`
+    and the resulting `effective()` across panel 0/20/50/70/90/95/100 -
+    every effective value landed exactly on `panel + 0.10` capped at
+    1.0, confirming the algebra before touching the real widget) and
+    again on the real flyout (below).
+  - **Second, independent formula for the same day's other ask:
+    `overlayAlpha` (AmpListOverlay/SourceListOverlay card backgrounds
+    only) = `Math.max(alpha, 0.70)`, a genuine floor** - deliberately
+    NOT the compositing-corrected offset above. Multiple rows of list
+    text need stronger, non-negotiable legibility than a single button,
+    so this is decided on its own terms, not derived from controlAlpha.
+    `OverlayCardBackground.qml`'s fill/gradient now call
+    `withOverlayAlpha()` instead of `withControlAlpha()`; nothing else
+    in the forwarding chain changed (VolumeBlock/ActionRow/
+    SourceSelector still call `withControlAlpha()` exactly as before -
+    the property name is unchanged, only its formula is).
+  - **Pop-check (requested explicitly before implementing broadly):
+    confirmed fine, not jarring.** At panel 0% (controlAlpha ~10%,
+    closed row nearly invisible) and panel 20% (controlAlpha ~13%),
+    captured the source row closed vs. the list expanded
+    (`overlayAlpha` = the 70% floor) - the jump reads as "a new
+    floating card appeared," the same idiom as a native dropdown/
+    context menu being more opaque than the control that opened it,
+    not a glitch. Confirms the owner's own tentative take.
+  - **Final live sweep, same panel checkpoints as the reference sweep
+    (0/20/50/70/90/100%), both views** - this time only panel alpha
+    needed driving (`controlAlpha`/`overlayAlpha` are both derived
+    automatically now, no independent override needed, unlike the
+    reference sweep's `debugChromeOverride` bypass). Computed values
+    matched the formula exactly at every checkpoint: panel
+    0/20/50/70/90/100 -> chrome 10/13/20/33/100/100, overlay
+    70/70/70/70/90/100.
+  - **Before/after comparison** (flat-offset combos from the reference
+    sweep vs. this revision's corrected combos, same crop/scale, both
+    views) confirms the fix directly: at panel 70%, the old flat +10
+    read as ~94% effective (buttons nearly fully opaque, indistinguishable
+    from opaque); the corrected formula reads as a clearly still-
+    translucent 80% - a real, visible difference, not just a different
+    number. At panel 20% the two are close (44% vs 30%, the algebra's
+    predicted small-offset region), matching the formula's own "reduces
+    to a flat offset near alpha=0" property. Sent to the owner as
+    `sweep911_before_after_standard.png` / `_expanded.png` (also copied
+    to the repo root, untracked, per the owner's explicit request after
+    the reference sweep - delete once reviewed).
+  - Mechanism for the verification captures: same technique as the
+    reference sweep (temporary driver `Timer` in `main.qml` logging
+    `[SWEEP911]` markers, the same standalone `sweep911_driver.py`
+    watching plasmashell's journal and toggling `sourceListOpen` live
+    via `fakeamp.py`'s `FakeAmp` class), fully removed and confirmed via
+    `git diff` before the real daemon/shell were restored - no
+    `debugChromeOverride`-style bypass needed this time since both
+    formulas derive from the single `Plasmoid.configuration.
+    transparencyPercent` the Timer already drives.
+  - **Not yet done**: the owner has not yet confirmed the before/after
+    comparison resolves the issue to their satisfaction - this entry
+    records what was implemented and verified, not a final sign-off.
+    Nothing has been committed (per this repo's standing rule); the
+    two new formulas sit in the working tree exactly as described here.
+
+- [x] **Phase 9.1.1 REVISION 3 — overlayAlpha changed from a pure floor
+  to a raw floor-or-offset formula (no compositing correction).** Done
+  2026-09-09, same day as Revision 2, on `feature/transparency`.
+  - **Correction to Revision 2's own framing**: overlayAlpha was never
+    given the compositing correction - it was already the raw
+    `Math.max(alpha, 0.70)` floor from the original Phase 9.1.1 ask
+    (see that entry). The owner's follow-up correctly diagnosed a real,
+    different structural flaw in that plain floor regardless: once
+    `panelAlpha >= 0.70`, `Math.max` collapses to `alpha` itself, so
+    the list card's raw alpha equals the panel's exactly - no
+    per-formula separation left above that point (Porter-Duff
+    compounding from being layered on the panel, not the wallpaper
+    directly, still gives *some* residual visual gap even then, but it
+    shrinks toward the panel as alpha climbs, which is the shrinking-
+    to-nothing behavior the fix targets).
+  - **New formula, no inverse-compositing step**: `overlayAlpha =
+    Math.max(overlayAlphaFloor, Math.min(1.0, alpha +
+    overlayAlphaOffset))`, `overlayAlphaFloor = 0.70`,
+    `overlayAlphaOffset = 0.20`. Deliberately NOT solved backwards
+    through the Porter-Duff formula the way `controlAlpha` is - this
+    property is chasing a perceptual "clearly stands apart" legibility
+    margin for multi-row list text, not a precise proportional match to
+    a computed effective-opacity number, so the raw value below IS the
+    alpha painted. `controlAlpha` (buttons) is unchanged - its
+    compositing correction has real empirical support (the reference
+    sweep's P70/P90 rows genuinely overshooting into unexpected
+    darkness), a different failure direction than this one.
+  - Crossover point (computed, not just asserted): floor and offset are
+    equal at `alpha = floor - offset = 0.50`, so overlayAlpha sits flat
+    at 70% for panel 0-50%, then tracks `alpha + 0.20` from panel
+    50-80% (a genuine, growing +20pt gap), then flatlines at the 100%
+    ceiling from panel 80% onward - full table verified against the
+    live formula: panel 0/20/50/60/70/80/90/100 -> overlay
+    70/70/70/80/90/100/100/100.
+  - **Verified live**: re-swept panel 50/60/70/80/90% (the range the
+    old formula's convergence-toward-panel problem actually bites),
+    expanded (list-open) view only - same temp-Timer + `fakeamp.py`
+    + journal-marker technique as every other sweep this phase, fully
+    removed and confirmed via `git diff` before the real daemon/shell
+    were restored. Computed markers matched the formula exactly at
+    every step (see the table above). A direct before/after at panel
+    70%/90% (old `Math.max(alpha,0.70)` vs the new formula, same crop)
+    shows the old list card's edge/shadow visibly softening toward the
+    panel's own softness at 90% (residual-but-shrinking compounding
+    gap), while the new one stays crisp with a real, visible gap at
+    both points. Sent to the owner as `sweep911_overlay_before_after
+    .png` (old-vs-new at 70/90%) and `sweep911_overlay_separation.png`
+    (the full 50-90% sweep, expanded view, one row) - both also copied
+    to the repo root, untracked.
+  - Not a computed effective-opacity check this time, by design (the
+    owner's own instruction) - confirmed by eye across the swept range
+    that the list card reads as comfortably, clearly more opaque than
+    the panel at every point, not by checking against a target number.
+  - Still not committed - working-tree only, same standing rule as
+    every other entry here.
+
+- [x] **Phase 9.1.1 — theme color update (Darkly match) + alpha formula
+  confirmation.** Done 2026-09-09, same day, on `feature/transparency`.
+  - **Part A - color, `Theme.qml`.** Base recolored to `#151515`
+    (Darkly's real window background - owner-confirmed, used directly,
+    no re-verification). `panelTintTop`/`panelTintBottom` kept as a
+    gradient, not flattened - a flat `#151515`/`#151515` pair and a
+    ±3-level gradient recentered on `#151515` (`#181818`/`#121212`,
+    same total depth as the old `#17171a`/`#121214` pair, just
+    recentered and desaturated to `#151515`'s neutral hue) were both
+    captured live on the real flyout at 95% panel opacity - visually
+    indistinguishable at that magnitude, so flat's "looks boring" risk
+    never materialized either way. Kept the gradient on cost/benefit,
+    not a visible difference: costs nothing (reads as flat when
+    nothing needs it) and keeps the panel consistent with every other
+    gradient surface in the palette (`overlayGradientTop/Bottom`,
+    `osdGradientTop/Bottom`) rather than a flat one-off exception. See
+    `panelTintTop`'s own comment for the full reasoning.
+  - `surface`/`surface2`/`surface3` derived as a lightness scale FROM
+    `#151515` (`#1c1c1c`/`#232323`/`#2b2b2b`), preserving the OLD
+    palette's exact lift-from-panel magnitude (+6.5/+14.5/+22.8 over
+    the panel's old average luminance) recentered onto the new neutral
+    hue - buttons stay visibly lighter than the panel, hierarchy not
+    collapsed, per explicit instruction.
+  - **Part B - alpha formulas: already fully implemented** from the
+    same day's earlier Revision 2/Revision 3 work (see those entries
+    above) - `controlAlpha`'s compositing correction and `overlayAlpha`'s
+    raw floor-or-offset formula in this phase's brief matched the
+    already-committed-to-working-tree code exactly, so no changes were
+    needed for Part B itself.
+  - **Verified**: `qmllint` clean on both changed files; a full
+    `kpackagetool6 --upgrade` + `plasmashell --replace` reload produced
+    no QML errors in the journal; three live sanity screenshots (panel
+    15%/50%/90%, standard view, real wallpaper, `fakeamp.py`-driven)
+    confirm the new palette renders correctly and the button/panel
+    hierarchy stays visible at every level - not a judged/iterated
+    sweep, per the phase brief (the owner does the real pointer-driven
+    soak). Temp driver Timer removed and confirmed via `git diff`
+    before the real daemon/shell were restored.
+  - Not committed - working-tree only. Handing off for the owner's live
+    soak across the panel opacity range, as instructed.
+  - **REVISED same day**: the surface/surface2/surface3 magnitude above
+    (+6.5/+14.5/+22.8 over panel) was rejected live against a real
+    Darkly reference (owner's own Dolphin screenshot) - real Darkly
+    keeps chrome and controls at nearly the same tone, separation from
+    a thin border/hover state, not a fill-lightness jump; at the
+    rejected magnitude, `controlAlpha`'s opacity boost (Revision 2)
+    compounded with the color gap at 90-100% panel opacity to make
+    buttons read as a wholly separate layer. Hue checked directly in
+    `Theme.qml` and confirmed already exactly neutral (R=G=B) matching
+    `panelTintTop`/`Bottom` before this revision - not the cause, ruled
+    out rather than assumed. New values pulled much closer to the panel
+    base: `surface` `#181818` (+3), `surface2` `#1b1b1b` (+6), `surface3`
+    `#1e1e1e` (+9) - a "few percent" step per tier instead of the old
+    ~+7/+14/+23, still monotonically increasing. Border/hover styling
+    unchanged (already `theme.divider`/`theme.copperDim` on every
+    button/row) - does the separation work now, per the Darkly
+    reference. Verified live at panel 90%/100% (`colorfix_p90.png` /
+    `colorfix_p100.png`, sent to owner + repo root) - starting point
+    only, per the brief; owner iterates from here, not judged further.
+
+- [x] **Phase 9.1.1 REVISION 5 — controlAlpha plateau bug, real fix not
+  a tuning pass.** Done 2026-09-09, same day, on `feature/transparency`.
+  - **Root cause, confirmed mathematically before touching code**: the
+    Revision 2 formula's `Math.min(1.0, panelAlpha + 0.10)` clamps to
+    exactly 1.0 once `panelAlpha >= 0.90`, which forces the inverse-
+    solved `controlAlpha` to ALSO be exactly 1.0 for the entire panel
+    range 90-100% - buttons rendered as fully solid, unchanging pixels
+    while the panel itself kept visibly changing. A standalone
+    computation of the old formula across panel 0.75-1.00 showed
+    `controlAlpha` flat at `1.0000` from panel=0.90 onward, every
+    single step - not inferred from the screenshots alone, verified
+    algebraically first, matching the owner's own live observation
+    (75%/100% looked right, 85-94% looked "off," worst in the high-80s/
+    low-90s - exactly the plateau's span).
+  - **Fix: `targetEffective = panelAlpha + (1-panelAlpha)*k`** (a
+    fraction `k` of the remaining gap to full opacity, not a fixed
+    point count) - strictly `< 1.0` whenever `panelAlpha` is, for any
+    `k < 1`, so it structurally cannot plateau or need clamping.
+    Same compositing-correction principle as before, but for this
+    target shape the algebra collapses to an exact constant: `1 -
+    targetEffective = (1-panelAlpha)(1-k)`, so `controlAlpha = 1 -
+    (1-targetEffective)/(1-panelAlpha) = k` - verified numerically
+    (a standalone computation confirmed `controlAlpha` comes out to
+    exactly `k` at every panel value 0 through 0.99) before relying on
+    it. Written as the closed form `controlAlpha: controlAlphaK`
+    directly rather than the general divide-based inverse - not just a
+    simplification: the general form divides by `(1-panelAlpha)`,
+    which -> 0 as panelAlpha -> 1 and is a real source of floating-
+    point noise near the exact range the previous bug lived in, so
+    this avoids that division entirely rather than trusting it to
+    cancel cleanly.
+  - **Verified live, rigorously, not just eyeballed**: a fine ~3%-step
+    sweep across panel 75/78/81/84/87/90/93/96/100% (k=0.4) - the exact
+    range the old formula broke - produced `plateaufix_k04_finesweep
+    .png` (sent to owner + repo root). Pixel-sampled the actual
+    composited button fill at each step (not just visual inspection):
+    an early read looked like it flattened again at 93-100%, but a
+    control sample of a plain panel-background pixel (no button, no
+    `controlAlpha` involved at all) at the same coordinates showed the
+    identical flattening - proving it's a wallpaper-darkness + 8-bit-
+    quantization artifact at that specific screen region (this
+    wallpaper patch is dark enough that a 5-7% wallpaper contribution
+    rounds to the same integer as 0%), not a residual algorithm bug.
+    The button-minus-panel pixel delta was checked directly and stayed
+    within a flat ±1 8-bit level across the ENTIRE 75-100% range with
+    no jump anywhere - confirming the two track together continuously,
+    which is the property that actually matters (not each one's
+    absolute value flattening for reasons external to the formula).
+  - **k chosen live**: candidates 0.3/0.4/0.5 compared at a fixed panel
+    50% (`kcompare_panel50.png`, sent to owner + repo root) - low k
+    reads subtle everywhere (including at low panel opacity, where more
+    standout was wanted); high k gives more separation at low panel
+    opacity but risks feeling closer to the old flat-offset behavior
+    near the very top. Landed on k=0.4 (`controlAlphaK` in
+    `TransparencySettings.qml`) as a starting recommendation - visible
+    border/definition without reintroducing the flat-contrast problem
+    the immediately preceding revision (button/panel color contrast)
+    was fixing - stated as a real trade-off, not asserted as uniquely
+    correct; owner's call to adjust.
+  - `overlayAlpha` and the Part A color work are untouched by this
+    revision - scoped to `controlAlpha` only, as the bug report named.
+  - Verified `qmllint` clean and a full reload produces no QML errors;
+    all temp driver Timers/overrides removed and confirmed via `git
+    diff` before the real daemon/shell were restored. Not committed -
+    working-tree only.
+  - **REVISION 6 (owner, from `kcompare_panel50.png`)**: picked k=0.3,
+    the subtlest of the three candidates - `qmllint` clean, clean
+    reload, no new sweep (already covered by Revision 5's comparison).
+  - **REVISION 7 (owner, live, same day)**: k=0.3 still too large
+    specifically at the LOW end - panel=0% produces a `~30pt` gap
+    (`k*(1-panelAlpha)` at panelAlpha=0 is exactly `k`), which read as
+    buttons disconnected from an almost-invisible panel. The owner's
+    read of the shape: this isn't two problems needing different curve
+    shapes - the top end (panel ~70%+) already looked right at k=0.3,
+    and since `gap(panel) = (1-panel)*k` shrinks proportionally with k
+    at every panel value, lowering k fixes the low end and can only
+    make the already-good top end more subtle still, never worse.
+    Changed `controlAlphaK` 0.3 -> 0.1 (panel=0% gap now exactly 10pt,
+    the owner's explicit target - `targetEffective` reduces to `k`
+    itself when panelAlpha=0). Re-verified live at the same 5/20/50/
+    70/90% checkpoints as the last two soaks (`k01_verification.png`,
+    sent to owner + repo root): gap reads 10/8/5/3/1pt in order -
+    modest and reasonable at the low end, negligible by 90%, smooth
+    throughout. `qmllint` clean, full reload with no QML errors, temp
+    sweep Timer removed and confirmed via `git diff` before the real
+    daemon/shell were restored. Not committed - working-tree only.
+
+- [x] **Phase 9.1.2 — Transparency slider: scroll-to-adjust + larger
+  hit target.** Done 2026-09-09, on `feature/transparency`.
+  - **The CLAUDE.md "HoverHandler doesn't capture pointer during
+    drags" note this phase's own brief cited does not actually exist**
+    in CLAUDE.md - checked directly (`grep`) before relying on it,
+    found only in this same TODO.md entry's own prior wording, not in
+    CLAUDE.md itself. Didn't block on the discrepancy - went straight
+    to the authoritative source (`VolumeBlock.qml`'s `volumeSlider`,
+    the actual working implementation) instead of the secondhand
+    claim, per the phase's own "read that actual mechanism directly...
+    before touching ConfigGeneral.qml" instruction.
+  - **Hit-target mechanism, read from `volumeSlider` directly**: not
+    an invisible larger MouseArea or padding - a QQC2 `Slider`'s own
+    interaction region is governed by its component bounds
+    (`0..implicitHeight`), not by what's actually painted inside it.
+    `volumeSlider` sets `implicitHeight: 26` while its visible track is
+    a 4px `Rectangle` and its handle a 15px circle drawn centered
+    within that taller invisible bounds - the mismatch between visible
+    and interactive size IS the fix, no separate hit-area layer needed.
+    Applied the identical `implicitHeight: 26` to `transparencySlider`.
+  - **Scroll mechanism, read from `volumeSlider` directly**: a
+    `MouseArea { anchors.fill: parent; acceptedButtons: Qt.NoButton }`
+    child of the Slider - `Qt.NoButton` lets press/drag pass through
+    to the Slider underneath untouched, so the MouseArea only ever
+    intercepts wheel events. Accumulates `wheel.angleDelta.y` (falling
+    back to `-angleDelta.x`, respecting `wheel.inverted`) into a
+    counter and steps once per whole 120-unit notch (the standard wheel
+    tick, matching org.kde.desktop's own `Slider.qml` convention) -
+    ported the exact same accumulation loop.
+  - **Step size and direction, confirmed by reading code, not
+    assumed**: `volumeSlider`'s wheel handler emits `stepRequested(±1)`,
+    which `FlyoutContent.qml` resolves through `volumeSettings.stepped()`
+    - one notch moves the value by exactly the slider's own `stepSize`
+    (`volumeSettings.stepDb`). Direction: a notch that accumulates
+    positive (`angleDelta.y > 0`, not inverted - scroll up in the
+    standard convention) calls `stepRequested(1)`, and `stepped()` adds
+    `+1 * stepDb` - scroll up increases the value. Applied identically:
+    one notch = `transparencySlider.stepSize` (1, matching its own
+    configured `stepSize`), scroll up increases
+    `root.cfg_transparencyPercent`, both clamped to the slider's own
+    `from`/`to` (0/100).
+  - **Duplicated, not shared, deliberately**: the two sliders live in
+    separate KPackage subtrees (`contents/ui/` vs `contents/config/`)
+    with different write-back mechanisms (`stepRequested` signal ->
+    `FlyoutContent` owns the D-Bus/exec call, vs. a direct
+    `root.cfg_transparencyPercent` write) and different value domains
+    (dB range vs. 0-100%) - forcing a shared component would need a
+    generic step-direction callback layered over two structurally
+    different write paths for ~15 lines of logic used in exactly two
+    places. This project already has a documented precedent for
+    exactly this call: `CompactRepresentation.qml`'s own wheel handler
+    deliberately doesn't share code with `VolumeBlock.qml`'s, even
+    though they're near-identical, because per-control interaction
+    logic is kept independent by convention here (see that file's own
+    header comment). Followed the same precedent rather than
+    introducing a new abstraction.
+  - **Scope confirmed via `git diff`**: only `transparencySlider`'s own
+    block changed in `ConfigGeneral.qml` (the `implicitHeight` line +
+    the new `MouseArea`) - no other stepper, toggle, or section
+    touched. `VolumeBlock.qml` was read but never edited - `git diff`
+    on it is empty, so no regression risk to the volume slider at all.
+  - **Verified**: `qmllint` clean (only pre-existing, unrelated
+    warnings elsewhere in the file); a full `kpackagetool6 --upgrade` +
+    `plasmashell --replace` reload produced no QML errors. Attempted to
+    open the real ConfigDialog via the Plasma scripting API
+    (`widgetById(...).showConfigurationInterface()`, the same
+    evaluateScript technique CLAUDE.md documents using elsewhere) for a
+    screenshot - the call didn't error but no config window appeared
+    in a KWin window-list script dump either time, so this didn't
+    produce a reliable render check; not pursued further given the
+    established project convention (this session's own memory: "owner
+    soak beats scripted real-pointer tests") and this phase's own
+    closing line already reserving scroll/off-center-drag confirmation
+    for the owner's live soak. **Not verified by me**: the actual
+    interactive scroll-changes-value and off-center-click-grabs-slider
+    behavior - implemented and code-verified against the proven,
+    already-shipped `volumeSlider` mechanism exactly, but the live
+    pointer confirmation is the owner's to do, as the phase brief
+    itself specifies. Not committed - working-tree only.
+  - **Phase 9.x.x closed out here — remaining scope (OSD toast + hover
+    tooltip transparency wiring, plus the cross-surface verification
+    pass that would have followed) deliberately dropped, not
+    pursued.** Owner decision (2026-09-10), made after seeing
+    9.0.0-9.1.2's finished result on the flyout itself: the flyout's
+    own transparency work stands complete and fully soaked on its
+    own; extending it to the OSD/tooltip was never done.
+    VolumeToast.qml/VolumeHoverTooltip.qml are untouched by this
+    phase and remain exactly as they were before it.
 
 ## Up next
 
@@ -5795,107 +6536,14 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-
-- [ ] **Phase 9.0.0 — Design pass: how transparency state reaches
-  Theme.qml.** Depends on 8.0.0 (done — UI/KConfig already exist,
-  `transparencyEnabled`/`transparencyPercent`). Branch:
-  feature/appearance-transparency (own branch, own top-level phase
-  number — this is a genuinely separate feature that only happened
-  to share a UI section with the volume-limits work, not a
-  continuation of Phase 8.x.x; explicitly not numbered 8.5.0, which
-  was already used and closed for an unrelated verification pass).
-  `Theme.qml` is deliberately re-instantiated per file today (a real,
-  intentional design choice, not an oversight) — this phase decides
-  whether that changes, or whether a shared value can reach it
-  without breaking that convention (e.g. a `TransparencySettings.qml`
-  sibling to `VolumeSettings.qml`, forwarded the same root-anchored
-  way, with `Theme.qml` reading from it rather than becoming shared
-  itself). Needs its own investigation, similar in shape to
-  `VolumeSettings.qml`'s own design phase.
-  - Decide and state explicitly: does a ConfigDialog change need to
-    update live (the same reactivity guarantee `VolumeSettings`
-    gives volume), or is a reload acceptable for a rarely-touched
-    appearance setting? Don't default silently either way.
-  - Investigate before assuming the setting means anything: confirm
-    against CLAUDE.md's documented real-transparency findings
-    (`PlasmaWindow`/`BackgroundHints.NoBackground`) whether the
-    configured percentage actually corresponds to a real, visible
-    effect, or whether a user could configure a value with no
-    achievable difference on this system. Report findings before
-    building UI/wiring around an assumption.
-  - Report the chosen mechanism before implementing 9.1.0/9.2.0.
-
-- [ ] **Phase 9.1.0 — Wire the flyout's own gradient.** Depends on
-  9.0.0. Replace `Theme.qml`'s fixed `panelGradientTop/Bottom` literal
-  (currently 0.82) with the resolved value from 9.0.0's mechanism.
-  Smallest, most isolated surface — good first real target once the
-  sharing mechanism is settled.
-
-- [ ] **Phase 9.2.0 — Wire OSD toast + hover tooltip.** Depends on
-  9.0.0. Replace `Theme.qml`'s fixed `osdGradientTop/Bottom` literal
-  (currently 0.94) with the same resolved value from 9.0.0. Grouped
-  together rather than split, since both are meant to land on the
-  same alpha per the owner's prior decision (2026-09-05) and likely
-  share more implementation similarity with each other than either
-  does with the flyout.
-
-- [ ] **Phase 9.3.0 — Verification pass.** Depends on 9.0.0-9.2.0.
-  Confirm all three surfaces (flyout, OSD toast, hover tooltip)
-  genuinely land on identical alpha for a given configured
-  percentage; confirm the off state is truly fully opaque (1.0), not
-  just a very high value; soak-test visually across a few different
-  configured percentages, live.
+- [ ] **feat — add Audio Devices noise when changing volum** Desired
+      to have the same audio from changing volume when hovering over
+      the icon and the OSD is visible as the Audio Devices widget has.
 
 ## Bugs
 
 - [ ] **Bug: volume icon on flyout mute button does not update
       depending on mute/unmute state**
-
-- [ ] **Bug: hover tooltip (`VolumeHoverTooltip`'s `PlasmaCore.Dialog`)
-      renders almost entirely clipped off the right edge of the
-      screen for most trigger paths.** Found incidentally during Phase
-      5.0.3's live verification, not previously known. Reproduced via
-      plain hover-and-wait (both before and after closing the flyout);
-      confirmed genuinely our tooltip and not an unrelated overlay (it
-      reliably appears/disappears in sync with hover enter/exit, and
-      disappears when the mouse moves away). Contradicts the file's own
-      code comment claiming Plasma's default `location`-based
-      positioning centers the dialog on `visualParent` - the icon sits
-      close to the screen's right edge but with easily enough room
-      (~200 logical px) for a centered ~350px-wide tooltip to fit, so
-      centering alone shouldn't clip like this. One specific pattern -
-      a scroll event firing while the mouse is already hovering -
-      consistently rendered it correctly positioned; that pattern was
-      relied on for Phase 5.0.3 items 3 and 6's screenshots instead of
-      plain hover. Not investigated further and not fixed - this
-      dialog's positioning code was not touched by any of Phase
-      5.0.0-5.0.2, so this is very likely pre-existing and possibly
-      specific to this session's display setup (1920×1080 logical @ 2x
-      scale, icon near the panel's right end), not a regression from
-      the pending-state architecture work. Worth its own investigation.
-  - Phase 7.9.0 data point: shown at the same anchor by setting
-    `visible = true` directly (no pointer over the icon), the tooltip
-    positioned correctly — (1632,32) 172×98, centred on the icon, in
-    both QML's and KWin's geometry — and the Dialog spike never clipped
-    across ~15 opens at three sizes, including a 500px-wide window that
-    the right-edge clamp placed at x = 1920 − 500. So the `visualParent`
-    + `location` maths itself is fine; whatever triggers the clip is
-    specific to the real hover path (pointer over the panel icon while
-    the tooltip first appears), which no automated check here can
-    exercise. Still open.
-  - Phase 7.10.0 data point: the real hover *code path* was exercised
-    with a synthetic pointer (QtTest `mouseMove` on the panel window →
-    `onEntered` → the real 700ms `hoverShowTimer` → `visible = true`),
-    21 shows including first-show after a fresh shell and before/after
-    flyout cycles: all at (1632,32) 172×98, on screen, KWin agreeing.
-    One unscripted real hover during the same run gave the same
-    geometry. What has still never been exercised under instrumentation
-    is the compositor's own pointer being over the icon (KWin would not
-    offer `org_kde_kwin_fake_input` without a `.desktop` grant, which
-    needs the owner's OK). Not cleared — narrowed: if it reproduces
-    by hand, the difference is on the compositor/pointer-focus side,
-    not in `popupPosition()` or the QML trigger chain. See Phase
-    7.10.0's results for the details.
 
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
@@ -5949,108 +6597,6 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
-- [ ] **Settings: OSD/tooltip background opacity slider.** Add a
-      shared KConfig value (e.g. osdOpacity) controlling both
-      VolumeToast.qml's and VolumeHoverTooltip.qml's background
-      opacity, exposed as a slider in ConfigDialog's General section,
-      following the same pattern as volumeStepDb (Phase 4.4.2). A
-      touch more transparency than the current fixed value would look
-      better by default, but making it a setting means it doesn't need
-      to be re-litigated - the person can just tune it. Low priority,
-      not blocking any current phase.
-- [ ] **Unify flyout/OSD/tooltip alpha; revisit once transparency
-      toggle + slider is re-scoped (deferred until after Phase 7.x.x).**
-      `Theme.qml` currently defines two separate translucency levels:
-      `panelGradientTop`/`Bottom` at alpha 0.82 (the flyout) and
-      `osdGradientTop`/`Bottom` at alpha 0.94
-      (`VolumeHoverTooltip.qml`/`VolumeToast.qml`). The comment
-      justifying the split says the flyout would get genuine KWin
-      blur-behind to soften a lower alpha, while the OSD/tooltip don't
-      get blur and need higher opacity to read cleanly. This is now
-      known to be false: Phase 7.9.0/7.10.0 confirmed
-      `backgroundHints: NoBackground` disables blur-behind for ALL
-      `PlasmaCore.Dialog` instances (`dialog.cpp`, plus live pixel
-      analysis showing no blur on the flyout) - the flyout never gets
-      blur either, so the stated reason for the split doesn't hold.
-  - Separately, 0.82's own origin is suspect: its comment claims it
-    came from the design mockup, but the mockup's `.flyout` CSS rule is
-    actually fully opaque (`--panel-alpha: 1`) - the claimed source
-    doesn't contain this value. Not yet confirmed via `git log`/`git
-    blame` whether an earlier mockup revision or commit had a real
-    rationale, or whether it was simply invented at implementation time
-    and mis-attributed in the comment.
-  - Project owner's stated preference: keep the OSD's existing 0.94 as
-    the shared default across all three surfaces once unified - this is
-    what originally motivated wanting real transparency on the flyout
-    at all.
-  - When scoped: this should be folded into whatever phase reintroduces
-    the transparency toggle/slider (removed pre-Phase-7 when
-    transparency was infeasible on the old AppletPopup-based flyout,
-    now viable again under `Dialog`), rather than done as a standalone
-    fix - the eventual design should probably eliminate
-    `panelGradientTop`/`Bottom` as separate constants entirely (have
-    the flyout read `osdGradientTop`/`Bottom` directly) so the two
-    can't drift apart again, and the toggle/slider's design will
-    determine whether that's a single shared control or per-surface.
-- [ ] **Future investigation: rebuild the flyout as a custom
-      PlasmaCore.Dialog instead of the shell's managed
-      expanded-representation popup.** Same underlying idea that
-      solved the tooltip's double-border problem (Phase 4.5.3) - the
-      flyout's current popup is backed by PlasmaWindow, which has no
-      NoBackground option, the same root constraint. Building it as
-      our own Dialog (like VolumeToast.qml/VolumeHoverTooltip.qml)
-      would open up real background/transparency control on the
-      flyout too.
-  - Substantially higher risk than the OSD/tooltip work: FullRepresentation.qml
-    is by far the largest, most heavily-tested surface in this
-    codebase, with a draggable slider, buttons, expandable amp/source
-    lists, and carefully-tuned drag-vs-scroll interaction rules
-    (Phase 4.5.1's volumeInteracting gating). A hand-built Dialog needs
-    to correctly reimplement dismiss-on-click-outside, focus handling,
-    and screen-edge-aware positioning that currently come for free
-    from being the shell's managed popup.
-  - Requires its own dedicated investigation phase and a dedicated
-    branch before any implementation, per this project's usual
-    practice for risky/uncertain work - not something to attempt as
-    part of routine OSD/tooltip polish.
-  - **Scoping note carried over from VolumeHoverTooltip.qml's
-    "Optical 1" bug (Phase 4.5.3 round 5, see Done) - watch for this
-    pattern proactively here, don't rediscover it the same way.**
-    That tooltip went through three separate rounds of the same
-    underlying bug class before it was closed out: an element's screen
-    position silently depending on a sibling's current content/
-    visibility, rather than being fixed. `Qt.AlignBaseline` was the
-    repeat offender - it computes a shared row-internal baseline
-    offset from the font metrics of whichever children currently
-    participate, so changing a sibling's font, text length, or
-    visibility (e.g. a "Muted" label swapping font weight/size, a unit
-    label toggling `visible: false`) silently repositioned OTHER
-    elements in the same row that never themselves changed. Each round
-    only fixed the specific element that happened to be visibly wrong
-    at the time, not the underlying mechanism, which is why it kept
-    resurfacing as a different element each round. The flyout is a
-    much larger surface with far more dynamic content (amp list,
-    source list, volume slider, multiple button states), so this is
-    more likely to bite here, not less:
-    - Be wary of `Qt.AlignBaseline` specifically, and generally of any
-      Layout behavior (implicit sizing, baseline computation) that
-      depends on which children currently exist/are visible/have which
-      content, when that content is dynamic (mute state, amp name
-      length, connection status, etc.).
-    - Prefer fixed heights/widths and explicit anchors for rows
-      containing dynamic text, rather than letting the layout
-      auto-compute from current content - so a value changing never has
-      a side effect on an unrelated sibling's position.
-    - When something in the flyout is reported as "jumping" or
-      "shifting" between states, check for this pattern specifically (a
-      sibling's content-dependent layout property) before assuming it's
-      a margin/padding/anchor value that just needs tuning - tuning
-      margins was a dead end in all three rounds on this tooltip, since
-      the real problem wasn't spacing, it was a computed value silently
-      changing.
-    - Not a strict rule to avoid `AlignBaseline`/Layouts entirely - just
-      a known failure mode worth checking for early given how much more
-      dynamic content the flyout has compared to this tooltip.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
@@ -6081,32 +6627,6 @@ architecture decisions; this file is just sequencing and status.
       one connected and playing, confirm the connection is undisturbed
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
-- [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
-- [ ] **Known issue, contingency fix if Phase 7's AppletPopup rebuild is
-      abandoned: the existing flyout is user-resizable by click-and-drag,
-      unintentionally.** Discovered live during the spike/flyout-
-      appletpopup-rebuild branch's Phase 7.1.0 work — `PlasmaCore.
-      AppletPopup` is resizable by deliberate design of the class itself
-      (`appletpopup.h`'s own doc comment: "this class is resizable and
-      can forward any input events received on the margin to the main
-      item"), with no QML property to switch it off. This isn't
-      something the rebuild introduces — the *existing*, already-shipped
-      flyout has always been wrapped in this same class by the shell
-      (`CompactApplet.qml`'s `dialog`), so it has always been draggable
-      this way, just never noticed until now.
-  - If Phase 7's rebuild proceeds and lands on main, this is already
-    handled there (see Phase 7.7.0: pin `mainItem`'s min/max Layout size
-    hints to its final, verified-stable implicit size once known).
-  - **If the rebuild is abandoned and FullRepresentation.qml stays the
-    permanent flyout**, apply the identical fix directly to it instead:
-    once its content's implicit width/height is confirmed stable (no
-    drift across mute/volume/power/source/amp states — the same
-    guarantee 7.7.0's verification pass exists to provide), pin its root
-    layout's `Layout.minimumWidth == Layout.maximumWidth ==
-    Layout.preferredWidth` (and the same for height) to that measured
-    value. Same underlying technique — collapsing min/max to one number
-    leaves the resize handles nowhere to drag into — just applied to the
-    surface that would then be staying permanent instead of the new one.
 
 ## Tasks to complete outside repo
 

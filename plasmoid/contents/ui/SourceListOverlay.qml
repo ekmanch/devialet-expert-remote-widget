@@ -42,6 +42,9 @@ Popup {
     // Array of {name, index, enabled, selected} - enabled ones only.
     required property var enabledSources
     required property int activeSourceIndex
+    // Phase 9.1.1: chrome alpha for the card background - see
+    // TransparencySettings.qml's controlAlpha comment.
+    required property TransparencySettings transparencySettings
 
     signal sourceChosen(int index, string name)
 
@@ -91,7 +94,7 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-    background: OverlayCardBackground { theme: overlay.theme }
+    background: OverlayCardBackground { theme: overlay.theme; transparencySettings: overlay.transparencySettings }
 
     contentItem: ScrollView {
         clip: true

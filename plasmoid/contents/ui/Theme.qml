@@ -30,9 +30,36 @@ QtObject {
 
     // ---- Palette (design/mockups/devialet_tray_flyout_mockup.html :root) ----
     readonly property color bg: "#0e0e10"
-    readonly property color surface: "#1a1a1d"
-    readonly property color surface2: "#222225"
-    readonly property color surface3: "#2a2a2e"
+    // Phase 9.1.1 REVISION: pulled much closer to the panel base
+    // (#151515, Darkly's real window background - owner-confirmed) after
+    // the first pass (+6.5/+14.5/+22.8 over panel average, preserving the
+    // OLD pre-#151515 palette's lift magnitude) was rejected live -
+    // real Darkly (owner's own Dolphin reference screenshot) keeps
+    // window chrome and controls at nearly the same tone, separation
+    // coming from a thin border/hover state, not a fill-lightness jump.
+    // At the old magnitude, controlAlpha's opacity boost (Phase 9.1.1
+    // REVISION 2) compounded with the color difference at high panel
+    // opacity (90-100%) to make buttons read as a distinct layer
+    // entirely, not "a control on this panel."
+    //
+    // Hue confirmed unchanged, not the cause: every value here and in
+    // panelTintTop/Bottom below is strictly R=G=B (checked directly in
+    // this file, not assumed) - neutral gray already matched panelTint's
+    // hue exactly before this revision, so the mismatch was purely the
+    // lightness delta's magnitude, not a blue/grey cast drifting away
+    // from the base. New deltas are +3/+6/+9 over the panel's own
+    // average (~21, from #151515) - a "few percent lighter" step per
+    // tier rather than the old ~+7/+14/+23, still monotonically
+    // increasing (so the three tiers stay individually distinguishable
+    // from each other) but each one much closer to the panel than
+    // before. Border/hover states (already theme.divider / theme.
+    // copperDim on every button and row, unchanged by this revision) do
+    // the rest of the definition work, matching the Darkly reference.
+    // Owner will judge and iterate live - this is a starting point, not
+    // a final measured value.
+    readonly property color surface: "#181818"
+    readonly property color surface2: "#1b1b1b"
+    readonly property color surface3: "#1e1e1e"
     readonly property color copper: "#c17f4e"
     readonly property color copperBright: "#e3a06a"
     readonly property color copperDim: "#8a5c39"
@@ -47,21 +74,50 @@ QtObject {
     readonly property color warning: "#a3813a"
     readonly property color warningBright: "#e0b563"
 
-    // Flyout panel gradient + blur-enabled tint, from .flyout /
-    // .flyout.blur-enabled in the mockup - see FullRepresentation.qml's
-    // root background for how this is layered on top of Plasma's own
-    // (genuinely blurred) Dialog background rather than replacing it.
-    readonly property color panelGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.82)
-    readonly property color panelGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.82)
+    // Flyout panel tint, opaque base colours only (Phase 9.1.0). The old
+    // panelGradientTop/Bottom baked a hardcoded 0.82 alpha in here,
+    // inherited from a mockup variant that assumed an 18px backdrop blur
+    // Plasma never provided (see TODO.md's Phase 9.0.0 entry, "Provenance
+    // of 0.82 and 0.94"). Alpha is now user-configured, live, and shared
+    // across every translucent surface via TransparencySettings.qml -
+    // FlyoutContent.qml applies it with
+    // `transparencySettings.withAlpha(theme.panelTintTop/Bottom)`. Kept
+    // as plain #rrggbb rather than Qt.rgba(...,1.0) so callers can't
+    // accidentally use these without going through withAlpha() first.
+    //
+    // Phase 9.1.1: recentered on #151515 (Darkly's real window background
+    // - owner-confirmed, used directly, not re-derived). Flat-vs-gradient
+    // decided live, not silently: a flat #151515/#151515 pair and this
+    // ±3-level gradient (exact same total depth as the old #17171a/
+    // #121214 pair, just recentered and desaturated to #151515's neutral
+    // hue - averages to #151515 exactly) were both captured on the real
+    // flyout at 95% panel opacity. The two were visually indistinguishable
+    // in that comparison - at this magnitude the "gradient" reads as flat
+    // to the eye regardless, so flat's "looks boring" risk never actually
+    // materializes either way. Kept the gradient anyway, on cost/benefit
+    // rather than a visible difference: it costs nothing (imperceptible
+    // when not needed) and keeps this surface consistent with every other
+    // gradient-based surface in the palette (overlayGradientTop/Bottom,
+    // osdGradientTop/Bottom below) rather than making the panel a flat
+    // one-off exception - a flat panel next to still-gradient overlay
+    // cards would be a design-language inconsistency with no offsetting
+    // visual benefit, since flat bought nothing perceptible in the
+    // comparison that justified it.
+    readonly property color panelTintTop: "#181818"
+    readonly property color panelTintBottom: "#121212"
 
     // Phase 4.5.0/4.5.3: translucent graphite gradient shared by the OSD
     // toast (VolumeToast.qml) and the hover tooltip (VolumeHoverTooltip.
-    // qml) - a distinct, slightly more opaque pair from panelGradientTop/
-    // Bottom above (0.94 vs 0.82), since neither of those two windows
-    // gets the flyout's own genuine KWin blur-behind to soften a lower
-    // alpha the way the flyout's tint does. Centralized here (Phase 4.5.3
-    // item 2) so both files reference one definition instead of repeating
-    // the same rgba literals.
+    // qml) - historically a distinct, slightly more opaque pair from the
+    // flyout's own tint (0.94 vs the old hardcoded 0.82), since neither of
+    // those two windows gets the flyout's own genuine KWin blur-behind to
+    // soften a lower alpha the way the flyout's tint does. Centralized
+    // here (Phase 4.5.3 item 2) so both files reference one definition
+    // instead of repeating the same rgba literals. Still hardcoded as of
+    // Phase 9.1.0 - the flyout's own tint is now panelTintTop/Bottom above
+    // (opaque base colours, alpha applied live via TransparencySettings)
+    // - unifying this pair onto the same live mechanism is Phase 9.2.0's
+    // job, not this one's.
     readonly property color osdGradientTop: Qt.rgba(23 / 255, 23 / 255, 26 / 255, 0.94)
     readonly property color osdGradientBottom: Qt.rgba(18 / 255, 18 / 255, 20 / 255, 0.94)
 

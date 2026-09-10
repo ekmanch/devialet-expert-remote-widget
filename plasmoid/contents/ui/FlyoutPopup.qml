@@ -112,6 +112,10 @@ PlasmaCore.Dialog {
     // Forwarded through to FlyoutContent - shared, root-anchored
     // volume-range config (see VolumeSettings.qml's header comment).
     required property VolumeSettings volumeSettings
+    // Forwarded through to FlyoutContent - shared, root-anchored
+    // transparency alpha (Phase 9.1.0, see TransparencySettings.qml's
+    // header comment).
+    required property TransparencySettings transparencySettings
 
     // Window-derived types default to visible:true in QML; without an
     // explicit initial value this popup auto-opens on plasmashell startup
@@ -276,6 +280,7 @@ PlasmaCore.Dialog {
             plasmoidItem: flyoutPopup.plasmoidItem
             pendingAmpState: flyoutPopup.pendingAmpState
             volumeSettings: flyoutPopup.volumeSettings
+            transparencySettings: flyoutPopup.transparencySettings
             popupVisible: flyoutPopup.visible
         }
     }

@@ -53,6 +53,9 @@ Popup {
     required property Theme theme
     required property var knownAmps
     required property string ampIp
+    // Phase 9.1.1: chrome alpha for the card background - see
+    // TransparencySettings.qml's controlAlpha comment.
+    required property TransparencySettings transparencySettings
 
     signal ampChosen(string ip)
 
@@ -75,7 +78,7 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-    background: OverlayCardBackground { theme: overlay.theme }
+    background: OverlayCardBackground { theme: overlay.theme; transparencySettings: overlay.transparencySettings }
 
     contentItem: ScrollView {
         clip: true
