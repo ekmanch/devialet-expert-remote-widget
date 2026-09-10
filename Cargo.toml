@@ -4,6 +4,7 @@ members = [
     "crates/protocol",
     "crates/devialet-remote-daemon",
     "crates/devialet-ctl",
+    "crates/devialet-chime",
 ]
 
 [workspace.package]

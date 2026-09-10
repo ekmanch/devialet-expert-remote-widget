@@ -739,6 +739,9 @@ re-discovered a fourth time after the rebuild ships.
     changes `devialet-ctl` (a release build, or real packaging later,
     would install directly to a proper PATH location instead and replace
     this symlink workflow entirely).
+    The `spike/volume-audio-feedback` branch adds a second binary,
+    `devialet-chime`, invoked the same way and placed the same way:
+    `ln -sf <repo>/target/debug/devialet-chime ~/.local/bin/devialet-chime`.
 - **`spectacle -b -f` from a non-interactive shell needs
   `QT_QPA_PLATFORM=wayland`** (found in Phase 7.2.0): launched from a tool/
   script shell in this Wayland session it otherwise picks the xcb backend,

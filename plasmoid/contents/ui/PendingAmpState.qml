@@ -15,7 +15,12 @@
 // on every PropertiesChanged emission - deliberately ignored here. Only
 // AmpIp/VolumeDb/Muted are ever processed/exposed - plus, since Phase
 // 8.0.1, VolumeRaw, read for exactly one purpose (the post-boot hold's
-// confirmation check below) and never exposed. Do NOT add handling for
+// confirmation check below) and never exposed - except that the volume-
+// chime spike (TODO.md, branch spike/volume-audio-feedback) additionally
+// exposes that same decoded byte as `confirmedVolumeDb` (the amp's real
+// last-broadcast dB, never the daemon's 400 ms pending mask) for the
+// chime's gain compensation; still nothing beyond AmpIp/VolumeDb/Muted/
+// VolumeRaw is processed here. Do NOT add handling for
 // any other property to this file - that boundary is what keeps this
 // object out of full-mirror-consolidation territory (a legitimate,
 // larger, explicitly separate future phase - see TODO.md).
@@ -104,6 +109,11 @@ QtObject {
     property string bootHoldIp: ""
     property var bootHoldDb: undefined
     property var lastRealVolumeDb: undefined
+    // Chime spike: (VolumeRaw - 195) / 2, the amp's real last-broadcast
+    // dB - deliberately NOT volumeDb (optimistic, then daemon-masked for
+    // 400 ms after every command). undefined until an amp is selected and
+    // has broadcast. Written only by noteVolumeRaw(); read-only elsewhere.
+    property var confirmedVolumeDb: undefined
     readonly property int bootHoldTimeoutMs: 1500
 
     // Named property, not a bare child - QtObject has no default property
@@ -146,6 +156,12 @@ QtObject {
     // volume_db()). bootHoldDb is a whole-dB config value or a clamp of
     // one, and raw decodes to a multiple of 0.5, so `===` is exact.
     function noteVolumeRaw(raw) {
+        // Chime spike: expose the decoded byte first, before the hold's
+        // early return. The daemon emits VolumeRaw=0 with AmpIp="" when
+        // no amp is selected, which would decode to -97.5 - hence the
+        // ampIp guard (noteAmpIp always runs before this in both
+        // onRefreshed and onPropertiesChanged below).
+        root.confirmedVolumeDb = (raw === undefined || root.ampIp === "") ? undefined : (raw - 195) / 2;
         if (root.bootHoldIp === "" || raw === undefined) return;
         if ((raw - 195) / 2 === root.bootHoldDb) {
             if (root.debugLogging) {
