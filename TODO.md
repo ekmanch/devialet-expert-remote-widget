@@ -6610,7 +6610,7 @@ architecture decisions; this file is just sequencing and status.
       instructions are still needed.
       
 - [ ] **Spike — PC-source volume-compensated chime (branch
-      `spike/volume-compensated-chime`, name TBD).** Not a numbered
+      `spike/volume-audio-feedback`).** Not a numbered
       phase yet — explicitly throwaway-or-merge, per this project's
       "risky/uncertain work stays off main" convention. Only becomes a
       real Phase 10.1.0 if it earns it by ear; discarded otherwise.
