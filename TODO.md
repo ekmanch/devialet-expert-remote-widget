@@ -6474,6 +6474,15 @@ architecture decisions; this file is just sequencing and status.
     already-shipped `volumeSlider` mechanism exactly, but the live
     pointer confirmation is the owner's to do, as the phase brief
     itself specifies. Not committed - working-tree only.
+  - **Phase 9.x.x closed out here — remaining scope (OSD toast + hover
+    tooltip transparency wiring, plus the cross-surface verification
+    pass that would have followed) deliberately dropped, not
+    pursued.** Owner decision (2026-09-10), made after seeing
+    9.0.0-9.1.2's finished result on the flyout itself: the flyout's
+    own transparency work stands complete and fully soaked on its
+    own; extending it to the OSD/tooltip was never done.
+    VolumeToast.qml/VolumeHoverTooltip.qml are untouched by this
+    phase and remain exactly as they were before it.
 
 ## Up next
 
@@ -6527,75 +6536,14 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-
-- [ ] **Phase 9.2.0 — Wire OSD toast + hover tooltip.** Depends on
-  9.1.0. `VolumeToast.qml` and `VolumeHoverTooltip.qml` gain `required
-  property TransparencySettings transparencySettings`, bound from
-  CompactRepresentation.qml where both are instantiated; their gradients
-  read `withAlpha(theme.panelTintTop/Bottom)`; delete Theme.qml's
-  `osdGradientTop/Bottom` (0.94) and its now-false blur-based comment.
-  Grouped rather than split because both land on the same alpha per the
-  owner's 2026-09-05 decision and share the same instantiation site.
-
-- [ ] **Phase 9.3.0 — Verification pass.** Depends on 9.0.0-9.2.0.
-  Confirm all three surfaces (flyout, OSD toast, hover tooltip)
-  genuinely land on identical alpha for a given configured percentage
-  (measure each with 9.0.0's inversion method over the white backdrop,
-  not by eye); confirm the off state reads `alpha === 1.0` and measures
-  1.00, not just a high value; soak-test visually across a few
-  configured percentages live, including the literal ConfigDialog
-  slider + Apply with the flyout open (owner soak - pointer-only).
+- [ ] **feat — add Audio Devices noise when changing volum** Desired
+      to have the same audio from changing volume when hovering over
+      the icon and the OSD is visible as the Audio Devices widget has.
 
 ## Bugs
 
 - [ ] **Bug: volume icon on flyout mute button does not update
       depending on mute/unmute state**
-
-- [ ] **Bug: hover tooltip (`VolumeHoverTooltip`'s `PlasmaCore.Dialog`)
-      renders almost entirely clipped off the right edge of the
-      screen for most trigger paths.** Found incidentally during Phase
-      5.0.3's live verification, not previously known. Reproduced via
-      plain hover-and-wait (both before and after closing the flyout);
-      confirmed genuinely our tooltip and not an unrelated overlay (it
-      reliably appears/disappears in sync with hover enter/exit, and
-      disappears when the mouse moves away). Contradicts the file's own
-      code comment claiming Plasma's default `location`-based
-      positioning centers the dialog on `visualParent` - the icon sits
-      close to the screen's right edge but with easily enough room
-      (~200 logical px) for a centered ~350px-wide tooltip to fit, so
-      centering alone shouldn't clip like this. One specific pattern -
-      a scroll event firing while the mouse is already hovering -
-      consistently rendered it correctly positioned; that pattern was
-      relied on for Phase 5.0.3 items 3 and 6's screenshots instead of
-      plain hover. Not investigated further and not fixed - this
-      dialog's positioning code was not touched by any of Phase
-      5.0.0-5.0.2, so this is very likely pre-existing and possibly
-      specific to this session's display setup (1920×1080 logical @ 2x
-      scale, icon near the panel's right end), not a regression from
-      the pending-state architecture work. Worth its own investigation.
-  - Phase 7.9.0 data point: shown at the same anchor by setting
-    `visible = true` directly (no pointer over the icon), the tooltip
-    positioned correctly — (1632,32) 172×98, centred on the icon, in
-    both QML's and KWin's geometry — and the Dialog spike never clipped
-    across ~15 opens at three sizes, including a 500px-wide window that
-    the right-edge clamp placed at x = 1920 − 500. So the `visualParent`
-    + `location` maths itself is fine; whatever triggers the clip is
-    specific to the real hover path (pointer over the panel icon while
-    the tooltip first appears), which no automated check here can
-    exercise. Still open.
-  - Phase 7.10.0 data point: the real hover *code path* was exercised
-    with a synthetic pointer (QtTest `mouseMove` on the panel window →
-    `onEntered` → the real 700ms `hoverShowTimer` → `visible = true`),
-    21 shows including first-show after a fresh shell and before/after
-    flyout cycles: all at (1632,32) 172×98, on screen, KWin agreeing.
-    One unscripted real hover during the same run gave the same
-    geometry. What has still never been exercised under instrumentation
-    is the compositor's own pointer being over the icon (KWin would not
-    offer `org_kde_kwin_fake_input` without a `.desktop` grant, which
-    needs the owner's OK). Not cleared — narrowed: if it reproduces
-    by hand, the difference is on the compositor/pointer-focus side,
-    not in `popupPosition()` or the QML trigger chain. See Phase
-    7.10.0's results for the details.
 
 - [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
@@ -6649,120 +6597,6 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
-- [ ] **Settings: OSD/tooltip background opacity slider.** Add a
-      shared KConfig value (e.g. osdOpacity) controlling both
-      VolumeToast.qml's and VolumeHoverTooltip.qml's background
-      opacity, exposed as a slider in ConfigDialog's General section,
-      following the same pattern as volumeStepDb (Phase 4.4.2). A
-      touch more transparency than the current fixed value would look
-      better by default, but making it a setting means it doesn't need
-      to be re-litigated - the person can just tune it. Low priority,
-      not blocking any current phase.
-      **Superseded (2026-09-08) by Phase 9.x: the Appearance section's
-      Transparency toggle + slider (Phase 8.0.0 UI, 9.0.0 design, 9.1.0/
-      9.2.0 wiring) is exactly this control, applied to all three
-      surfaces at once - see Phase 9.0.0 in Done.**
-- [ ] **Unify flyout/OSD/tooltip alpha; revisit once transparency
-      toggle + slider is re-scoped (deferred until after Phase 7.x.x).**
-      **Re-scoped (2026-09-08) as Phase 9.0.0 (see Done) - kept for its
-      history. Corrections from that phase: 0.82 WAS in the mockup
-      (`.flyout.blur-enabled` at d5f4d60, not invented), and 0.94 has the
-      same shape (OSD mockup v3 line 61 + backdrop blur) - both rest on a
-      CSS blur Plasma never provided. The design goes further than the
-      "flyout reads osdGradient" suggestion below: both alpha pairs leave
-      Theme.qml, which keeps one opaque base tint, and the alpha comes
-      from `TransparencySettings.qml`.**
-      `Theme.qml` currently defines two separate translucency levels:
-      `panelGradientTop`/`Bottom` at alpha 0.82 (the flyout) and
-      `osdGradientTop`/`Bottom` at alpha 0.94
-      (`VolumeHoverTooltip.qml`/`VolumeToast.qml`). The comment
-      justifying the split says the flyout would get genuine KWin
-      blur-behind to soften a lower alpha, while the OSD/tooltip don't
-      get blur and need higher opacity to read cleanly. This is now
-      known to be false: Phase 7.9.0/7.10.0 confirmed
-      `backgroundHints: NoBackground` disables blur-behind for ALL
-      `PlasmaCore.Dialog` instances (`dialog.cpp`, plus live pixel
-      analysis showing no blur on the flyout) - the flyout never gets
-      blur either, so the stated reason for the split doesn't hold.
-  - Separately, 0.82's own origin is suspect: its comment claims it
-    came from the design mockup, but the mockup's `.flyout` CSS rule is
-    actually fully opaque (`--panel-alpha: 1`) - the claimed source
-    doesn't contain this value. Not yet confirmed via `git log`/`git
-    blame` whether an earlier mockup revision or commit had a real
-    rationale, or whether it was simply invented at implementation time
-    and mis-attributed in the comment.
-  - Project owner's stated preference: keep the OSD's existing 0.94 as
-    the shared default across all three surfaces once unified - this is
-    what originally motivated wanting real transparency on the flyout
-    at all.
-  - When scoped: this should be folded into whatever phase reintroduces
-    the transparency toggle/slider (removed pre-Phase-7 when
-    transparency was infeasible on the old AppletPopup-based flyout,
-    now viable again under `Dialog`), rather than done as a standalone
-    fix - the eventual design should probably eliminate
-    `panelGradientTop`/`Bottom` as separate constants entirely (have
-    the flyout read `osdGradientTop`/`Bottom` directly) so the two
-    can't drift apart again, and the toggle/slider's design will
-    determine whether that's a single shared control or per-surface.
-- [ ] **Future investigation: rebuild the flyout as a custom
-      PlasmaCore.Dialog instead of the shell's managed
-      expanded-representation popup.** Same underlying idea that
-      solved the tooltip's double-border problem (Phase 4.5.3) - the
-      flyout's current popup is backed by PlasmaWindow, which has no
-      NoBackground option, the same root constraint. Building it as
-      our own Dialog (like VolumeToast.qml/VolumeHoverTooltip.qml)
-      would open up real background/transparency control on the
-      flyout too.
-  - Substantially higher risk than the OSD/tooltip work: FullRepresentation.qml
-    is by far the largest, most heavily-tested surface in this
-    codebase, with a draggable slider, buttons, expandable amp/source
-    lists, and carefully-tuned drag-vs-scroll interaction rules
-    (Phase 4.5.1's volumeInteracting gating). A hand-built Dialog needs
-    to correctly reimplement dismiss-on-click-outside, focus handling,
-    and screen-edge-aware positioning that currently come for free
-    from being the shell's managed popup.
-  - Requires its own dedicated investigation phase and a dedicated
-    branch before any implementation, per this project's usual
-    practice for risky/uncertain work - not something to attempt as
-    part of routine OSD/tooltip polish.
-  - **Scoping note carried over from VolumeHoverTooltip.qml's
-    "Optical 1" bug (Phase 4.5.3 round 5, see Done) - watch for this
-    pattern proactively here, don't rediscover it the same way.**
-    That tooltip went through three separate rounds of the same
-    underlying bug class before it was closed out: an element's screen
-    position silently depending on a sibling's current content/
-    visibility, rather than being fixed. `Qt.AlignBaseline` was the
-    repeat offender - it computes a shared row-internal baseline
-    offset from the font metrics of whichever children currently
-    participate, so changing a sibling's font, text length, or
-    visibility (e.g. a "Muted" label swapping font weight/size, a unit
-    label toggling `visible: false`) silently repositioned OTHER
-    elements in the same row that never themselves changed. Each round
-    only fixed the specific element that happened to be visibly wrong
-    at the time, not the underlying mechanism, which is why it kept
-    resurfacing as a different element each round. The flyout is a
-    much larger surface with far more dynamic content (amp list,
-    source list, volume slider, multiple button states), so this is
-    more likely to bite here, not less:
-    - Be wary of `Qt.AlignBaseline` specifically, and generally of any
-      Layout behavior (implicit sizing, baseline computation) that
-      depends on which children currently exist/are visible/have which
-      content, when that content is dynamic (mute state, amp name
-      length, connection status, etc.).
-    - Prefer fixed heights/widths and explicit anchors for rows
-      containing dynamic text, rather than letting the layout
-      auto-compute from current content - so a value changing never has
-      a side effect on an unrelated sibling's position.
-    - When something in the flyout is reported as "jumping" or
-      "shifting" between states, check for this pattern specifically (a
-      sibling's content-dependent layout property) before assuming it's
-      a margin/padding/anchor value that just needs tuning - tuning
-      margins was a dead end in all three rounds on this tooltip, since
-      the real problem wasn't spacing, it was a computed value silently
-      changing.
-    - Not a strict rule to avoid `AlignBaseline`/Layouts entirely - just
-      a known failure mode worth checking for early given how much more
-      dynamic content the flyout has compared to this tooltip.
 - [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
       displayed state must query actual systemd state
       (`systemctl --user is-enabled`), not a stored bool; toggling it
@@ -6793,32 +6627,6 @@ architecture decisions; this file is just sequencing and status.
       one connected and playing, confirm the connection is undisturbed
       (volume/mute/source controls keep working) while the amp list
       empties out and repopulates only as amps re-broadcast.
-- [ ] **phase 4.5.4 — add Audio Devices noise when changing volum**
-- [ ] **Known issue, contingency fix if Phase 7's AppletPopup rebuild is
-      abandoned: the existing flyout is user-resizable by click-and-drag,
-      unintentionally.** Discovered live during the spike/flyout-
-      appletpopup-rebuild branch's Phase 7.1.0 work — `PlasmaCore.
-      AppletPopup` is resizable by deliberate design of the class itself
-      (`appletpopup.h`'s own doc comment: "this class is resizable and
-      can forward any input events received on the margin to the main
-      item"), with no QML property to switch it off. This isn't
-      something the rebuild introduces — the *existing*, already-shipped
-      flyout has always been wrapped in this same class by the shell
-      (`CompactApplet.qml`'s `dialog`), so it has always been draggable
-      this way, just never noticed until now.
-  - If Phase 7's rebuild proceeds and lands on main, this is already
-    handled there (see Phase 7.7.0: pin `mainItem`'s min/max Layout size
-    hints to its final, verified-stable implicit size once known).
-  - **If the rebuild is abandoned and FullRepresentation.qml stays the
-    permanent flyout**, apply the identical fix directly to it instead:
-    once its content's implicit width/height is confirmed stable (no
-    drift across mute/volume/power/source/amp states — the same
-    guarantee 7.7.0's verification pass exists to provide), pin its root
-    layout's `Layout.minimumWidth == Layout.maximumWidth ==
-    Layout.preferredWidth` (and the same for height) to that measured
-    value. Same underlying technique — collapsing min/max to one number
-    leaves the resize handles nowhere to drag into — just applied to the
-    surface that would then be staying permanent instead of the new one.
 
 ## Tasks to complete outside repo
 
