@@ -1,0 +1,9 @@
+[package]
+name = "devialet-chime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Spike: gain-compensated volume-feedback chime (paplay) for the Devialet Expert Pro widget. Computes one stream gain, plays one chime, exits."
+
+[dependencies]

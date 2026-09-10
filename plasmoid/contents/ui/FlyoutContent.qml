@@ -192,6 +192,45 @@ Item {
 
     readonly property string devialetCtlCommand: "devialet-ctl"
 
+    // ---- Chime spike (branch spike/volume-audio-feedback, see TODO.md) ----
+    // One gain-compensated chime per discrete step, only while the PC is
+    // the amp's source (Optical 1 - the PC -> HDMI -> TV -> optical path).
+    // The binary does the math; QML supplies the two dB values it already
+    // holds: the optimistic target (the OSD's own number) and the amp's
+    // real last-broadcast dB (pendingAmpState.confirmedVolumeDb, decoded
+    // from the daemon's unmasked VolumeRaw).
+    readonly property string chimeCommand: "devialet-chime"
+    // Round-robin pool of DataSources, not one reused id (owner decision):
+    // KDE's Audio Devices tone plays via libcanberra, which spawns a fresh
+    // stream per trigger so rapid triggers overlap and mix instead of
+    // interrupting each other. Tick N uses chimePool[N % length]. Four
+    // slots: the chime is 0.30 s and even ~10 ticks/s leaves at most 3 in
+    // flight. The `--tick` argument makes every command string unique -
+    // Plasma's executable engine is shared process-wide and keys running
+    // jobs by command string, so two ticks with identical dB arguments
+    // would otherwise collapse into one process regardless of the pool.
+    readonly property var chimePool: [chimeExec0, chimeExec1, chimeExec2, chimeExec3]
+    property int chimeTick: 0
+
+    // Gate on the amp's live broadcast name, trimmed + lowercased (Theme.qml
+    // sourceGlyph() keyword-match precedent; never by index - see
+    // crates/protocol command.rs). Any other source: no chime at all.
+    function isPcSourceActive() {
+        return String(root.activeSourceName || "").trim().toLowerCase() === "optical 1";
+    }
+
+    function maybeChime(targetDb) {
+        if (!root.isPcSourceActive()) return;
+        const confirmed = root.pendingAmpState.confirmedVolumeDb;
+        if (typeof confirmed !== "number" || typeof targetDb !== "number") return;
+        const slot = root.chimeTick % root.chimePool.length;
+        const cmd = root.chimeCommand + " --target-db " + targetDb.toFixed(1)
+            + " --confirmed-db " + confirmed.toFixed(1) + " --tick " + root.chimeTick;
+        root.chimeTick += 1;
+        console.log("devialet-chime[" + slot + "] running:", cmd);
+        root.chimePool[slot].connectSource(cmd);
+    }
+
     // ---- Phase 7.5.0: action row (mute/power) state ----
     // Power/PowerState debounce - see this file's header comment for why
     // this is still needed here (no daemon-owned pending-command state for
@@ -236,6 +275,11 @@ Item {
         }
         root.runCtl("volume " + clamped + " --hard-limit-db " + root.volumeSettings.hardLimitDb);
         root.pendingAmpState.notifyVolume(clamped);
+        // Chime spike: one attempted chime per discrete step, no debounce
+        // (Phase 10.0.0 Finding 3). Reached by the flyout slider's wheel
+        // notches AND the +/- buttons (both emit VolumeBlock.stepRequested);
+        // releaseVolume() below deliberately does not chime.
+        root.maybeChime(clamped);
     }
 
     // Slider release - the value is the drag result computed inside
@@ -445,6 +489,49 @@ Item {
         connectedSources: []
         onNewData: function (source, data) {
             console.log("devialet-ctl finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    // Chime spike: the four-slot round-robin pool maybeChime() cycles
+    // through - see the chimePool comment above. Same shape as `exec`,
+    // distinct log prefix so the journal trail can be grepped per slot.
+    P5Support.DataSource {
+        id: chimeExec0
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-chime[0] finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    P5Support.DataSource {
+        id: chimeExec1
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-chime[1] finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    P5Support.DataSource {
+        id: chimeExec2
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-chime[2] finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    P5Support.DataSource {
+        id: chimeExec3
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("devialet-chime[3] finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
             disconnectSource(source);
         }
     }

@@ -6556,6 +6556,152 @@ architecture decisions; this file is just sequencing and status.
     exact PipeWire gain stage that just changed. Superseded by the
     PC-source volume-compensated approach below.
 
+- [x] **Spike — PC-source volume-compensated chime (branch
+      `spike/volume-audio-feedback`).** Not a numbered phase yet —
+      explicitly throwaway-or-merge, per this project's "risky/
+      uncertain work stays off main" convention. Only becomes a real
+      Phase 10.1.0 if it earns it by ear; discarded otherwise.
+  - Scoped to when this PC's own PipeWire output is the active source
+    reaching the amp. Confirmed routing: PC -> HDMI -> TV -> optical
+    out -> amp's "Optical 1" input; the TV is a confirmed
+    bit-transparent pass-through with no audio processing of its own,
+    so `Source == "Optical 1"` is the correct, sufficient signal for
+    "is the PC currently the source" — Optical 1 is PC-originated
+    audio here, not an independent source. AirPlay/Spotify Connect/
+    Roon Ready/UPnP genuinely never touch this machine's PipeWire and
+    remain out of scope.
+  - Per-tick (not cached): read the daemon's last-confirmed amp dB,
+    compute `amp_component_gain = 10^((target_db − confirmed_db)/20)`
+    against the same optimistic target dB the OSD label already shows,
+    live-read the actual current PipeWire sink volume (don't assume
+    100%, don't cache across ticks — the "can't change concurrently"
+    assumption only holds if the read itself is live), and combine
+    into a playback gain for the chime.
+  - Open, unconfirmed questions the spike itself needs to resolve:
+    whether the amp's dB steps are true linear-dB (validating the
+    `10^(x/20)` conversion); how to get the computed gain into
+    `paplay` given PulseAudio's own non-linear volume scale (vs. the
+    pre-rendered-fixed-steps fallback); confirming `Source ==
+    "Optical 1"` reads reliably from the widget's existing state as
+    the detection trigger.
+  - No debounce gate — one attempted chime per discrete wheel tick,
+    matching Finding 3's un-debounced plasma-pa behavior. When any
+    other source is active, no chime at all for this spike (not the
+    plain static chime — that recommendation was explicitly rejected;
+    see Phase 10.0.0's owner-decision note above).
+  - **Testing safety constraint:** all live testing against the real
+    amp stays strictly within −50dB to −35dB for the entire session,
+    not just the starting point — real margin below both the
+    configured floor and the ceiling. No testing above −35dB unless
+    the gain math has been independently sanity-checked (expected vs.
+    computed gain logged and compared by hand) before being sent to
+    `paplay` — the risk being guarded against is a sign/math error
+    that plays the chime far louder than intended at higher amp
+    volumes.
+  - Decision point: judge by ear once built. Merge and formally number
+    as Phase 10.1.0 if it sounds meaningfully right; discard the
+    branch and fall back to no chime (not the plain static one) if it
+    doesn't.
+  - **Verdict (2026-09-10): merge-ready.** Owner soaked it three times
+    by ear on the real amp on Optical 1 (the amp read -30 dB during
+    one soak, above the -35 dB testing ceiling - the owner's own
+    call, after the dry-run hand check had bounded the gain math):
+    headroom tuned -6 → -3 → -1 → 0 dB, chime file switched from the
+    brief's hardcoded ocean sound to the configured KDE sound theme's
+    (so it is the same sound Audio Devices plays), and the final soak
+    "sounds right now". Becomes Phase 10.1.0 on merge. Deferred to a
+    later step, deliberately not started here: a settings control for
+    the chime sound (`main.xml` entry forwarded via VolumeSettings.qml,
+    `--file` appended in both `maybeChime()`s with single-quoting for
+    the `/bin/sh -c` path, a picker on the settings page + the reload
+    persistence check) - the `--file` seam already exists, nothing
+    else needs preparing.
+  - **Build log (2026-09-10, uncommitted on the branch).**
+    - New crate `crates/devialet-chime` (std only, workspace member):
+      `devialet-chime --target-db <db> --confirmed-db <db>
+      [--headroom-db <db>] [--file <path>] [--tick <n>] [--dry-run]`.
+      Never talks to the daemon; QML passes both dB values. Reads the
+      default sink live every tick via `pactl get-sink-volume/get-sink-
+      mute @DEFAULT_SINK@` (raw-integer parse, locale-proof; `wpctl`
+      rejected for printing a locale-formatted cubic float), logs one
+      grep-able stderr line per invocation with every intermediate, then
+      `paplay --volume=<V> <file>`. The file defaults to the
+      `audio-volume-change.oga` of whatever theme kdeglobals `[Sounds]
+      Theme` names (fallback ocean, then freedesktop) - the owner's
+      soak noticed the first build's hardcoded ocean file was not the
+      sound Audio Devices plays on this box (`Theme=freedesktop`,
+      0.07 s and ~1.5 dB quieter at peak than ocean's 0.30 s file);
+      `--file` overrides.
+    - **Formula (owner decision during planning: the PipeWire sink
+      volume cancels).** Chime and media both pass through the same sink
+      gain and the same amp gain, so the only per-tick term is the amp's
+      not-yet-applied delta: `delta = clamp(target - confirmed, ±20)`,
+      `gain_db = min(headroom + delta, 0)` (headroom 0 dB), `V = round(65536 * 10^(gain_db/60))`.
+      The sink volume is logged and warned on when not 65536/muted, not
+      compensated. Gain never exceeds unity, so a sign error is bounded.
+    - **Confirmed dB source:** `PendingAmpState.confirmedVolumeDb`, new,
+      decoded from the daemon's deliberately unmasked `VolumeRaw`
+      (`(raw - 195) / 2`) - NOT `volumeDb`, which is optimistic and then
+      daemon-masked for 400 ms after every command. Target dB is the
+      same `clamped` value `notifyVolume()` writes and the OSD shows.
+    - **PulseAudio scale resolved:** `paplay --volume` is an integer on
+      the *cubic* `pa_sw_volume` scale despite its help text saying
+      "linear". Runtime closed form chosen over pre-rendered copies
+      (one line of math; nothing to ship). Verified empirically, not
+      assumed: `paplay --volume=32768` produced PipeWire
+      `channelVolumes [0.125, 0.125]` in `pw-dump` (= (0.5)^3; a linear
+      scale would have read 0.5) and `-18.06 dB` in
+      `pactl list sink-inputs`. Dry-run hand check matched the
+      pre-computed table exactly (Δ 0/+1/-1/+6/+10/-10 dB → V 52057/
+      54094/50097/65536/65536(clipped, warned)/35466).
+    - **Overlap, not interruption (owner correction to the plan):** a
+      four-slot round-robin pool of `P5Support.DataSource`s per file
+      (`chimeExec0..3`, tick N → slot N % 4) instead of one reused id,
+      so rapid ticks overlap and mix like libcanberra's per-call
+      streams. The `--tick` counter makes every command string unique:
+      the executable engine is shared process-wide and keys jobs by
+      command string, so identical dB arguments would otherwise collapse
+      into one process regardless of the pool.
+    - **Wired in:** `CompactRepresentation.stepVolume()` (panel-icon
+      wheel; OSD path) and `FlyoutContent.stepVolume()` (flyout slider
+      wheel AND the +/- buttons - same `stepRequested` path; slider
+      release and mute toggle deliberately do not chime). Gate:
+      `activeSourceName.trim().toLowerCase() === "optical 1"` and
+      `confirmedVolumeDb` defined; otherwise no chime at all.
+    - Dev PATH: `~/.local/bin/devialet-chime` → `target/debug/
+      devialet-chime`, same symlink workflow as `devialet-ctl`.
+    - **Wheel-tick path verified by the owner's soaks, not by Claude**
+      (no pointer automation on this box, per the owner-soak
+      convention). `qmllint` is clean on all three QML files and the
+      shell restarted without QML errors. Soak protocol that was
+      listed, amp inside -50..-35 dB throughout, watching
+      `journalctl --user -f | grep devialet-chime`:
+      one notch up / one down on the panel icon (expect `tick=N
+      target=... confirmed=... volume=...` + `finished - exit code: 0`);
+      five fast notches (Δ should grow as confirmed lags, slots cycle
+      0-3, chimes overlap rather than cut off - `pgrep -c paplay` > 1);
+      same via the flyout wheel; switch to a non-Optical source (no
+      invocation at all); sink at 50 % then back (warning logged, same
+      V); middle-click mute then a notch (does the auto-unmute race
+      swallow the chime?).
+    - **Approximated/assumed - listen for:** amp dB taken as true
+      attenuation dB (no acoustic measurement); Δ is against a broadcast
+      up to ~200 ms old and the amp may apply mid-chime (0.30 s), so a
+      fast upward scroll's chime tail can land louder than its head;
+      headroom started at -6 dB, then -3, then -1; the owner's soaks
+      found each too quiet and settled on 0 dB (tunable via
+      `--headroom-db`): a zero-delta chime plays the file at its own
+      level, like plasma-pa's tone. Consequence: NO upward
+      compensation is possible at this setting - every positive delta
+      clips to unity and is logged as such - only downward deltas are
+      compensated. Restoring upward headroom would need a louder
+      source file, not a formula change (the ocean file peaks at
+      -15.7 dBFS); chime file now follows
+      kdeglobals' theme (freedesktop here) instead of the brief's ocean; pool size 4 reasoned from the
+      0.30 s file, not measured; the HDMI sink no longer suspends (owner
+      disabled it in WirePlumber the same day), so a clipped onset is
+      not sink resume.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -6609,36 +6755,58 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
       
-- [ ] **Spike — PC-source volume-compensated chime (branch
-      `spike/volume-audio-feedback`).** Not a numbered
-      phase yet — explicitly throwaway-or-merge, per this project's
-      "risky/uncertain work stays off main" convention. Only becomes a
-      real Phase 10.1.0 if it earns it by ear; discarded otherwise.
-      Scoped to when this PC's own PipeWire output is the active
-      source reaching the amp — AirPlay/Spotify Connect/Roon/UPnP/
-      Optical sources don't route through this machine's PipeWire at
-      all and are explicitly out of scope.
-  - Per-tick (not cached): read the daemon's last-confirmed amp dB,
-    compute `amp_component_gain = 10^((target_db − confirmed_db)/20)`
-    against the same optimistic target dB the OSD label already shows,
-    live-read the actual current PipeWire sink volume (don't assume
-    100%, don't cache across ticks — the "can't change concurrently"
-    assumption only holds if the read itself is live), and combine
-    into a playback gain for the chime.
-  - Open, unconfirmed questions the spike itself needs to resolve: how
-    the amp's digital input level interacts with PipeWire's own sink
-    volume (whether a second term is needed); whether the amp's dB
-    steps are true linear-dB (validating the `10^(x/20)` conversion);
-    how to get the computed gain into `paplay` given PulseAudio's own
-    non-linear volume scale (vs. the pre-rendered-fixed-steps
-    fallback); how to reliably detect "PC is the current source" at
-    all.
-  - No debounce gate — one attempted chime per discrete wheel tick,
-    matching Finding 3's un-debounced plasma-pa behavior.
-  - Decision point: judge by ear once built. Merge and formally number
-    as Phase 10.1.0 if it sounds meaningfully right; discard the
-    branch and fall back to no chime (not the plain static one, per
-    the owner decision above) if it doesn't.
+- [ ] **Phase 10.1.1 — Volume feedback chime: enable/disable setting.**
+      Depends on the `spike/volume-audio-feedback` merge (becomes real
+      Phase 10.1.0 on merge — see that entry's verdict). Add a
+      persisted on/off toggle for the whole chime feature, following
+      the `VolumeSettings.qml`-style shared object pattern already
+      established for other per-file-forwarded settings. `main.xml`
+      gains a `chimeEnabled` bool (default true — the soaked
+      behavior becomes the shipped default). `maybeChime()` in both
+      `CompactRepresentation.qml` and `FlyoutContent.qml` gates on it
+      alongside the existing `activeSourceName`/`confirmedVolumeDb`
+      checks — investigate whether it belongs in the same forwarded
+      settings object as the eventual sound-file setting (10.1.2) or
+      is simpler standalone, rather than assuming one design.
+  - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
+    Optical 1 — no chime, no `devialet-chime` invocation in the
+    journal at all (not just silent gain). Toggle back on, same soak
+    protocol as the spike's build log (one tick up/down, five fast
+    ticks, non-Optical source) reproduces the merged behavior exactly.
+    Restart the widget with it off; confirm it loads off, not
+    reverting to the shipped default.
+
+- [ ] **Phase 10.1.2 — Volume feedback chime: sound file picker.**
+      Depends on 10.1.1 (or can be done independently if 10.1.1's
+      settings object is scoped to make that easy — decide during
+      10.1.1). The `--file` CLI seam on `devialet-chime` already
+      exists (per the spike's build log) — this phase is the
+      settings-page plumbing, not new binary work. `main.xml` gains a
+      `chimeSoundFile` string entry (default: empty, meaning "follow
+      kdeglobals' configured theme," matching the spike's resolved
+      default behavior — investigate whether an explicit empty-string
+      sentinel is the right way to express "no override" or whether
+      KConfig has a cleaner convention already used elsewhere in this
+      project). ConfigDialog gets a file picker — investigate the
+      right idiomatic Plasma/QML file-picker widget (a native file
+      dialog vs. a themed sound-list picker limited to installed
+      sound themes' `audio-volume-change.oga` files) before assuming
+      a generic file browser is correct; QTBUG-66446's
+      `org.kde.plasma.components.ComboBox` precedent may be relevant
+      if a curated list is chosen over a raw file browser. `--file`
+      gets appended in both `maybeChime()`s only when a non-empty
+      override is set, single-quoted for the `/bin/sh -c` path per
+      the executable engine's existing invocation pattern.
+  - Verify: leave unset — chime follows kdeglobals' theme exactly as
+    the merged spike behavior does. Pick an explicit file — chime
+    plays that file regardless of kdeglobals' theme, confirmed via
+    the journal's logged `file=` value. Restart the widget; confirm
+    the picked file persists and isn't reset to the theme-follow
+    default. Pick a nonexistent/invalid path (simulate a moved or
+    deleted file) — confirm `devialet-chime`'s existing failure
+    handling degrades sanely (no chime, non-zero exit logged) rather
+    than crashing the exec engine or silently reverting.
+      
 
 ## Bugs
 
