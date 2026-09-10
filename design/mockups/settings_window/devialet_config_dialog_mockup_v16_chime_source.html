@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet ConfigDialog — Mockup v14 (single tab)</title>
+<title>Devialet ConfigDialog — Mockup v16 (chime source: theme vs. file)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -220,6 +220,68 @@
   }
   .neutral-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
 
+  /* file-picker row, for the chime sound selector */
+  .file-picker-row{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .file-picker-field{
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim);
+    background:var(--surface); border:1px solid var(--divider); border-radius:7px;
+    padding:6px 10px; max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .file-picker-btn{
+    width:28px; height:28px; border-radius:7px; background:var(--surface); border:1px solid var(--divider);
+    display:flex; align-items:center; justify-content:center; color:var(--text-dim); cursor:pointer; flex-shrink:0;
+  }
+  .file-picker-btn svg{ width:14px; height:14px; }
+  .file-picker-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
+  .file-picker-btn.play{ color:var(--copper-bright); border-color:var(--copper-dim); }
+  .file-picker-btn.play.playing{ background:rgba(193,127,78,0.18); box-shadow:0 0 0 3px rgba(227,160,106,0.18); }
+
+  /* chime source: three-way choice between following the desktop theme,
+     pinning to one installed theme, or a fully custom file */
+  .chime-source-block{ padding:8px 2px 4px; }
+  .chime-source-variant{ display:none; padding-top:12px; }
+  .chime-source-variant.active{ display:flex; align-items:center; justify-content:space-between; gap:20px; }
+
+  /* "system theme" mode — a quiet, read-only status line, deliberately
+     NOT a control: this mode has nothing to configure, it just tracks
+     kdeglobals live, and the UI should say so rather than fake a picker */
+  .theme-follow-status{
+    display:flex; align-items:center; gap:9px;
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim);
+  }
+  .theme-follow-dot{
+    width:6px; height:6px; border-radius:50%; background:var(--copper-bright);
+    box-shadow:0 0 6px 1px rgba(227,160,106,0.5); flex-shrink:0;
+  }
+  .theme-follow-status b{ color:var(--copper-bright); font-weight:600; }
+
+  /* "choose theme" mode — a dropdown of installed sound themes */
+  .theme-dropdown{ position:relative; flex-shrink:0; }
+  .theme-dropdown-field{
+    display:flex; align-items:center; gap:8px;
+    font-family:var(--font-mono); font-size:11px; color:var(--text);
+    background:var(--surface); border:1px solid var(--divider); border-radius:7px;
+    padding:6px 8px 6px 12px; min-width:150px; cursor:pointer;
+  }
+  .theme-dropdown-field:hover{ border-color:var(--copper-dim); }
+  .theme-dropdown-field .chev{ margin-left:auto; color:var(--text-faint); transition:transform .15s ease; flex-shrink:0; }
+  .theme-dropdown-field .chev svg{ width:12px; height:12px; }
+  .theme-dropdown.open .theme-dropdown-field .chev{ transform:rotate(180deg); color:var(--copper-bright); }
+  .theme-dropdown-list{
+    display:none; position:absolute; top:calc(100% + 4px); right:0; z-index:5;
+    min-width:100%; background:var(--surface-2); border:1px solid var(--divider); border-radius:8px;
+    padding:4px; box-shadow:0 12px 28px -6px rgba(0,0,0,0.6);
+  }
+  .theme-dropdown.open .theme-dropdown-list{ display:block; }
+  .theme-dropdown-item{
+    display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px;
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim); cursor:pointer; white-space:nowrap;
+  }
+  .theme-dropdown-item:hover{ background:var(--surface-3); }
+  .theme-dropdown-item.selected{ color:var(--copper-bright); }
+  .theme-dropdown-item .check{ width:12px; flex-shrink:0; opacity:0; font-size:10px; }
+  .theme-dropdown-item.selected .check{ opacity:1; }
+
   /* numeric dB stepper, for precise threshold values a slider can't cleanly host */
   .db-stepper{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .db-stepper-btn{
@@ -289,7 +351,7 @@
 </head>
 <body>
 
-<div class="mockup-tag">MOCKUP · CONFIGDIALOG v14 — SINGLE TAB, Defaults moved in-page</div>
+<div class="mockup-tag">MOCKUP · CONFIGDIALOG v16 — chime sound source: theme vs. file</div>
 
 <div style="display:flex; flex-direction:column; align-items:center;">
   <div class="kcm-window">
@@ -407,6 +469,77 @@
           </div>
           <p class="limit-warning" id="limitWarning">Volume floor should stay below the volume ceiling.</p>
 
+          <p class="kcm-section-label">Volume Feedback</p>
+          <div class="kcm-row">
+            <div class="kcm-row-text">
+              <span class="kcm-row-name">Volume Feedback Chime</span>
+              <span class="kcm-row-desc">Plays a short tone on each scroll tick, matching the volume you're setting</span>
+            </div>
+            <div class="kcm-switch on" id="chimeSwitch" onclick="toggleSwitch(this); toggleChimeSub();"></div>
+          </div>
+          <div class="kcm-sub-row" id="chimeSub">
+            <div class="kcm-row" style="border-bottom:none; padding-top:0;">
+              <div class="kcm-row-text">
+                <span class="kcm-row-name">Chime sound</span>
+                <span class="kcm-row-desc">Which sound plays on each tick</span>
+              </div>
+              <div class="kcm-segmented">
+                <div class="kcm-seg-btn active" onclick="setChimeSource('follow', this)">System theme</div>
+                <div class="kcm-seg-btn" onclick="setChimeSource('theme', this)">Choose theme</div>
+                <div class="kcm-seg-btn" onclick="setChimeSource('file', this)">Custom file</div>
+              </div>
+            </div>
+
+            <div class="chime-source-block">
+              <!-- ===== mode: follow the desktop's own configured theme ===== -->
+              <div class="chime-source-variant active" id="chimeVariant-follow">
+                <div class="theme-follow-status">
+                  <span class="theme-follow-dot"></span>
+                  <span>Following your desktop's sound theme — currently <b id="chimeFollowThemeName">freedesktop</b></span>
+                </div>
+                <div class="file-picker-btn play" id="chimeFollowPlayBtn" title="Preview" onclick="handlePlayChime(this)">
+                  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 6.5v11l9-5.5-9-5.5z"/></svg>
+                </div>
+              </div>
+
+              <!-- ===== mode: pin to one specific installed theme ===== -->
+              <div class="chime-source-variant" id="chimeVariant-theme">
+                <span class="kcm-row-desc" style="max-width:260px;">Always use this theme's tone, regardless of your desktop setting</span>
+                <div class="file-picker-row">
+                  <div class="theme-dropdown" id="themeDropdown">
+                    <div class="theme-dropdown-field" onclick="toggleThemeDropdown()">
+                      <span id="themeDropdownLabel">ocean</span>
+                      <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg></span>
+                    </div>
+                    <div class="theme-dropdown-list" id="themeDropdownList">
+                      <div class="theme-dropdown-item selected" onclick="selectTheme('ocean', this)"><span class="check">✓</span>ocean</div>
+                      <div class="theme-dropdown-item" onclick="selectTheme('freedesktop', this)"><span class="check">✓</span>freedesktop</div>
+                      <div class="theme-dropdown-item" onclick="selectTheme('guitar', this)"><span class="check">✓</span>guitar</div>
+                      <div class="theme-dropdown-item" onclick="selectTheme('sonar', this)"><span class="check">✓</span>sonar</div>
+                    </div>
+                  </div>
+                  <div class="file-picker-btn play" id="chimeThemePlayBtn" title="Preview" onclick="handlePlayChime(this)">
+                    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 6.5v11l9-5.5-9-5.5z"/></svg>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== mode: any arbitrary file ===== -->
+              <div class="chime-source-variant" id="chimeVariant-file">
+                <span class="kcm-row-desc" style="max-width:260px;">Any sound file on disk</span>
+                <div class="file-picker-row">
+                  <div class="file-picker-field" id="chimeFileName" title="chime-default.ogg">chime-default.ogg</div>
+                  <div class="file-picker-btn" title="Browse…" onclick="handleBrowseChime()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+                  </div>
+                  <div class="file-picker-btn play" id="chimeFilePlayBtn" title="Preview" onclick="handlePlayChime(this)">
+                    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 6.5v11l9-5.5-9-5.5z"/></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <p class="kcm-section-label">Amplifiers</p>
           <div class="kcm-row">
             <div class="kcm-row-text">
@@ -472,7 +605,8 @@
     Window titlebar (gear/pin left, chevron-down/chevron-up/X right), sidebar chrome + blue selection color, and the Shortcuts/About page content are Plasma's — sampled from your screenshot so the window as a whole reads as one native piece, with our page as the one that happens to have personality.<br>
     Keyboard Shortcuts and About icons are now hand-redrawn approximations of your real icon theme's glyphs (keyboard+gear badge, solid blue "i" circle) rather than the generic placeholders used in earlier versions — close, but not a pixel-perfect extraction of the actual SVG assets, since I don't have access to your icon theme's source files.<br>
     Volume limits use +/− steppers rather than a slider — interdependent thresholds sharing one slider track gets visually cramped and easy to mis-drag, whereas a stepper gives exact, unambiguous values. Min-above-hard shows an inline warning as a placeholder for real validation. Stepper bounds are the real Expert Pro line range (−96 to 0 dB). Holding a +/− button repeats at 100ms after a short initial delay, same cadence as the flyout's own volume buttons. Minimum volume trims the unused low end of the slider's range rather than acting as a safety ceiling — it's a usability control, not a protection one. Soft limit removed in this version, per request — Hard limit is now the only ceiling.<br>
-    <b>Defaults moved into the page content</b> (new "Reset" section, bottom of General) rather than the footer — the ConfigDialog's Cancel/Apply/OK bar is fixed native chrome, not something a plasmoid's config.qml can add buttons to. This is option 2 from the Claude Code research: keeps the existing ConfigGeneral.qml/KCM page and its Apply/OK flow as-is, at the cost of not matching the original footer-button mockup exactly.
+    <b>Defaults moved into the page content</b> (new "Reset" section, bottom of General) rather than the footer — the ConfigDialog's Cancel/Apply/OK bar is fixed native chrome, not something a plasmoid's config.qml can add buttons to. This is option 2 from the Claude Code research: keeps the existing ConfigGeneral.qml/KCM page and its Apply/OK flow as-is, at the cost of not matching the original footer-button mockup exactly.<br>
+    <b>Chime sound</b> is now a three-way choice, not a single file picker — collapsing it to "pick a file" would quietly break the thing Phase 10.1.0 got right after a real by-ear correction: the chime should track your desktop's own configured sound theme by default, not a fixed file. <b>System theme</b> (the default, matching the shipped 10.1.0 behavior) is deliberately NOT an editable control — it's a status line naming the currently-resolved theme, because there's nothing to configure in this mode; it just tracks kdeglobals live. <b>Choose theme</b> pins the chime to one specific installed theme regardless of your desktop setting, via a dropdown — real implementation would enumerate installed themes the same way `SoundThemeConfig` (per Phase 10.0.0's report) already does, not a hardcoded list like this mockup's four placeholder entries. <b>Custom file</b> is the original filename chip + Browse + Preview, unchanged, for anyone who wants a sound unrelated to any installed theme. Preview briefly pulses rather than playing actual audio in all three modes, since no sound file exists in this static mockup.
   </div>
 </div>
 
@@ -487,6 +621,39 @@
   function toggleTransSub(){
     const on = document.getElementById('transSwitch').classList.contains('on');
     document.getElementById('transSub').classList.toggle('disabled', !on);
+  }
+  function toggleChimeSub(){
+    const on = document.getElementById('chimeSwitch').classList.contains('on');
+    document.getElementById('chimeSub').classList.toggle('disabled', !on);
+  }
+  function handleBrowseChime(){
+    // Static mockup only — real implementation opens a native/Kirigami
+    // file dialog (audio filter: .wav/.ogg/.mp3) via FileDialog QML.
+    alert('This button would open the system file picker to choose a chime sound file. Not simulated in this static mockup.');
+  }
+  function setChimeSource(mode, el){
+    document.querySelectorAll('#chimeSub .kcm-segmented .kcm-seg-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    document.querySelectorAll('.chime-source-variant').forEach(v => v.classList.remove('active'));
+    document.getElementById('chimeVariant-' + mode).classList.add('active');
+    document.getElementById('themeDropdown').classList.remove('open');
+  }
+  function toggleThemeDropdown(){
+    document.getElementById('themeDropdown').classList.toggle('open');
+  }
+  function selectTheme(name, el){
+    document.getElementById('themeDropdownLabel').textContent = name;
+    document.querySelectorAll('.theme-dropdown-item').forEach(i => i.classList.remove('selected'));
+    el.classList.add('selected');
+    document.getElementById('themeDropdown').classList.remove('open');
+  }
+  document.addEventListener('click', (e) => {
+    const dd = document.getElementById('themeDropdown');
+    if (dd && dd.classList.contains('open') && !dd.contains(e.target)) dd.classList.remove('open');
+  });
+  function handlePlayChime(el){
+    el.classList.add('playing');
+    setTimeout(() => el.classList.remove('playing'), 350);
   }
   function onTransInput(v){
     document.getElementById('transValue').textContent = v + '%';
@@ -549,6 +716,13 @@
     document.getElementById('loginSwitch').classList.remove('on');
     limits = { ...LIMIT_DEFAULTS };
     renderLimits();
+    document.getElementById('chimeSwitch').classList.add('on');
+    document.getElementById('chimeSub').classList.remove('disabled');
+    document.querySelectorAll('#chimeSub .kcm-segmented .kcm-seg-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#chimeSub .kcm-segmented .kcm-seg-btn')[0].classList.add('active'); // System theme
+    document.querySelectorAll('.chime-source-variant').forEach(v => v.classList.remove('active'));
+    document.getElementById('chimeVariant-follow').classList.add('active');
+    document.getElementById('chimeFileName').textContent = 'chime-default.ogg';
   }
   let forgetConfirming = false;
   function handleForget(el){
