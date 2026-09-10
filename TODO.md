@@ -6484,6 +6484,78 @@ architecture decisions; this file is just sequencing and status.
     VolumeToast.qml/VolumeHoverTooltip.qml are untouched by this
     phase and remain exactly as they were before it.
 
+- [x] **Phase 10.0.0 — Investigate volume-change audio feedback (Audio
+      Devices parity).** Done 2026-09-10. Investigation only — no
+      QML/Rust changes, no new dependencies added. Source: `plasma-pa`
+      6.7.5 (installed package) + upstream source from
+      invent.kde.org/plasma/plasma-pa (branch `master`); binary
+      confirmation cross-checked via `strings`/`nm -D` against real
+      source before citing anything.
+  - **Finding 1 — mechanism: libcanberra**, via a small custom C++
+    class plasma-pa ships itself, not QtMultimedia and not a D-Bus
+    call. `PulseAudioQt::CanberraContext`
+    (src/canberracontext.h:13, canberracontext.cpp:21-25) wraps a raw
+    `ca_context*` (`ca_context_create()` at canberracontext.cpp:24) —
+    confirmed via binary inspection to be plasma-pa's own private
+    copy, not the separate `pulseaudio-qt` framework despite the
+    shared namespace. `VolumeFeedback` (src/volumefeedback.h:17,
+    volumefeedback.cpp:35-56) is the QML-exposed (`QML_ELEMENT`)
+    class; `play(quint32 sinkIndex)` calls `ca_context_play(context,
+    cindex, CA_PROP_EVENT_ID, "audio-volume-change",
+    CA_PROP_CANBERRA_CACHE_CONTROL, "permanent", nullptr)` (lines
+    49-52). Sound is pre-cached in the constructor
+    (`updateCachedSound()`, volumefeedback.cpp:58-76), which sets
+    `CA_PROP_MEDIA_ROLE = "alert"` with an explicit source comment
+    (lines 69-70) that this is deliberate so the tone survives
+    do-not-disturb, since the default "event" role is muted there.
+    Confirmed present on this system:
+    `/usr/share/sounds/ocean/stereo/audio-volume-change.oga`.
+  - **Finding 2 — idiomatic trigger path for this widget: shell out to
+    `paplay`, not QtMultimedia.** `VolumeFeedback` is a
+    `QML_ELEMENT`-registered C++ class (volumefeedback.h:20) — a C++
+    QML plugin, ruled out directly by CLAUDE.md's "no C++, no CMake"
+    constraint. Evaluated against "avoid new dependencies": QtMultimedia
+    `SoundEffect` is installed on this dev machine but is NOT in
+    `plasma-workspace`'s or `kwin`'s dependency list (a genuine new
+    dependency for users); `paplay` is owned by `libpulse`, already a
+    hard dependency of `pulseaudio-qt`/plasma-pa on any Plasma system
+    with audio (confirmed via `pacman -Qo` here) — shelled out from
+    Rust exactly like `devialet-ctl`, via the existing
+    `Plasma5Support.DataSource` executable-engine pattern. Zero new
+    dependencies. Chosen.
+  - **Finding 3 — plasma-pa applies NO time-based debounce or
+    throttle around the tone.** Every trigger site calls
+    `playFeedback()`/`m_feedback->play()` unconditionally, once per
+    discrete event: the scroll-wheel path (`applet/main.qml:234-260`
+    batches `wheel.angleDelta` into 120-unit ticks, round-trips over
+    D-Bus to kglobalaccel, lands in
+    `src/kded/audioshortcutsservice.cpp:86-94`, which calls
+    `playFeedback(-1)` on every trigger with no timer); in-popup
+    slider drag (`applet/ListItemBase.qml:262-279`) fires exactly once
+    on release, not during drag, and not on the slider's own wheel
+    handling at all (`applet/VolumeSlider.qml:66-91`'s `WheelHandler`
+    never calls `playFeedback`).
+  - **Finding 4 — sound theme is tracked live; mute is plasma-pa's own
+    toggle, not a shared system switch.** `SoundThemeConfig`
+    (src/soundthemeconfig.cpp:16-20) watches `kdeglobals [Sounds]
+    Theme` (default "ocean") via `KConfigWatcher`, wired to
+    `VolumeFeedback::updateCachedSound` — the tone does track KDE's
+    configured sound theme. No KDE-wide "mute all event sounds" switch
+    was found; what's checked is plasma-pa's own kcfg boolean
+    `AudioFeedback` (src/globalconfig.kcfg:21-24, default true), gated
+    at `audioshortcutsservice.cpp:348` — a per-feature toggle plasma-pa
+    owns, not something this widget could hook into. Not claimed to
+    not exist elsewhere, just not located in this source tree.
+  - **Owner decision (2026-09-10), made after the finding above was
+    reviewed against real amp latency: the plain/non-compensated
+    chime recommendation this report originally ended on is NOT being
+    built.** A static `paplay` chime fired at scroll-tick time would
+    register that a scroll happened, but has no relationship to the
+    amp's actual (not-yet-applied) dB — unlike Audio Devices' tone,
+    which is accurate by construction because it plays through the
+    exact PipeWire gain stage that just changed. Superseded by the
+    PC-source volume-compensated approach below.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -6536,9 +6608,37 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-- [ ] **feat — add Audio Devices noise when changing volum** Desired
-      to have the same audio from changing volume when hovering over
-      the icon and the OSD is visible as the Audio Devices widget has.
+      
+- [ ] **Spike — PC-source volume-compensated chime (branch
+      `spike/volume-compensated-chime`, name TBD).** Not a numbered
+      phase yet — explicitly throwaway-or-merge, per this project's
+      "risky/uncertain work stays off main" convention. Only becomes a
+      real Phase 10.1.0 if it earns it by ear; discarded otherwise.
+      Scoped to when this PC's own PipeWire output is the active
+      source reaching the amp — AirPlay/Spotify Connect/Roon/UPnP/
+      Optical sources don't route through this machine's PipeWire at
+      all and are explicitly out of scope.
+  - Per-tick (not cached): read the daemon's last-confirmed amp dB,
+    compute `amp_component_gain = 10^((target_db − confirmed_db)/20)`
+    against the same optimistic target dB the OSD label already shows,
+    live-read the actual current PipeWire sink volume (don't assume
+    100%, don't cache across ticks — the "can't change concurrently"
+    assumption only holds if the read itself is live), and combine
+    into a playback gain for the chime.
+  - Open, unconfirmed questions the spike itself needs to resolve: how
+    the amp's digital input level interacts with PipeWire's own sink
+    volume (whether a second term is needed); whether the amp's dB
+    steps are true linear-dB (validating the `10^(x/20)` conversion);
+    how to get the computed gain into `paplay` given PulseAudio's own
+    non-linear volume scale (vs. the pre-rendered-fixed-steps
+    fallback); how to reliably detect "PC is the current source" at
+    all.
+  - No debounce gate — one attempted chime per discrete wheel tick,
+    matching Finding 3's un-debounced plasma-pa behavior.
+  - Decision point: judge by ear once built. Merge and formally number
+    as Phase 10.1.0 if it sounds meaningfully right; discard the
+    branch and fall back to no chime (not the plain static one, per
+    the owner decision above) if it doesn't.
 
 ## Bugs
 
