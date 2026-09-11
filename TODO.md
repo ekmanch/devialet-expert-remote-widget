@@ -6755,19 +6755,50 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
       
-- [ ] **Phase 10.1.1 — Volume feedback chime: enable/disable setting.**
-      Depends on the `spike/volume-audio-feedback` merge (becomes real
-      Phase 10.1.0 on merge — see that entry's verdict). Add a
-      persisted on/off toggle for the whole chime feature, following
-      the `VolumeSettings.qml`-style shared object pattern already
-      established for other per-file-forwarded settings. `main.xml`
-      gains a `chimeEnabled` bool (default true — the soaked
-      behavior becomes the shipped default). `maybeChime()` in both
-      `CompactRepresentation.qml` and `FlyoutContent.qml` gates on it
-      alongside the existing `activeSourceName`/`confirmedVolumeDb`
-      checks — investigate whether it belongs in the same forwarded
-      settings object as the eventual sound-file setting (10.1.2) or
-      is simpler standalone, rather than assuming one design.
+- [ ] **Phase 10.1.1 — Volume feedback chime: ConfigDialog UI (visual
+      only, no persistence yet).** Build the "Volume Feedback" section
+      of `ConfigGeneral.qml` to match the approved mockup exactly:
+      `design/mockups/settings_window/devialet_config_dialog_mockup_v16_chime_source.html`.
+      Master toggle, three-way segmented control ("System theme" /
+      "Choose theme" / "Custom file"), the three variant blocks, and
+      the theme dropdown / file-Browse-Preview rows — all driven by
+      local QML state, the same shape as the mockup's own JS state,
+      NOT yet backed by `main.xml`. No new KConfig entries in this
+      phase. Values are not expected to survive Apply/OK or a dialog
+      reopen yet — that's what 10.1.2/10.1.3 add. Two pieces of this
+      are real functionality despite the no-persistence scope, since
+      they don't depend on a stored setting: the "follow" variant's
+      "currently <theme>" status line needs a genuine live read of
+      kdeglobals' `[Sounds] Theme` key (investigate the idiomatic
+      no-new-dependency way — a one-shot `kreadconfig6` shell via the
+      existing executable-engine pattern is one candidate, check for
+      a cleaner QML-native option first); and Preview needs to
+      actually play the currently-selected sound at its own natural
+      level (no amp-latency gain compensation — this isn't a scroll
+      tick, so don't route it through `devialet-chime`, just `paplay`
+      directly). Theme-dropdown enumeration should investigate real
+      installed sound themes with an `audio-volume-change.oga` file
+      rather than a hardcoded list, mirroring how far
+      `SoundThemeConfig` (Phase 10.0.0's report) goes for *listing*,
+      not just reading, the active theme.
+  - Verify: dialog opens, section matches the mockup visually; toggle
+    disables/enables the sub-section; segmented control swaps the
+    three variant blocks; theme dropdown opens/closes/selects; Browse
+    opens a real file dialog and updates the chip; Preview audibly
+    plays the correct sound for whichever variant is active. Reopening
+    the dialog or restarting the widget is allowed to reset these
+    values to their initial state — expected in this phase, not a bug.
+    Explicitly confirm scrolling on Optical 1 still produces exactly
+    the Phase 10.1.0 merged behavior, untouched by this phase.
+
+- [ ] **Phase 10.1.2 — Volume feedback chime: enable/disable, wired
+      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
+      `chimeEnabled` (Bool, default true — the soaked 10.1.0 behavior
+      becomes the shipped default). Rebind 10.1.1's master toggle from
+      local state to `cfg_chimeEnabled`. Wire the actual gate:
+      `maybeChime()` in both `CompactRepresentation.qml` and
+      `FlyoutContent.qml` checks `chimeEnabled` alongside the existing
+      `activeSourceName`/`confirmedVolumeDb` checks.
   - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
     Optical 1 — no chime, no `devialet-chime` invocation in the
     journal at all (not just silent gain). Toggle back on, same soak
@@ -6776,36 +6807,33 @@ architecture decisions; this file is just sequencing and status.
     Restart the widget with it off; confirm it loads off, not
     reverting to the shipped default.
 
-- [ ] **Phase 10.1.2 — Volume feedback chime: sound file picker.**
-      Depends on 10.1.1 (or can be done independently if 10.1.1's
-      settings object is scoped to make that easy — decide during
-      10.1.1). The `--file` CLI seam on `devialet-chime` already
-      exists (per the spike's build log) — this phase is the
-      settings-page plumbing, not new binary work. `main.xml` gains a
-      `chimeSoundFile` string entry (default: empty, meaning "follow
-      kdeglobals' configured theme," matching the spike's resolved
-      default behavior — investigate whether an explicit empty-string
-      sentinel is the right way to express "no override" or whether
-      KConfig has a cleaner convention already used elsewhere in this
-      project). ConfigDialog gets a file picker — investigate the
-      right idiomatic Plasma/QML file-picker widget (a native file
-      dialog vs. a themed sound-list picker limited to installed
-      sound themes' `audio-volume-change.oga` files) before assuming
-      a generic file browser is correct; QTBUG-66446's
-      `org.kde.plasma.components.ComboBox` precedent may be relevant
-      if a curated list is chosen over a raw file browser. `--file`
-      gets appended in both `maybeChime()`s only when a non-empty
-      override is set, single-quoted for the `/bin/sh -c` path per
-      the executable engine's existing invocation pattern.
-  - Verify: leave unset — chime follows kdeglobals' theme exactly as
-    the merged spike behavior does. Pick an explicit file — chime
-    plays that file regardless of kdeglobals' theme, confirmed via
-    the journal's logged `file=` value. Restart the widget; confirm
-    the picked file persists and isn't reset to the theme-follow
-    default. Pick a nonexistent/invalid path (simulate a moved or
-    deleted file) — confirm `devialet-chime`'s existing failure
-    handling degrades sanely (no chime, non-zero exit logged) rather
-    than crashing the exec engine or silently reverting.
+- [ ] **Phase 10.1.3 — Volume feedback chime: source selection, wired
+      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
+      `chimeSourceMode` (String, default "follow"), `chimePinnedTheme`
+      (String, default "ocean"), `chimeSoundFile` (String, default
+      "" — sentinel for "nothing picked"; investigate whether
+      KConfigXT has a cleaner convention already used elsewhere in
+      this project before defaulting to an empty string). Rebind
+      10.1.1's segmented control, theme dropdown, and file chip from
+      local state to these `cfg_` properties. Wire actual source
+      resolution into both `maybeChime()`s' `devialet-chime`
+      invocation: "follow" passes no `--file` (today's merged
+      behavior, kdeglobals-driven); "theme" resolves
+      `chimePinnedTheme`'s `audio-volume-change.oga` path and passes
+      it via `--file`; "file" passes `chimeSoundFile` directly,
+      single-quoted for the `/bin/sh -c` path per the executable
+      engine's existing invocation pattern.
+  - Verify: "follow" mode — chime follows kdeglobals' theme exactly as
+    the merged Phase 10.1.0 behavior does. "theme" mode — chime plays
+    the pinned theme's sound regardless of kdeglobals, confirmed via
+    the journal's logged `file=` value. "file" mode — chime plays the
+    picked file, same journal confirmation. Restart the widget;
+    confirm the selected mode and its associated value persist,
+    aren't reset to defaults. Pick a nonexistent/invalid file path
+    (simulate a moved or deleted file) — confirm `devialet-chime`'s
+    existing failure handling degrades sanely (no chime, non-zero
+    exit logged) rather than crashing the exec engine or silently
+    reverting.
       
 
 ## Bugs
