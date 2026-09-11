@@ -91,5 +91,29 @@
     <entry name="chimeEnabled" type="Bool">
       <default>true</default>
     </entry>
+
+    <!-- Phase 10.1.3: which sound the chime plays (the "Chime sound"
+         three-way control of the same v16 mockup section). chimeSourceMode
+         is one of "follow" (default - the merged 10.1.0 behavior:
+         devialet-chime gets no file argument and resolves kdeglobals' [Sounds]
+         Theme itself), "theme" (always chimePinnedTheme's
+         audio-volume-change.oga, regardless of the desktop setting) or
+         "file" (chimeSoundFile, any file on disk). chimePinnedTheme is the
+         sound-theme DIRECTORY id (ocean, freedesktop, ...) - what kdeglobals
+         stores and devialet-chime reads - never the display name.
+         chimeSoundFile is a plain absolute path; "" means nothing picked
+         yet (this file has no other "unset" convention, and KConfigXT's
+         String default is just an empty <default>). Resolution from id to
+         path is SoundThemes.qml (contents/ui/), used by both the
+         ConfigDialog and main.qml -> VolumeSettings.qml -> maybeChime(). -->
+    <entry name="chimeSourceMode" type="String">
+      <default>follow</default>
+    </entry>
+    <entry name="chimePinnedTheme" type="String">
+      <default>ocean</default>
+    </entry>
+    <entry name="chimeSoundFile" type="String">
+      <default></default>
+    </entry>
   </group>
 </kcfg>

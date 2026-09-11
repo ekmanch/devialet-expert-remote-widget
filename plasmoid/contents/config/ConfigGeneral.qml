@@ -168,7 +168,10 @@ KCM.SimpleKCM {
         startupVolumeDb: -40.0,
         volumeFloorDb: -45.0,
         hardLimitDb: -10.0,
-        chimeEnabled: true
+        chimeEnabled: true,
+        chimeSourceMode: "follow",
+        chimePinnedTheme: "ocean",
+        chimeSoundFile: ""
     })
 
     // Read-only live count for the "Forget All (N)" button's idle label -
@@ -217,175 +220,60 @@ KCM.SimpleKCM {
     property bool cfg_chimeEnabled: true
     readonly property bool cfg_chimeEnabledDefault: root.shippedDefaults.chimeEnabled
 
-    // ---- Phase 10.1.1: Volume Feedback chime source - local UI state only ----
-    // Deliberately plain properties, NOT cfg_-prefixed: no main.xml entry
-    // exists for any of these yet, and a cfg_ name would make KCMUtils'
-    // generic loader demand a cfg_*Default twin and try to persist the
-    // value on Apply/OK. Persistence is Phase 10.1.3 (source mode /
-    // pinned theme / file), which rebinds these to real cfg_ properties
-    // (the master toggle already moved to cfg_chimeEnabled above in
-    // 10.1.2). Until then the values reset on every dialog open -
-    // expected, not a bug. Shape mirrors the mockup's own DOM state (v16
-    // mockup lines 473-541 / 625-657).
+    // ---- Phase 10.1.3: the chime source, wired for real ----
+    // main.xml chimeSourceMode / chimePinnedTheme / chimeSoundFile - same
+    // cfg_<entryName> + cfg_<name>Default convention as cfg_chimeEnabled
+    // above. These cfg_ values are the dialog's LIVE selection (the shell
+    // persists them only on Apply/OK), which is exactly what Preview must
+    // reflect. Read on the widget side by both maybeChime()s through
+    // VolumeSettings.qml (bound in main.qml next to chimeEnabled).
     readonly property var chimeSourceModes: ["follow", "theme", "file"]
-    property string chimeSourceMode: "follow"
+    property string cfg_chimeSourceMode: "follow"
     // Sound-theme directory id (what kdeglobals stores and what
     // devialet-chime reads), never the display name.
-    property string chimePinnedTheme: "ocean"
-    // "" = nothing picked - the sentinel Phase 10.1.3 plans to persist.
-    property string chimeSoundFile: ""
-    // [{id, name, path}] - every installed sound theme that actually has
-    // the one file the chime plays (see soundThemeScanCommand below).
-    property var soundThemes: []
-    // Raw kdeglobals [Sounds] Theme value; "" until read, or when unset.
-    property string desktopSoundTheme: ""
+    property string cfg_chimePinnedTheme: "ocean"
+    // "" = nothing picked yet (main.xml has no other "unset" convention).
+    property string cfg_chimeSoundFile: ""
+    readonly property string cfg_chimeSourceModeDefault: root.shippedDefaults.chimeSourceMode
+    readonly property string cfg_chimePinnedThemeDefault: root.shippedDefaults.chimePinnedTheme
+    readonly property string cfg_chimeSoundFileDefault: root.shippedDefaults.chimeSoundFile
     property int chimePreviewTick: 0
 
-    // Theme enumeration. KDE's own Sound Theme KCM does this in C++
-    // (plasma-workspace kcms/soundtheme/kcm_soundtheme.cpp, loadThemes()
-    // lines 128-177: every readable subdirectory of every
-    // QStandardPaths GenericDataLocation "sounds" dir, first occurrence
-    // of an id wins, kept only if index.theme has a [Sound Theme] group)
-    // and ships no QML for it, and no KConfig/theme-listing QML type
-    // exists for a plasmoid on this system (org.kde.config exports only
-    // KAuthorized and WindowStateSaver; org.kde.kirigamiaddons.sounds
-    // lists sounds *within* one theme). So: a one-shot /bin/sh walk of
-    // the same directories in the same precedence order
-    // ($XDG_DATA_HOME, then each $XDG_DATA_DIRS entry), emitting
-    // "id<TAB>name<TAB>path" per theme, deduped by id (first wins).
-    // Two filters, both deliberate: an index.theme must exist (the
-    // KCM's own validity rule, which drops e.g. /usr/share/sounds/alsa),
-    // AND stereo/audio-volume-change.oga must exist - the exact file
-    // devialet-chime's theme.rs EVENT_FILE plays, with no Inherits=
-    // walk, just like theme.rs. A theme that only inherits the sound
-    // would list in KDE's KCM but could never be played by the chime, so
-    // it's excluded here. `name` is index.theme's Name= via kreadconfig6
-    // (which applies the same localized Name[xx]= lookup as the KCM's
-    // KConfigGroup::readEntry, kcm_soundtheme.cpp:410), defaulting to
-    // the raw id when Name= is missing - nameFor()'s fallback
-    // (kcm_soundtheme.cpp:113-120), so a third-party theme without a
-    // Name= still lists, under its directory id. Verified under `sh -c`
-    // on this box: exactly ocean and freedesktop, alsa dropped.
-    readonly property string soundThemeScanCommand:
-        "IFS=:; for base in \"${XDG_DATA_HOME:-$HOME/.local/share}\" ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do "
-        + "for dir in \"$base\"/sounds/*/; do dir=${dir%/}; id=${dir##*/}; "
-        + "[ -f \"$dir/index.theme\" ] || continue; "
-        + "[ -f \"$dir/stereo/audio-volume-change.oga\" ] || continue; "
-        + "name=$(kreadconfig6 --file \"$dir/index.theme\" --group \"Sound Theme\" --key Name --default \"$id\"); "
-        + "printf '%s\\t%s\\t%s\\n' \"$id\" \"$name\" \"$dir/stereo/audio-volume-change.oga\"; "
-        + "done; done | awk -F'\\t' '!seen[$1]++'"
-
-    // The desktop's configured sound theme - the "System theme" status
-    // line's live value. Same key devialet-chime's theme.rs parses by
-    // hand (kdeglobals [Sounds] Theme); read here via kreadconfig6
-    // through the executable engine, since no KConfig QML reader exists
-    // (see above). Empty output = key unset.
-    readonly property string desktopThemeCommand:
-        "kreadconfig6 --file kdeglobals --group Sounds --key Theme"
-
-    function applySoundThemeScan(stdout) {
-        const themes = [];
-        const lines = String(stdout || "").split("\n");
-        for (let i = 0; i < lines.length; i++) {
-            const fields = lines[i].split("\t");
-            if (fields.length < 3 || fields[0] === "") continue;
-            const id = fields[0];
-            let name = fields[1] || id;
-            // HARDCODED SPECIAL CASE, copied from KDE, not a rule of the
-            // sound-theme spec: KDE's own Sound Theme KCM overrides this
-            // one theme's display name because its index.theme says
-            // Name=Default (plasma-workspace, branch Plasma/6.7,
-            // kcms/soundtheme/kcm_soundtheme.cpp:71 `FALLBACK_THEME =
-            // "freedesktop"` and :153-158, quoting its comment: "The
-            // fallback "freedesktop" theme identifies itself as
-            // "Default" with no comment nor translations which can get
-            // confused with the system's default theme" -> i18nc("Name
-            // of the fallback \"freedesktop\" sound theme",
-            // "FreeDesktop")). Confirmed present in the installed
-            // kcm_soundtheme.so via `strings`. Reproduced so this
-            // dropdown shows the same label System Settings does;
-            // every other theme's name comes from its index.theme.
-            if (id === "freedesktop") name = "FreeDesktop";
-            themes.push({ id: id, name: name, path: fields[2] });
-        }
-        // kcm_soundtheme.cpp:163-173 - sort by display name, keep the
-        // freedesktop fallback last.
-        themes.sort(function (a, b) {
-            if (a.id === "freedesktop") return 1;
-            if (b.id === "freedesktop") return -1;
-            return a.name.localeCompare(b.name);
-        });
-        root.soundThemes = themes;
-        if (themes.length > 0 && root.soundThemeEntry(root.chimePinnedTheme) === null) {
-            root.chimePinnedTheme = themes[0].id;
-        }
-    }
-
-    function soundThemeEntry(id) {
-        for (let i = 0; i < root.soundThemes.length; i++) {
-            if (root.soundThemes[i].id === id) return root.soundThemes[i];
-        }
-        return null;
-    }
-
-    // nameFor() (kcm_soundtheme.cpp:113-120): display name, or the raw
-    // id for anything not in the list.
-    function soundThemeName(id) {
-        const entry = root.soundThemeEntry(id);
-        return entry ? entry.name : id;
-    }
-
-    // Port of devialet-chime's theme.rs resolve(): the configured theme,
-    // then ocean, then freedesktop - first one whose audio-volume-
-    // change.oga exists (soundThemes only holds those). null when none.
-    function resolvedFollowTheme() {
-        const order = [root.desktopSoundTheme !== "" ? root.desktopSoundTheme : "ocean", "ocean", "freedesktop"];
-        for (let i = 0; i < order.length; i++) {
-            const entry = root.soundThemeEntry(order[i]);
-            if (entry) return entry;
-        }
-        return null;
-    }
-
-    function followThemeDisplayName() {
-        const entry = root.resolvedFollowTheme();
-        if (entry) return entry.name;
-        return root.desktopSoundTheme !== "" ? root.desktopSoundTheme : "ocean";
-    }
+    // Theme enumeration, the kdeglobals read, follow-mode resolution and
+    // shell quoting all live in ../ui/SoundThemes.qml since Phase 10.1.3
+    // (moved there verbatim from this file, where 10.1.1 wrote them) so
+    // the widget side resolves a pinned theme with the same code this
+    // dialog lists it with. Own instance, like Theme.qml - see its header.
+    readonly property Ui.SoundThemes soundThemes: Ui.SoundThemes {}
 
     function escapeStyledText(s) {
         return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
     function chimeFileBaseName() {
-        const p = root.chimeSoundFile;
+        const p = root.cfg_chimeSoundFile;
         return p.substring(p.lastIndexOf("/") + 1);
     }
 
+    // What Preview plays for the CURRENT dialog selection - the cfg_
+    // values, applied or not. Same three branches maybeChime() takes on
+    // the widget side via VolumeSettings.chimeFileArgument().
     function chimePreviewPath() {
-        if (root.chimeSourceMode === "follow") {
-            const entry = root.resolvedFollowTheme();
+        if (root.cfg_chimeSourceMode === "follow") {
+            const entry = root.soundThemes.resolveFollow();
             return entry ? entry.path : "";
         }
-        if (root.chimeSourceMode === "theme") {
-            const entry = root.soundThemeEntry(root.chimePinnedTheme);
-            return entry ? entry.path : "";
+        if (root.cfg_chimeSourceMode === "theme") {
+            return root.soundThemes.pathFor(root.cfg_chimePinnedTheme);
         }
-        return root.chimeSoundFile;
+        return root.cfg_chimeSoundFile;
     }
 
     // Mockup setChimeSource() (line 634-640): switch variant, close the
     // theme dropdown if it was open.
     function setChimeSourceMode(mode) {
-        root.chimeSourceMode = mode;
+        root.cfg_chimeSourceMode = mode;
         themeDropdown.close();
-    }
-
-    // Single-quote a path for the executable engine's `/bin/sh -c`
-    // (CLAUDE.md, "devialet-ctl on PATH"), the same quoting Phase
-    // 10.1.3 will need for the real --file argument.
-    function shellQuote(s) {
-        return "'" + String(s).replace(/'/g, "'\\''") + "'";
     }
 
     // Preview: `paplay --volume=65536 <file>` - 65536 is PA_VOLUME_NORM,
@@ -404,7 +292,7 @@ KCM.SimpleKCM {
         const path = root.chimePreviewPath();
         if (path === "") return;
         const cmd = "DEVIALET_PREVIEW_TICK=" + root.chimePreviewTick
-            + " paplay --volume=65536 " + root.shellQuote(path);
+            + " paplay --volume=65536 " + root.soundThemes.shellQuote(path);
         root.chimePreviewTick += 1;
         console.log("[ConfigGeneral] chime preview running:", cmd);
         previewExec.connectSource(cmd);
@@ -413,34 +301,13 @@ KCM.SimpleKCM {
     // Re-read the desktop theme each time the "System theme" variant is
     // shown - a cheap "live" refresh without polling or a file watcher;
     // the read also runs once at page load below.
-    onChimeSourceModeChanged: {
-        if (root.chimeSourceMode === "follow") probeExec.connectSource(root.desktopThemeCommand);
+    onCfg_chimeSourceModeChanged: {
+        if (root.cfg_chimeSourceMode === "follow") root.soundThemes.refreshDesktopTheme();
     }
 
     Component.onCompleted: {
-        probeExec.connectSource(root.soundThemeScanCommand);
-        probeExec.connectSource(root.desktopThemeCommand);
-    }
-
-    // One-shot probes (theme scan + kdeglobals read); dispatched on the
-    // source string. Fire-once-then-detach idiom from contents/ui/'s
-    // devialet-ctl DataSources.
-    P5Support.DataSource {
-        id: probeExec
-        engine: "executable"
-        connectedSources: []
-        onNewData: function (source, data) {
-            const code = data["exit code"];
-            if (code !== 0) {
-                console.log("[ConfigGeneral] probe failed - exit code:", code, "stderr:", data["stderr"], "command:", source);
-            }
-            if (source === root.soundThemeScanCommand) {
-                root.applySoundThemeScan(data["stdout"]);
-            } else if (source === root.desktopThemeCommand) {
-                root.desktopSoundTheme = String(data["stdout"] || "").trim();
-            }
-            disconnectSource(source);
-        }
+        root.soundThemes.scan();
+        root.soundThemes.refreshDesktopTheme();
     }
 
     P5Support.DataSource {
@@ -469,14 +336,14 @@ KCM.SimpleKCM {
             // decodes via libsndfile (.oga is what every installed theme
             // ships).
             nameFilters: ["Audio files (*.oga *.ogg *.opus *.wav *.flac *.mp3)", "All files (*)"]
-            currentFolder: root.chimeSoundFile !== ""
-                ? "file://" + root.chimeSoundFile.substring(0, root.chimeSoundFile.lastIndexOf("/"))
+            currentFolder: root.cfg_chimeSoundFile !== ""
+                ? "file://" + root.cfg_chimeSoundFile.substring(0, root.cfg_chimeSoundFile.lastIndexOf("/"))
                 : StandardPaths.writableLocation(StandardPaths.HomeLocation)
             Component.onCompleted: open()
             onAccepted: {
                 // selectedFile is a file:// URL; the chip and paplay want
                 // a plain local path.
-                root.chimeSoundFile = decodeURIComponent(String(selectedFile).replace(/^file:\/\//, ""));
+                root.cfg_chimeSoundFile = decodeURIComponent(String(selectedFile).replace(/^file:\/\//, ""));
                 chimeFileDialogLoader.active = false;
             }
             onRejected: chimeFileDialogLoader.active = false
@@ -841,7 +708,7 @@ KCM.SimpleKCM {
                     implicitWidth: chimeSegRow.implicitWidth + 6
                     implicitHeight: chimeSegRow.implicitHeight + 6
 
-                    property int activeIndex: root.chimeSourceModes.indexOf(root.chimeSourceMode)
+                    property int activeIndex: root.chimeSourceModes.indexOf(root.cfg_chimeSourceMode)
 
                     RowLayout {
                         id: chimeSegRow
@@ -900,7 +767,7 @@ KCM.SimpleKCM {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     spacing: 20
-                    visible: root.chimeSourceMode === "follow"
+                    visible: root.cfg_chimeSourceMode === "follow"
 
                     // .theme-follow-status: 6px copperBright dot (its
                     // box-shadow glow skipped, as AmpHeader.qml does for
@@ -923,7 +790,7 @@ KCM.SimpleKCM {
                             textFormat: Text.StyledText
                             text: "Following your desktop's sound theme — currently <font color=\""
                                 + root.theme.copperBright + "\"><b>"
-                                + root.escapeStyledText(root.followThemeDisplayName()) + "</b></font>"
+                                + root.escapeStyledText(root.soundThemes.followDisplayName()) + "</b></font>"
                             font.family: root.theme.fontMono
                             font.pixelSize: 11
                             color: root.theme.textDim
@@ -945,7 +812,7 @@ KCM.SimpleKCM {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     spacing: 20
-                    visible: root.chimeSourceMode === "theme"
+                    visible: root.cfg_chimeSourceMode === "theme"
 
                     Label {
                         Layout.maximumWidth: 260
@@ -965,9 +832,9 @@ KCM.SimpleKCM {
 
                         ThemeDropdown {
                             id: themeDropdown
-                            themes: root.soundThemes
-                            currentId: root.chimePinnedTheme
-                            onThemeChosen: (id) => root.chimePinnedTheme = id
+                            themes: root.soundThemes.themes
+                            currentId: root.cfg_chimePinnedTheme
+                            onThemeChosen: (id) => root.cfg_chimePinnedTheme = id
                         }
 
                         ChimeIconButton {
@@ -984,7 +851,7 @@ KCM.SimpleKCM {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     spacing: 20
-                    visible: root.chimeSourceMode === "file"
+                    visible: root.cfg_chimeSourceMode === "file"
 
                     Label {
                         Layout.maximumWidth: 260
@@ -1021,7 +888,7 @@ KCM.SimpleKCM {
                             border.width: 1
                             border.color: root.theme.divider
 
-                            readonly property bool hasFile: root.chimeSoundFile !== ""
+                            readonly property bool hasFile: root.cfg_chimeSoundFile !== ""
 
                             Label {
                                 id: chimeFileLabel
@@ -1043,7 +910,7 @@ KCM.SimpleKCM {
                                 acceptedButtons: Qt.NoButton
                             }
 
-                            ToolTip.text: root.chimeSoundFile
+                            ToolTip.text: root.cfg_chimeSoundFile
                             ToolTip.visible: chimeFileChip.hasFile && chimeFileChipArea.containsMouse
                             ToolTip.delay: 500
                         }
@@ -1057,7 +924,7 @@ KCM.SimpleKCM {
                         ChimeIconButton {
                             kind: "play"
                             tooltip: "Preview"
-                            enabled: root.chimeSoundFile !== ""
+                            enabled: root.cfg_chimeSoundFile !== ""
                             onClicked: root.previewChime()
                         }
                     }
@@ -1222,18 +1089,17 @@ KCM.SimpleKCM {
                         // cfg_ property now, reset from shippedDefaults
                         // like every other row (main.xml default true).
                         root.cfg_chimeEnabled = root.shippedDefaults.chimeEnabled;
-                        // Phase 10.1.1: locally-scoped reset of the chime
-                        // *source* (mockup handleDefaults(), lines 719-725).
-                        // These are plain properties, not cfg_*, so the
-                        // shell's dirty-check does not see them and nothing
-                        // is persisted - expected until 10.1.3 rebinds
-                        // them. Resetting the pinned theme is a deliberate
-                        // step beyond the mockup, whose handleDefaults()
-                        // forgets its dropdown label.
-                        root.setChimeSourceMode("follow");
-                        root.chimePinnedTheme = root.soundThemeEntry("ocean") !== null || root.soundThemes.length === 0
-                            ? "ocean" : root.soundThemes[0].id;
-                        root.chimeSoundFile = "";
+                        // Phase 10.1.3: the chime source is three real cfg_
+                        // properties now, reset from shippedDefaults like
+                        // every other row (main.xml defaults follow /
+                        // ocean / ""). Resetting the pinned theme is a
+                        // deliberate step beyond the mockup, whose
+                        // handleDefaults() (lines 719-725) forgets its
+                        // dropdown label.
+                        root.cfg_chimeSourceMode = root.shippedDefaults.chimeSourceMode;
+                        root.cfg_chimePinnedTheme = root.shippedDefaults.chimePinnedTheme;
+                        root.cfg_chimeSoundFile = root.shippedDefaults.chimeSoundFile;
+                        themeDropdown.close();
                     }
                 }
             }
