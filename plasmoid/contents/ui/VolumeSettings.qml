@@ -39,6 +39,15 @@ QtObject {
     required property real hardLimitDb
     required property real stepDb
     required property real startupVolumeDb
+    // Phase 10.1.2: main.xml `chimeEnabled` - the master on/off for the
+    // Phase 10.1.0 volume-feedback chime. Carried here rather than in a new
+    // settings object because the chime is volume feedback (it fires from
+    // the same stepVolume() paths that consume stepDb/clamp() above) and
+    // both maybeChime() owners already hold this object; the spike's own
+    // deferred-settings note in TODO.md named this file as the forwarding
+    // path. Read live by both maybeChime()s - when false they return
+    // before building a command, so devialet-chime is never spawned.
+    required property bool chimeEnabled
 
     // Reads floorDb/hardLimitDb live on every call (never a cached local),
     // so any binding that calls this stays a normal reactive QML binding -

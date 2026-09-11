@@ -6829,6 +6829,76 @@ architecture decisions; this file is just sequencing and status.
     (user-local override of a system theme's index) not replicated -
     first dir wins.
 
+- [x] **Phase 10.1.2 — Volume feedback chime: enable/disable, wired
+      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
+      `chimeEnabled` (Bool, default true — the soaked 10.1.0 behavior
+      becomes the shipped default). Rebind 10.1.1's master toggle from
+      local state to `cfg_chimeEnabled`. Wire the actual gate:
+      `maybeChime()` in both `CompactRepresentation.qml` and
+      `FlyoutContent.qml` checks `chimeEnabled` alongside the existing
+      `activeSourceName`/`confirmedVolumeDb` checks.
+  - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
+    Optical 1 — no chime, no `devialet-chime` invocation in the
+    journal at all (not just silent gain). Toggle back on, same soak
+    protocol as the spike's build log (one tick up/down, five fast
+    ticks, non-Optical source) reproduces the merged behavior exactly.
+    Restart the widget with it off; confirm it loads off, not
+    reverting to the shipped default.
+  - **Done 2026-09-11, owner soak passed on every point ("everything
+    looks good").** Branch `feature/chime-settings`. Files: `main.xml`
+    (+`chimeEnabled`, Bool, default true - the chime IS the soaked
+    10.1.0 behavior, so an upgrade must not silently lose it),
+    `ConfigGeneral.qml` (`cfg_chimeEnabled` + `cfg_chimeEnabledDefault`
+    twin, `shippedDefaults.chimeEnabled`, switch rebound, the 10.1.1
+    local `chimeEnabled` removed, Defaults handler resets it from
+    shippedDefaults like every other row), `VolumeSettings.qml`
+    (+`required property bool chimeEnabled`), `main.qml` (bound from
+    `Plasmoid.configuration.chimeEnabled` next to the four volume
+    entries), `CompactRepresentation.qml` / `FlyoutContent.qml`
+    (`maybeChime()` returns first thing when it is false - no command
+    built, no process), and `SettingsSwitch.qml` + its three callers
+    (see below). chimeSourceMode / chimePinnedTheme / chimeSoundFile
+    and their UI untouched - still local-only until 10.1.3.
+  - **Precedent followed for the ui/-side read**: `VolumeSettings.qml`,
+    the root-anchored QtObject `main.qml` binds from
+    `Plasmoid.configuration.*` (main.qml:125-128) and forwards as a
+    `required property` through CompactRepresentation -> FlyoutPopup ->
+    FlyoutContent (CLAUDE.md "Shared cross-view state"). Both
+    `maybeChime()` owners already held it, the chime fires from the
+    same stepVolume() paths that consume `stepDb`/`clamp()`, and the
+    spike's own deferred-settings note above had already named this
+    file as the forwarding path - so no new settings object.
+  - **Found and fixed on the way (outside the brief's file list,
+    flagged)**: `SettingsSwitch.qml` used to write `checked = !checked`
+    itself on click. That imperative assignment silently broke the
+    caller's `checked: root.cfg_x` binding on the first click, after
+    which a Defaults press or the shell pushing a stored value in
+    changed the cfg value but not the switch. Caught by the standalone
+    driver on the chime toggle (Defaults set cfg_chimeEnabled true,
+    switch stayed off); the Transparency toggle had the identical
+    latent defect since 9.1.0. Now stateless like DbStepper: emits
+    `toggled(bool)`, callers do `onToggled: (c) => root.cfg_x = c`;
+    the "Launch at login" placeholder flips its own literal so it still
+    visibly toggles. Driver re-run: after a manual click, an external
+    cfg write moves both cfg-bound switches; toggle-off-then-Defaults
+    restores value AND visual on both.
+  - **Verified**: Qt 6 qmllint clean on all seven files (the one
+    `FlyoutContent.qml:834` layout warning pre-exists at HEAD,
+    unrelated); `main.xml` well-formed; installed copy byte-identical
+    to the repo; three `plasmashell --replace` reloads with no
+    "unable to assign"/plasmoid errors in the shell log. Owner soak:
+    toggle off + Apply + Optical 1 scroll -> no `devialet-chime` line
+    in the journal at all; toggle on -> the 10.1.0 soak protocol (one
+    tick up/down, five fast ticks, non-Optical source silent)
+    reproduced exactly; restart with it off loaded off (appletsrc
+    `chimeEnabled=false` read back before the restart); restart with
+    it on loaded on - note the key is then *absent* from appletsrc,
+    not `true`: KConfigXT deletes a key set back to its kcfg default,
+    so the widget loads from main.xml's default, which is also exactly
+    the never-touched-upgrade path. Defaults resets the toggle via the
+    real KConfig default; source-mode controls still local-only and
+    reset on reopen as 10.1.1 left them.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -6882,22 +6952,6 @@ architecture decisions; this file is just sequencing and status.
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
       
-- [ ] **Phase 10.1.2 — Volume feedback chime: enable/disable, wired
-      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
-      `chimeEnabled` (Bool, default true — the soaked 10.1.0 behavior
-      becomes the shipped default). Rebind 10.1.1's master toggle from
-      local state to `cfg_chimeEnabled`. Wire the actual gate:
-      `maybeChime()` in both `CompactRepresentation.qml` and
-      `FlyoutContent.qml` checks `chimeEnabled` alongside the existing
-      `activeSourceName`/`confirmedVolumeDb` checks.
-  - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
-    Optical 1 — no chime, no `devialet-chime` invocation in the
-    journal at all (not just silent gain). Toggle back on, same soak
-    protocol as the spike's build log (one tick up/down, five fast
-    ticks, non-Optical source) reproduces the merged behavior exactly.
-    Restart the widget with it off; confirm it loads off, not
-    reverting to the shipped default.
-
 - [ ] **Phase 10.1.3 — Volume feedback chime: source selection, wired
       for real.** Depends on 10.1.1's UI existing. Add `main.xml`
       `chimeSourceMode` (String, default "follow"), `chimePinnedTheme`

@@ -220,6 +220,11 @@ Item {
     }
 
     function maybeChime(targetDb) {
+        // Phase 10.1.2: the ConfigDialog's master toggle (main.xml
+        // chimeEnabled, forwarded via VolumeSettings). Checked first so an
+        // off toggle never spawns devialet-chime at all - not a silenced
+        // or gained-down run, no process.
+        if (!root.volumeSettings.chimeEnabled) return;
         if (!root.isPcSourceActive()) return;
         const confirmed = root.pendingAmpState.confirmedVolumeDb;
         if (typeof confirmed !== "number" || typeof targetDb !== "number") return;

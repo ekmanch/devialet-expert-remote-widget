@@ -167,7 +167,8 @@ KCM.SimpleKCM {
         volumeStepDb: 1.0,
         startupVolumeDb: -40.0,
         volumeFloorDb: -45.0,
-        hardLimitDb: -10.0
+        hardLimitDb: -10.0,
+        chimeEnabled: true
     })
 
     // Read-only live count for the "Forget All (N)" button's idle label -
@@ -205,16 +206,27 @@ KCM.SimpleKCM {
         }
     }
 
-    // ---- Phase 10.1.1: Volume Feedback chime - local UI state only ----
+    // ---- Phase 10.1.2: the master chime toggle, wired for real ----
+    // main.xml `chimeEnabled` - same cfg_<entryName> + cfg_<name>Default
+    // convention as cfg_transparencyEnabled above (the shell pushes the
+    // stored value in on open, reads it back on Apply/OK, and its generic
+    // dirty-check drives the Apply button). Read on the widget side by
+    // both maybeChime()s through VolumeSettings.qml (main.qml binds it
+    // from Plasmoid.configuration.chimeEnabled, like the four volume
+    // entries).
+    property bool cfg_chimeEnabled: true
+    readonly property bool cfg_chimeEnabledDefault: root.shippedDefaults.chimeEnabled
+
+    // ---- Phase 10.1.1: Volume Feedback chime source - local UI state only ----
     // Deliberately plain properties, NOT cfg_-prefixed: no main.xml entry
     // exists for any of these yet, and a cfg_ name would make KCMUtils'
     // generic loader demand a cfg_*Default twin and try to persist the
-    // value on Apply/OK. Persistence is Phase 10.1.2 (chimeEnabled) and
-    // 10.1.3 (source mode / pinned theme / file), which rebind these to
-    // real cfg_ properties. Until then the values reset on every dialog
-    // open - expected, not a bug. Shape mirrors the mockup's own DOM
-    // state (v16 mockup lines 473-541 / 625-657).
-    property bool chimeEnabled: true
+    // value on Apply/OK. Persistence is Phase 10.1.3 (source mode /
+    // pinned theme / file), which rebinds these to real cfg_ properties
+    // (the master toggle already moved to cfg_chimeEnabled above in
+    // 10.1.2). Until then the values reset on every dialog open -
+    // expected, not a bug. Shape mirrors the mockup's own DOM state (v16
+    // mockup lines 473-541 / 625-657).
     readonly property var chimeSourceModes: ["follow", "theme", "file"]
     property string chimeSourceMode: "follow"
     // Sound-theme directory id (what kdeglobals stores and what
@@ -533,7 +545,10 @@ KCM.SimpleKCM {
             SettingsSwitch {
                 id: transparencySwitch
                 checked: root.cfg_transparencyEnabled
-                onCheckedChanged: root.cfg_transparencyEnabled = checked
+                // Phase 10.1.2: onToggled, not onCheckedChanged - see
+                // SettingsSwitch.qml's header for the broken-binding bug
+                // the old self-toggling shape had.
+                onToggled: (checked) => root.cfg_transparencyEnabled = checked
             }
         }
 
@@ -786,8 +801,8 @@ KCM.SimpleKCM {
 
             SettingsSwitch {
                 id: chimeSwitch
-                checked: root.chimeEnabled
-                onCheckedChanged: root.chimeEnabled = checked
+                checked: root.cfg_chimeEnabled
+                onToggled: (checked) => root.cfg_chimeEnabled = checked
             }
         }
 
@@ -1123,7 +1138,9 @@ KCM.SimpleKCM {
             // systemd's own enablement state is the source of truth, not a
             // stored bool), so this default only affects what the toggle
             // visually shows before that wiring lands.
-            SettingsSwitch { id: loginSwitch; checked: true }
+            // Display-only placeholder until its own wiring phase; flips
+            // its own literal on click so it still visibly toggles.
+            SettingsSwitch { id: loginSwitch; checked: true; onToggled: (checked) => loginSwitch.checked = checked }
         }
 
         // ---- Reset ----
@@ -1201,15 +1218,18 @@ KCM.SimpleKCM {
                         root.cfg_hardLimitDb = root.dbRangeMax;
                         root.cfg_volumeFloorDb = root.shippedDefaults.volumeFloorDb;
                         root.cfg_hardLimitDb = root.shippedDefaults.hardLimitDb;
-                        // Phase 10.1.1: locally-scoped reset of the Volume
-                        // Feedback section (mockup handleDefaults(), lines
-                        // 719-725). These are plain properties, not cfg_*,
-                        // so the shell's dirty-check does not see them and
-                        // nothing is persisted - expected until 10.1.2/
-                        // 10.1.3 rebind them. Resetting the pinned theme
-                        // is a deliberate step beyond the mockup, whose
-                        // handleDefaults() forgets its dropdown label.
-                        root.chimeEnabled = true;
+                        // Phase 10.1.2: the master chime toggle is a real
+                        // cfg_ property now, reset from shippedDefaults
+                        // like every other row (main.xml default true).
+                        root.cfg_chimeEnabled = root.shippedDefaults.chimeEnabled;
+                        // Phase 10.1.1: locally-scoped reset of the chime
+                        // *source* (mockup handleDefaults(), lines 719-725).
+                        // These are plain properties, not cfg_*, so the
+                        // shell's dirty-check does not see them and nothing
+                        // is persisted - expected until 10.1.3 rebinds
+                        // them. Resetting the pinned theme is a deliberate
+                        // step beyond the mockup, whose handleDefaults()
+                        // forgets its dropdown label.
                         root.setChimeSourceMode("follow");
                         root.chimePinnedTheme = root.soundThemeEntry("ocean") !== null || root.soundThemes.length === 0
                             ? "ocean" : root.soundThemes[0].id;

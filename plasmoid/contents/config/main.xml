@@ -74,5 +74,22 @@
     <entry name="startupVolumeDb" type="Double">
       <default>-40.0</default>
     </entry>
+
+    <!-- Phase 10.1.2: master on/off for the volume-feedback chime (Phase
+         10.1.0's devialet-chime on every scroll tick while Optical 1 is
+         the amp's source), per the Volume Feedback section of
+         design/mockups/settings_window/devialet_config_dialog_mockup_v16_chime_source.html.
+         Default true: the chime IS the shipped, owner-soaked 10.1.0
+         behavior, so existing installs must not silently lose it when
+         this entry first appears. Consumed by both maybeChime()s
+         (CompactRepresentation.qml / FlyoutContent.qml) via
+         VolumeSettings.qml, bound in main.qml exactly like the four
+         entries above - when false, devialet-chime is never spawned at
+         all, not just gained down. The chime's *source* (mode / pinned
+         theme / custom file) is still local-only ConfigDialog state -
+         Phase 10.1.3 adds those entries. -->
+    <entry name="chimeEnabled" type="Bool">
+      <default>true</default>
+    </entry>
   </group>
 </kcfg>

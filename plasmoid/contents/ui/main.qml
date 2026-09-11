@@ -126,6 +126,9 @@ PlasmoidItem {
         hardLimitDb: Plasmoid.configuration.hardLimitDb
         stepDb: Plasmoid.configuration.volumeStepDb
         startupVolumeDb: Plasmoid.configuration.startupVolumeDb
+        // Phase 10.1.2: same live binding shape as the four above - a
+        // ConfigDialog Apply/OK flips it in place, no restart needed.
+        chimeEnabled: Plasmoid.configuration.chimeEnabled
 
         // Phase 8.4.0: floorDb/hardLimitDb above are ordinary live bindings
         // to Plasmoid.configuration.* - a single ConfigDialog Apply/OK click
