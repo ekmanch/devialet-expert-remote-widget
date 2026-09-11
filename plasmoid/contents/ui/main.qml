@@ -126,6 +126,18 @@ PlasmoidItem {
         hardLimitDb: Plasmoid.configuration.hardLimitDb
         stepDb: Plasmoid.configuration.volumeStepDb
         startupVolumeDb: Plasmoid.configuration.startupVolumeDb
+        // Phase 10.1.2: same live binding shape as the four above - a
+        // ConfigDialog Apply/OK flips it in place, no restart needed.
+        chimeEnabled: Plasmoid.configuration.chimeEnabled
+        // Phase 10.1.3: the chime's sound source, same shape. The pinned
+        // theme is resolved to its file by the SoundThemes instance below
+        // (pathFor() reads its `themes`, so this re-evaluates when the
+        // scan lands, and again after the re-scan a pin change triggers).
+        chimeSourceMode: Plasmoid.configuration.chimeSourceMode
+        chimePinnedTheme: Plasmoid.configuration.chimePinnedTheme
+        chimeSoundFile: Plasmoid.configuration.chimeSoundFile
+        chimePinnedThemePath: soundThemes.pathFor(Plasmoid.configuration.chimePinnedTheme)
+        soundThemes: soundThemes
 
         // Phase 8.4.0: floorDb/hardLimitDb above are ordinary live bindings
         // to Plasmoid.configuration.* - a single ConfigDialog Apply/OK click
@@ -208,6 +220,19 @@ PlasmoidItem {
     // (and, from Phase 9.2.0, the OSD toast/hover tooltip) are not
     // guaranteed co-resident, so anything meant to be shared between them
     // can't live inside any one of them.
+    // Phase 10.1.3: the widget side's own theme-id -> file resolver, the
+    // same SoundThemes.qml the ConfigDialog lists themes with (see its
+    // header for why it is per-file rather than forwarded). Scans once at
+    // load and again whenever the pinned theme changes - a theme installed
+    // after the shell started and then picked in the dialog resolves
+    // without a restart; one short `sh` per change.
+    SoundThemes {
+        id: soundThemes
+        readonly property string watchedPinnedTheme: Plasmoid.configuration.chimePinnedTheme
+        onWatchedPinnedThemeChanged: soundThemes.scan()
+        Component.onCompleted: soundThemes.scan()
+    }
+
     TransparencySettings {
         id: transparencySettings
         enabled: Plasmoid.configuration.transparencyEnabled

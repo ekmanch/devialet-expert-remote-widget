@@ -39,6 +39,46 @@ QtObject {
     required property real hardLimitDb
     required property real stepDb
     required property real startupVolumeDb
+    // Phase 10.1.2: main.xml `chimeEnabled` - the master on/off for the
+    // Phase 10.1.0 volume-feedback chime. Carried here rather than in a new
+    // settings object because the chime is volume feedback (it fires from
+    // the same stepVolume() paths that consume stepDb/clamp() above) and
+    // both maybeChime() owners already hold this object; the spike's own
+    // deferred-settings note in TODO.md named this file as the forwarding
+    // path. Read live by both maybeChime()s - when false they return
+    // before building a command, so devialet-chime is never spawned.
+    required property bool chimeEnabled
+    // Phase 10.1.3: the chime's sound source (main.xml chimeSourceMode /
+    // chimePinnedTheme / chimeSoundFile) plus the pinned theme's resolved
+    // file, all bound in main.qml. Paths are RAW here; quoting for the
+    // executable engine's /bin/sh -c happens once, in chimeFileArgument()
+    // below, via SoundThemes.shellQuote - the same helper ConfigGeneral's
+    // Preview uses.
+    required property string chimeSourceMode
+    required property string chimePinnedTheme
+    required property string chimeSoundFile
+    // main.qml's own SoundThemes instance resolves this
+    // (soundThemes.pathFor(chimePinnedTheme)): "" when the id isn't an
+    // installed theme that has an audio-volume-change.oga.
+    required property string chimePinnedThemePath
+    required property SoundThemes soundThemes
+
+    // The --file suffix for devialet-chime's command string:
+    //   ""     - "follow" mode (or an unrecognized mode string from a
+    //            hand-edited config): no --file at all, byte for byte the
+    //            Phase 10.1.0 command; devialet-chime resolves kdeglobals'
+    //            theme itself.
+    //   " --file '<path>'" - a resolvable pinned theme, or a picked file.
+    //   null   - the mode needs a file but has none (pinned id not
+    //            installed / has no sound, or nothing picked yet). Callers
+    //            skip the chime and warn - never a silent fall-back to
+    //            another mode.
+    function chimeFileArgument() {
+        if (root.chimeSourceMode !== "theme" && root.chimeSourceMode !== "file") return "";
+        const path = root.chimeSourceMode === "theme" ? root.chimePinnedThemePath : root.chimeSoundFile;
+        if (path === "") return null;
+        return " --file " + root.soundThemes.shellQuote(path);
+    }
 
     // Reads floorDb/hardLimitDb live on every call (never a cached local),
     // so any binding that calls this stays a normal reactive QML binding -

@@ -6702,6 +6702,303 @@ architecture decisions; this file is just sequencing and status.
       disabled it in WirePlumber the same day), so a clipped onset is
       not sink resume.
 
+- [x] **Phase 10.1.1 — Volume feedback chime: ConfigDialog UI (visual
+      only, no persistence yet).** Build the "Volume Feedback" section
+      of `ConfigGeneral.qml` to match the approved mockup exactly:
+      `design/mockups/settings_window/devialet_config_dialog_mockup_v16_chime_source.html`.
+      Master toggle, three-way segmented control ("System theme" /
+      "Choose theme" / "Custom file"), the three variant blocks, and
+      the theme dropdown / file-Browse-Preview rows — all driven by
+      local QML state, the same shape as the mockup's own JS state,
+      NOT yet backed by `main.xml`. No new KConfig entries in this
+      phase. Values are not expected to survive Apply/OK or a dialog
+      reopen yet — that's what 10.1.2/10.1.3 add. Two pieces of this
+      are real functionality despite the no-persistence scope, since
+      they don't depend on a stored setting: the "follow" variant's
+      "currently <theme>" status line needs a genuine live read of
+      kdeglobals' `[Sounds] Theme` key (investigate the idiomatic
+      no-new-dependency way — a one-shot `kreadconfig6` shell via the
+      existing executable-engine pattern is one candidate, check for
+      a cleaner QML-native option first); and Preview needs to
+      actually play the currently-selected sound at its own natural
+      level (no amp-latency gain compensation — this isn't a scroll
+      tick, so don't route it through `devialet-chime`, just `paplay`
+      directly). Theme-dropdown enumeration should investigate real
+      installed sound themes with an `audio-volume-change.oga` file
+      rather than a hardcoded list, mirroring how far
+      `SoundThemeConfig` (Phase 10.0.0's report) goes for *listing*,
+      not just reading, the active theme.
+  - Verify: dialog opens, section matches the mockup visually; toggle
+    disables/enables the sub-section; segmented control swaps the
+    three variant blocks; theme dropdown opens/closes/selects; Browse
+    opens a real file dialog and updates the chip; Preview audibly
+    plays the correct sound for whichever variant is active. Reopening
+    the dialog or restarting the widget is allowed to reset these
+    values to their initial state — expected in this phase, not a bug.
+    Explicitly confirm scrolling on Optical 1 still produces exactly
+    the Phase 10.1.0 merged behavior, untouched by this phase.
+  - **Done 2026-09-11, owner soak passed ("Looks great!", four
+    screenshots of the real ConfigDialog: follow / theme dropdown
+    open / custom-file empty chip / master toggle off).** Branch
+    `feature/chime-settings`. Files: `ConfigGeneral.qml` (section +
+    local state + probes + Preview + FileDialog loader + Defaults
+    reset), new `ThemeDropdown.qml` and `ChimeIconButton.qml`,
+    `SettingsRow.qml` (+`topPadding`/`bottomPadding`, defaults
+    unchanged). Nothing under `contents/ui/`, `crates/`, or `main.xml`
+    touched - `git diff --stat` shows only the four config files;
+    `devialet-chime --dry-run` and the daemon binary unchanged.
+  - **Owner decisions during planning**: (a) empty file chip shows a
+    dimmed "No file chosen" placeholder with Preview disabled, not the
+    mockup's literal `chime-default.ogg` (no such file; "" is 10.1.3's
+    nothing-picked sentinel). (b) Theme labels mirror
+    `kcm_soundtheme` exactly - investigated from real source
+    (plasma-workspace, branch Plasma/6.7,
+    `kcms/soundtheme/kcm_soundtheme.cpp`, cross-checked against the
+    installed `kcm_soundtheme.so` via `strings`): display name is
+    `index.theme` `[Sound Theme] Name=` (`ThemeInfo::ThemeInfo`,
+    :410, `readEntry("Name", themeId)`), the fallback `freedesktop`
+    theme is a **hardcoded special case** renamed "FreeDesktop"
+    (:71 `FALLBACK_THEME`, :153-158, KDE's comment: it "identifies
+    itself as 'Default' ... which can get confused with the system's
+    default theme"), unknown ids fall back to the raw id
+    (`nameFor()`, :113-120), sorted by name with freedesktop last
+    (:163-173). The special case lives in `applySoundThemeScan()`
+    with that citation so nobody mistakes it for a bug or an
+    arbitrary choice; the directory id is what is stored/passed
+    everywhere.
+  - **Mechanisms used** (all investigated, none assumed):
+    - kdeglobals read: one-shot `kreadconfig6 --file kdeglobals
+      --group Sounds --key Theme` through the P5Support executable
+      engine, re-run whenever "System theme" is selected. No KConfig
+      QML type exists for a plasmoid on this system - `org.kde.config`
+      exports only `KAuthorized` and `WindowStateSaver`
+      (`KF6ConfigQml.qmltypes`), `org.kde.kcmutils`'
+      `SettingStateBinding` needs a C++ skeleton.
+    - Theme enumeration: KDE's KCM does it in C++ (compiled into the
+      plugin, no QML on disk; `org.kde.kirigamiaddons.sounds` lists
+      sounds *within* one theme, not themes). So a one-shot `/bin/sh`
+      walk of `$XDG_DATA_HOME/sounds` then each `$XDG_DATA_DIRS/sounds`
+      (the KCM's `QStandardPaths::locateAll` order, first id wins),
+      keeping only dirs with an `index.theme` (the KCM's validity
+      rule, drops `alsa`) AND `stereo/audio-volume-change.oga` (the
+      exact file theme.rs plays, no `Inherits=` walk), `Name` via
+      `kreadconfig6 --file <dir>/index.theme --group "Sound Theme"
+      --key Name --default <id>` (localized like the KCM's readEntry).
+      Yields ocean + freedesktop here.
+    - Preview: `DEVIALET_PREVIEW_TICK=<n> paplay --volume=65536
+      '<path>'` - unity (= what devialet-chime sends at delta 0 /
+      headroom 0), not routed through `devialet-chime`; the env-prefix
+      token keeps every command string unique for the process-wide
+      executable engine (same reason as `--tick`).
+    - Browse: `QtQuick.Dialogs.FileDialog` (Qt 6.11.2) in a `Loader`,
+      the shape of KDE's own kcm_soundtheme `main.qml:242-258`;
+      `selectedFile` URL decoded to a plain path.
+    - Icons: mockup SVG path data verbatim via `QtQuick.Shapes`
+      `PathSvg` (ActionRow.qml precedent), no asset files.
+  - **Verified**: Qt 6 qmllint clean on all four files (NOTE:
+    `/usr/bin/qmllint` is Qt 5's "qmllint 1.0" and exits 255 silently
+    on Bound-pragma files - use `/usr/lib/qt6/bin/qmllint -I
+    /usr/lib/qt6/qml`; earlier phases' "qmllint clean" may have used
+    the wrong one). `pragma ComponentBehavior: Bound` added to
+    `ConfigGeneral.qml`, which also cleared the pre-existing
+    unqualified-access warnings in the step-size segmented control;
+    the only remaining diagnostic is the deliberate unused plasmoid
+    import (Info). Scripting-API `showConfigurationInterface()` again
+    opened no window (same as the 8.x note), so a standalone driver
+    (`/usr/lib/qt6/bin/qml` + `QtTest` `TestEvent`, ConfigGeneral in
+    a plain Window - `KCM.SimpleKCM` guards its `kcm` reference)
+    clicked every control: variant switching, dropdown open / select /
+    Escape / press-outside, chip placeholder + basename + elision,
+    disabled section ignoring clicks, Defaults reset, three real
+    Preview plays exiting 0 with the logged command string above.
+    Scratch `XDG_CONFIG_HOME`/`XDG_DATA_HOME` on the driver process
+    (inherited by the engine's subprocesses) confirmed "currently
+    Ocean" with `Theme=ocean`, the ocean fallback with no `[Sounds]`
+    key, and a nameless `zzz-test` theme listing under its raw id
+    between Ocean and FreeDesktop - the owner's real kdeglobals was
+    never modified. Found and fixed by that run: the dropdown Popup
+    needed `focus: true` for `CloseOnEscape` to work (as the flyout
+    overlays already have). Owner soak then confirmed the real
+    dialog, Browse (native KDE file dialog) and Optical 1 scrolling
+    unchanged from 10.1.0.
+  - **Approximations, flagged**: dropdown list box-shadow and status
+    dot glow not drawn (AmpHeader/AmpListOverlay precedent); mockup
+    7px radii rendered as `theme.radiusSm` (8) per DbStepper
+    precedent; the follow status line refreshes on mode switch, not
+    via a file watcher; `index.theme` cascading across data dirs
+    (user-local override of a system theme's index) not replicated -
+    first dir wins.
+
+- [x] **Phase 10.1.2 — Volume feedback chime: enable/disable, wired
+      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
+      `chimeEnabled` (Bool, default true — the soaked 10.1.0 behavior
+      becomes the shipped default). Rebind 10.1.1's master toggle from
+      local state to `cfg_chimeEnabled`. Wire the actual gate:
+      `maybeChime()` in both `CompactRepresentation.qml` and
+      `FlyoutContent.qml` checks `chimeEnabled` alongside the existing
+      `activeSourceName`/`confirmedVolumeDb` checks.
+  - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
+    Optical 1 — no chime, no `devialet-chime` invocation in the
+    journal at all (not just silent gain). Toggle back on, same soak
+    protocol as the spike's build log (one tick up/down, five fast
+    ticks, non-Optical source) reproduces the merged behavior exactly.
+    Restart the widget with it off; confirm it loads off, not
+    reverting to the shipped default.
+  - **Done 2026-09-11, owner soak passed on every point ("everything
+    looks good").** Branch `feature/chime-settings`. Files: `main.xml`
+    (+`chimeEnabled`, Bool, default true - the chime IS the soaked
+    10.1.0 behavior, so an upgrade must not silently lose it),
+    `ConfigGeneral.qml` (`cfg_chimeEnabled` + `cfg_chimeEnabledDefault`
+    twin, `shippedDefaults.chimeEnabled`, switch rebound, the 10.1.1
+    local `chimeEnabled` removed, Defaults handler resets it from
+    shippedDefaults like every other row), `VolumeSettings.qml`
+    (+`required property bool chimeEnabled`), `main.qml` (bound from
+    `Plasmoid.configuration.chimeEnabled` next to the four volume
+    entries), `CompactRepresentation.qml` / `FlyoutContent.qml`
+    (`maybeChime()` returns first thing when it is false - no command
+    built, no process), and `SettingsSwitch.qml` + its three callers
+    (see below). chimeSourceMode / chimePinnedTheme / chimeSoundFile
+    and their UI untouched - still local-only until 10.1.3.
+  - **Precedent followed for the ui/-side read**: `VolumeSettings.qml`,
+    the root-anchored QtObject `main.qml` binds from
+    `Plasmoid.configuration.*` (main.qml:125-128) and forwards as a
+    `required property` through CompactRepresentation -> FlyoutPopup ->
+    FlyoutContent (CLAUDE.md "Shared cross-view state"). Both
+    `maybeChime()` owners already held it, the chime fires from the
+    same stepVolume() paths that consume `stepDb`/`clamp()`, and the
+    spike's own deferred-settings note above had already named this
+    file as the forwarding path - so no new settings object.
+  - **Found and fixed on the way (outside the brief's file list,
+    flagged)**: `SettingsSwitch.qml` used to write `checked = !checked`
+    itself on click. That imperative assignment silently broke the
+    caller's `checked: root.cfg_x` binding on the first click, after
+    which a Defaults press or the shell pushing a stored value in
+    changed the cfg value but not the switch. Caught by the standalone
+    driver on the chime toggle (Defaults set cfg_chimeEnabled true,
+    switch stayed off); the Transparency toggle had the identical
+    latent defect since 9.1.0. Now stateless like DbStepper: emits
+    `toggled(bool)`, callers do `onToggled: (c) => root.cfg_x = c`;
+    the "Launch at login" placeholder flips its own literal so it still
+    visibly toggles. Driver re-run: after a manual click, an external
+    cfg write moves both cfg-bound switches; toggle-off-then-Defaults
+    restores value AND visual on both.
+  - **Verified**: Qt 6 qmllint clean on all seven files (the one
+    `FlyoutContent.qml:834` layout warning pre-exists at HEAD,
+    unrelated); `main.xml` well-formed; installed copy byte-identical
+    to the repo; three `plasmashell --replace` reloads with no
+    "unable to assign"/plasmoid errors in the shell log. Owner soak:
+    toggle off + Apply + Optical 1 scroll -> no `devialet-chime` line
+    in the journal at all; toggle on -> the 10.1.0 soak protocol (one
+    tick up/down, five fast ticks, non-Optical source silent)
+    reproduced exactly; restart with it off loaded off (appletsrc
+    `chimeEnabled=false` read back before the restart); restart with
+    it on loaded on - note the key is then *absent* from appletsrc,
+    not `true`: KConfigXT deletes a key set back to its kcfg default,
+    so the widget loads from main.xml's default, which is also exactly
+    the never-touched-upgrade path. Defaults resets the toggle via the
+    real KConfig default; source-mode controls still local-only and
+    reset on reopen as 10.1.1 left them.
+
+- [x] **Phase 10.1.3 — Volume feedback chime: source selection, wired
+      for real.** Depends on 10.1.1's UI existing. Add `main.xml`
+      `chimeSourceMode` (String, default "follow"), `chimePinnedTheme`
+      (String, default "ocean"), `chimeSoundFile` (String, default
+      "" — sentinel for "nothing picked"; investigate whether
+      KConfigXT has a cleaner convention already used elsewhere in
+      this project before defaulting to an empty string). Rebind
+      10.1.1's segmented control, theme dropdown, and file chip from
+      local state to these `cfg_` properties. Wire actual source
+      resolution into both `maybeChime()`s' `devialet-chime`
+      invocation: "follow" passes no `--file` (today's merged
+      behavior, kdeglobals-driven); "theme" resolves
+      `chimePinnedTheme`'s `audio-volume-change.oga` path and passes
+      it via `--file`; "file" passes `chimeSoundFile` directly,
+      single-quoted for the `/bin/sh -c` path per the executable
+      engine's existing invocation pattern.
+  - Verify: "follow" mode — chime follows kdeglobals' theme exactly as
+    the merged Phase 10.1.0 behavior does. "theme" mode — chime plays
+    the pinned theme's sound regardless of kdeglobals, confirmed via
+    the journal's logged `file=` value. "file" mode — chime plays the
+    picked file, same journal confirmation. Restart the widget;
+    confirm the selected mode and its associated value persist,
+    aren't reset to defaults. Pick a nonexistent/invalid file path
+    (simulate a moved or deleted file) — confirm `devialet-chime`'s
+    existing failure handling degrades sanely (no chime, non-zero
+    exit logged) rather than crashing the exec engine or silently
+    reverting.
+      
+  - **Done 2026-09-11, owner soak: "everything seems to work".** Branch
+    `feature/chime-settings`. Files: `main.xml` (+`chimeSourceMode`
+    String default `follow`, `chimePinnedTheme` String default `ocean`
+    - the sound-theme DIRECTORY id, never the display name -
+    `chimeSoundFile` String default "" - no other "unset" convention
+    exists in this file and KConfigXT's String default is just an
+    empty `<default>`, so the empty-string sentinel stands), new
+    `contents/ui/SoundThemes.qml`, `ConfigGeneral.qml`,
+    `VolumeSettings.qml`, `main.qml`, `CompactRepresentation.qml`,
+    `FlyoutContent.qml`. `chimeEnabled` (10.1.2) untouched.
+  - **Theme-to-path resolution: reused, not duplicated.** The whole
+    10.1.1 resolver (the `/bin/sh` XDG scan, `applyScan()` with the
+    kcm_soundtheme.cpp FreeDesktop citation, `entry()`/`nameFor()`/
+    `pathFor()`, the theme.rs-order `resolveFollow()`, `shellQuote()`)
+    moved VERBATIM out of `ConfigGeneral.qml` into
+    `contents/ui/SoundThemes.qml` - a plain QtObject holding its
+    P5Support.DataSource as an object-typed property (Theme.qml's
+    FontLoader shape), instantiated per file like Theme.qml (derived
+    from disk, nothing to keep in sync): the dialog uses it for the
+    dropdown / status line / Preview, `main.qml` for the widget side.
+    No second implementation exists; ConfigGeneral.qml lost ~200
+    lines of it and kept only the UI. The only fresh code is
+    `VolumeSettings.chimeFileArgument()` (a four-line mode switch) and
+    the two `maybeChime()` call sites. Dropped 10.1.1's "unknown
+    pinned id -> snap to first entry" correction: on a cfg_ value it
+    would dirty Apply on every dialog open whenever the stored theme
+    isn't installed; an unknown id now shows as its raw id and
+    resolves to "" (Preview disabled, chime skipped with a warning).
+  - **Wiring**: `ConfigGeneral.qml` - three cfg_ properties with
+    `cfg_*Default` twins and `shippedDefaults` entries; segmented
+    control / ThemeDropdown / file chip / FileDialog / Defaults all
+    rebound; Preview reads the live cfg_ values, so it plays the
+    unapplied dialog selection (soak-confirmed). `VolumeSettings.qml`
+    - the three values + `chimePinnedThemePath` + a `soundThemes`
+    reference, bound in `main.qml` next to `chimeEnabled`; `main.qml`
+    instantiates its own SoundThemes, scanning at load and again
+    whenever the pinned theme changes. Both `maybeChime()`s: "follow"
+    -> the byte-identical 10.1.0 command (no `--file`); "theme"/"file"
+    -> ` --file '<path>'` single-quoted for `/bin/sh -c`; a mode whose
+    file doesn't resolve -> `console.warn` + return, no spawn, never a
+    silent fall-back to another mode. Paths stay raw everywhere;
+    quoting happens once, in `SoundThemes.shellQuote`.
+  - **Verified**: Qt 6 qmllint clean on all seven files (the
+    `FlyoutContent.qml` layout warning pre-exists at HEAD); `main.xml`
+    well-formed (an XML comment may not contain `--`, so "no --file"
+    had to be reworded); installed copy byte-identical; shell restart
+    with no "unable to assign"/plasmoid errors. Standalone drivers:
+    ConfigGeneral - every control writes its cfg_, Preview path right
+    per mode before any Apply, external cfg_ writes update the
+    segmented control and dropdown, uninstalled pinned id shows raw
+    with Preview disabled, Defaults resets all three and leaves
+    chimeEnabled alone; SoundThemes + VolumeSettings directly -
+    follow "" / pinned ocean & freedesktop paths / unknown theme and
+    empty file -> null / unknown mode string -> "" / a path with a
+    space and an apostrophe survives the `sh` round-trip and is found
+    by `ls`. Owner soak (real amp): toggle works in every mode;
+    follow vs pinned theme audibly switches; Optical 1 gate unchanged
+    (a non-Optical source can't be heard on the amp anyway - only the
+    journal's silence proves it, as 10.1.0 already did); Custom file
+    via Browse works with `test-chime.oga` (Ocean's
+    completion-success.oga copied to the repo root, untracked, for the
+    test); deleting that file then scrolling - journal shows every
+    tick spawning with the stale `--file`, `paplay exited with exit
+    status: 1`, exit code 1 per pool slot, next tick fine, dialog
+    still "Custom file" with the old name (by design: the setting is
+    what the user chose; a missing-file cue on the chip is a possible
+    later addition). NOT soaked: restarting the widget in theme/file
+    mode to see the selection survive - persistence rides on the same
+    cfg_/KConfig path 10.1.2 proved with `chimeEnabled` (stored value
+    read back from appletsrc before the restart, kcfg default when the
+    key is absent), not re-proven for these three keys.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -6754,58 +7051,6 @@ architecture decisions; this file is just sequencing and status.
       repo, run install.sh." Keep the manual steps documented separately
       only if 4.6.4's uninstall is deferred and manual removal
       instructions are still needed.
-      
-- [ ] **Phase 10.1.1 — Volume feedback chime: enable/disable setting.**
-      Depends on the `spike/volume-audio-feedback` merge (becomes real
-      Phase 10.1.0 on merge — see that entry's verdict). Add a
-      persisted on/off toggle for the whole chime feature, following
-      the `VolumeSettings.qml`-style shared object pattern already
-      established for other per-file-forwarded settings. `main.xml`
-      gains a `chimeEnabled` bool (default true — the soaked
-      behavior becomes the shipped default). `maybeChime()` in both
-      `CompactRepresentation.qml` and `FlyoutContent.qml` gates on it
-      alongside the existing `activeSourceName`/`confirmedVolumeDb`
-      checks — investigate whether it belongs in the same forwarded
-      settings object as the eventual sound-file setting (10.1.2) or
-      is simpler standalone, rather than assuming one design.
-  - Verify: toggle off in the ConfigDialog, Apply/OK, scroll on
-    Optical 1 — no chime, no `devialet-chime` invocation in the
-    journal at all (not just silent gain). Toggle back on, same soak
-    protocol as the spike's build log (one tick up/down, five fast
-    ticks, non-Optical source) reproduces the merged behavior exactly.
-    Restart the widget with it off; confirm it loads off, not
-    reverting to the shipped default.
-
-- [ ] **Phase 10.1.2 — Volume feedback chime: sound file picker.**
-      Depends on 10.1.1 (or can be done independently if 10.1.1's
-      settings object is scoped to make that easy — decide during
-      10.1.1). The `--file` CLI seam on `devialet-chime` already
-      exists (per the spike's build log) — this phase is the
-      settings-page plumbing, not new binary work. `main.xml` gains a
-      `chimeSoundFile` string entry (default: empty, meaning "follow
-      kdeglobals' configured theme," matching the spike's resolved
-      default behavior — investigate whether an explicit empty-string
-      sentinel is the right way to express "no override" or whether
-      KConfig has a cleaner convention already used elsewhere in this
-      project). ConfigDialog gets a file picker — investigate the
-      right idiomatic Plasma/QML file-picker widget (a native file
-      dialog vs. a themed sound-list picker limited to installed
-      sound themes' `audio-volume-change.oga` files) before assuming
-      a generic file browser is correct; QTBUG-66446's
-      `org.kde.plasma.components.ComboBox` precedent may be relevant
-      if a curated list is chosen over a raw file browser. `--file`
-      gets appended in both `maybeChime()`s only when a non-empty
-      override is set, single-quoted for the `/bin/sh -c` path per
-      the executable engine's existing invocation pattern.
-  - Verify: leave unset — chime follows kdeglobals' theme exactly as
-    the merged spike behavior does. Pick an explicit file — chime
-    plays that file regardless of kdeglobals' theme, confirmed via
-    the journal's logged `file=` value. Restart the widget; confirm
-    the picked file persists and isn't reset to the theme-follow
-    default. Pick a nonexistent/invalid path (simulate a moved or
-    deleted file) — confirm `devialet-chime`'s existing failure
-    handling degrades sanely (no chime, non-zero exit logged) rather
-    than crashing the exec engine or silently reverting.
       
 
 ## Bugs

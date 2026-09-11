@@ -220,12 +220,27 @@ Item {
     }
 
     function maybeChime(targetDb) {
+        // Phase 10.1.2: the ConfigDialog's master toggle (main.xml
+        // chimeEnabled, forwarded via VolumeSettings). Checked first so an
+        // off toggle never spawns devialet-chime at all - not a silenced
+        // or gained-down run, no process.
+        if (!root.volumeSettings.chimeEnabled) return;
         if (!root.isPcSourceActive()) return;
         const confirmed = root.pendingAmpState.confirmedVolumeDb;
         if (typeof confirmed !== "number" || typeof targetDb !== "number") return;
+        // Phase 10.1.3: the ConfigDialog's chime source (VolumeSettings.
+        // chimeFileArgument()): "" in follow mode - no --file, the 10.1.0
+        // command unchanged; " --file '<path>'" for a pinned theme or a
+        // picked file; null when the mode needs a file but none resolves -
+        // skip and warn, never silently fall back to another mode.
+        const fileArg = root.volumeSettings.chimeFileArgument();
+        if (fileArg === null) {
+            console.warn("devialet-chime: source mode", root.volumeSettings.chimeSourceMode, "has no resolvable file - skipping");
+            return;
+        }
         const slot = root.chimeTick % root.chimePool.length;
         const cmd = root.chimeCommand + " --target-db " + targetDb.toFixed(1)
-            + " --confirmed-db " + confirmed.toFixed(1) + " --tick " + root.chimeTick;
+            + " --confirmed-db " + confirmed.toFixed(1) + " --tick " + root.chimeTick + fileArg;
         root.chimeTick += 1;
         console.log("devialet-chime[" + slot + "] running:", cmd);
         root.chimePool[slot].connectSource(cmd);

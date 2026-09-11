@@ -1,3 +1,10 @@
+// Phase 10.1.1: `pragma ComponentBehavior: Bound` added so the Repeater
+// delegates below (the two segmented controls) may reference outer ids
+// (root/theme) with qmllint's blessing - the existing delegates already
+// used `required property` for their model data, which is the only
+// requirement Bound imposes, so no behavior changes.
+pragma ComponentBehavior: Bound
+
 // Phase 4.4.0: our "General" ConfigDialog page - started as just the
 // brand header (icon mark + "Devialet Expert Remote" / "Widget
 // Settings"), per design/mockups/devialet_config_dialog_mockup_v3.html's
@@ -36,6 +43,15 @@ import org.kde.kcmutils as KCM
 import org.kde.kirigami as Kirigami
 import org.kde.plasma.plasmoid
 import org.kde.plasma.workspace.dbus as Dbus
+// Phase 10.1.1: the Volume Feedback section's two real pieces of
+// behavior - reading the desktop's sound theme / enumerating installed
+// themes (P5Support executable engine, same pattern as devialet-ctl in
+// contents/ui/), the Browse file dialog (QtQuick.Dialogs, wrapped in a
+// Loader exactly like KDE's own kcm_soundtheme main.qml), and
+// StandardPaths (QtCore) for that dialog's starting folder.
+import QtCore
+import QtQuick.Dialogs as QtDialogs
+import org.kde.plasma.plasma5support as P5Support
 import "../ui" as Ui
 
 KCM.SimpleKCM {
@@ -151,7 +167,11 @@ KCM.SimpleKCM {
         volumeStepDb: 1.0,
         startupVolumeDb: -40.0,
         volumeFloorDb: -45.0,
-        hardLimitDb: -10.0
+        hardLimitDb: -10.0,
+        chimeEnabled: true,
+        chimeSourceMode: "follow",
+        chimePinnedTheme: "ocean",
+        chimeSoundFile: ""
     })
 
     // Read-only live count for the "Forget All (N)" button's idle label -
@@ -186,6 +206,147 @@ KCM.SimpleKCM {
         onRefreshed: {
             const known = root.unwrap(properties.KnownAmps, []);
             root.knownAmpsCount = known.length;
+        }
+    }
+
+    // ---- Phase 10.1.2: the master chime toggle, wired for real ----
+    // main.xml `chimeEnabled` - same cfg_<entryName> + cfg_<name>Default
+    // convention as cfg_transparencyEnabled above (the shell pushes the
+    // stored value in on open, reads it back on Apply/OK, and its generic
+    // dirty-check drives the Apply button). Read on the widget side by
+    // both maybeChime()s through VolumeSettings.qml (main.qml binds it
+    // from Plasmoid.configuration.chimeEnabled, like the four volume
+    // entries).
+    property bool cfg_chimeEnabled: true
+    readonly property bool cfg_chimeEnabledDefault: root.shippedDefaults.chimeEnabled
+
+    // ---- Phase 10.1.3: the chime source, wired for real ----
+    // main.xml chimeSourceMode / chimePinnedTheme / chimeSoundFile - same
+    // cfg_<entryName> + cfg_<name>Default convention as cfg_chimeEnabled
+    // above. These cfg_ values are the dialog's LIVE selection (the shell
+    // persists them only on Apply/OK), which is exactly what Preview must
+    // reflect. Read on the widget side by both maybeChime()s through
+    // VolumeSettings.qml (bound in main.qml next to chimeEnabled).
+    readonly property var chimeSourceModes: ["follow", "theme", "file"]
+    property string cfg_chimeSourceMode: "follow"
+    // Sound-theme directory id (what kdeglobals stores and what
+    // devialet-chime reads), never the display name.
+    property string cfg_chimePinnedTheme: "ocean"
+    // "" = nothing picked yet (main.xml has no other "unset" convention).
+    property string cfg_chimeSoundFile: ""
+    readonly property string cfg_chimeSourceModeDefault: root.shippedDefaults.chimeSourceMode
+    readonly property string cfg_chimePinnedThemeDefault: root.shippedDefaults.chimePinnedTheme
+    readonly property string cfg_chimeSoundFileDefault: root.shippedDefaults.chimeSoundFile
+    property int chimePreviewTick: 0
+
+    // Theme enumeration, the kdeglobals read, follow-mode resolution and
+    // shell quoting all live in ../ui/SoundThemes.qml since Phase 10.1.3
+    // (moved there verbatim from this file, where 10.1.1 wrote them) so
+    // the widget side resolves a pinned theme with the same code this
+    // dialog lists it with. Own instance, like Theme.qml - see its header.
+    readonly property Ui.SoundThemes soundThemes: Ui.SoundThemes {}
+
+    function escapeStyledText(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function chimeFileBaseName() {
+        const p = root.cfg_chimeSoundFile;
+        return p.substring(p.lastIndexOf("/") + 1);
+    }
+
+    // What Preview plays for the CURRENT dialog selection - the cfg_
+    // values, applied or not. Same three branches maybeChime() takes on
+    // the widget side via VolumeSettings.chimeFileArgument().
+    function chimePreviewPath() {
+        if (root.cfg_chimeSourceMode === "follow") {
+            const entry = root.soundThemes.resolveFollow();
+            return entry ? entry.path : "";
+        }
+        if (root.cfg_chimeSourceMode === "theme") {
+            return root.soundThemes.pathFor(root.cfg_chimePinnedTheme);
+        }
+        return root.cfg_chimeSoundFile;
+    }
+
+    // Mockup setChimeSource() (line 634-640): switch variant, close the
+    // theme dropdown if it was open.
+    function setChimeSourceMode(mode) {
+        root.cfg_chimeSourceMode = mode;
+        themeDropdown.close();
+    }
+
+    // Preview: `paplay --volume=65536 <file>` - 65536 is PA_VOLUME_NORM,
+    // unity, i.e. the sound at its own natural level, which is also
+    // exactly what devialet-chime sends at delta 0 dB / headroom 0.
+    // Deliberately NOT routed through devialet-chime: its entire purpose
+    // is the amp-latency gain compensation, which has no meaning without
+    // a scroll gesture to compensate for. The DEVIALET_PREVIEW_TICK=<n>
+    // prefix is a no-op sh environment assignment whose only job is to
+    // make every command string unique - the executable engine is
+    // shared process-wide and keys jobs by command string, so two
+    // presses within one sound's duration would otherwise collapse into
+    // one process (same reason maybeChime() passes --tick, see
+    // CompactRepresentation.qml).
+    function previewChime() {
+        const path = root.chimePreviewPath();
+        if (path === "") return;
+        const cmd = "DEVIALET_PREVIEW_TICK=" + root.chimePreviewTick
+            + " paplay --volume=65536 " + root.soundThemes.shellQuote(path);
+        root.chimePreviewTick += 1;
+        console.log("[ConfigGeneral] chime preview running:", cmd);
+        previewExec.connectSource(cmd);
+    }
+
+    // Re-read the desktop theme each time the "System theme" variant is
+    // shown - a cheap "live" refresh without polling or a file watcher;
+    // the read also runs once at page load below.
+    onCfg_chimeSourceModeChanged: {
+        if (root.cfg_chimeSourceMode === "follow") root.soundThemes.refreshDesktopTheme();
+    }
+
+    Component.onCompleted: {
+        root.soundThemes.scan();
+        root.soundThemes.refreshDesktopTheme();
+    }
+
+    P5Support.DataSource {
+        id: previewExec
+        engine: "executable"
+        connectedSources: []
+        onNewData: function (source, data) {
+            console.log("[ConfigGeneral] chime preview finished - exit code:", data["exit code"], "stderr:", data["stderr"]);
+            disconnectSource(source);
+        }
+    }
+
+    // Browse: a real QtQuick.Dialogs FileDialog (Qt 6.11 - under
+    // plasmashell's KDE platform theme this is the native KDE file
+    // dialog), built lazily and torn down after use via a Loader -
+    // the exact shape of KDE's own kcm_soundtheme main.qml (lines
+    // 242-258) and org.kde.image's AddFileDialog.qml.
+    Loader {
+        id: chimeFileDialogLoader
+        active: false
+        sourceComponent: QtDialogs.FileDialog {
+            title: "Choose Chime Sound"
+            fileMode: QtDialogs.FileDialog.OpenFile
+            // Mockup handleBrowseChime() comment: "audio filter:
+            // .wav/.ogg/.mp3"; widened to the formats paplay actually
+            // decodes via libsndfile (.oga is what every installed theme
+            // ships).
+            nameFilters: ["Audio files (*.oga *.ogg *.opus *.wav *.flac *.mp3)", "All files (*)"]
+            currentFolder: root.cfg_chimeSoundFile !== ""
+                ? "file://" + root.cfg_chimeSoundFile.substring(0, root.cfg_chimeSoundFile.lastIndexOf("/"))
+                : StandardPaths.writableLocation(StandardPaths.HomeLocation)
+            Component.onCompleted: open()
+            onAccepted: {
+                // selectedFile is a file:// URL; the chip and paplay want
+                // a plain local path.
+                root.cfg_chimeSoundFile = decodeURIComponent(String(selectedFile).replace(/^file:\/\//, ""));
+                chimeFileDialogLoader.active = false;
+            }
+            onRejected: chimeFileDialogLoader.active = false
         }
     }
 
@@ -251,7 +412,10 @@ KCM.SimpleKCM {
             SettingsSwitch {
                 id: transparencySwitch
                 checked: root.cfg_transparencyEnabled
-                onCheckedChanged: root.cfg_transparencyEnabled = checked
+                // Phase 10.1.2: onToggled, not onCheckedChanged - see
+                // SettingsSwitch.qml's header for the broken-binding bug
+                // the old self-toggling shape had.
+                onToggled: (checked) => root.cfg_transparencyEnabled = checked
             }
         }
 
@@ -488,6 +652,286 @@ KCM.SimpleKCM {
             }
         }
 
+        // ---- Volume Feedback ----
+        // Phase 10.1.1: the v16 mockup's Volume Feedback section (lines
+        // 472-541), UI only - see the local-state comment on root above.
+        // Master toggle row, then a sub-section (mockup #chimeSub) that
+        // the toggle dims/disables exactly the way the Transparency
+        // sub-row above is (opacity 0.35 + enabled:false, the mockup's
+        // .kcm-sub-row.disabled), holding the three-way source
+        // segmented control and one visible variant block.
+        SectionLabel { text: "Volume Feedback" }
+
+        SettingsRow {
+            name: "Volume Feedback Chime"
+            desc: "Plays a short tone on each scroll tick, matching the volume you're setting"
+
+            SettingsSwitch {
+                id: chimeSwitch
+                checked: root.cfg_chimeEnabled
+                onToggled: (checked) => root.cfg_chimeEnabled = checked
+            }
+        }
+
+        // Mockup .kcm-sub-row{padding:8px 2px 4px} - the 2px side inset
+        // is not reproduced (nothing here is flush with the page edge).
+        ColumnLayout {
+            id: chimeSub
+            Layout.fillWidth: true
+            Layout.topMargin: 8
+            Layout.bottomMargin: 4
+            spacing: 0
+            opacity: chimeSwitch.checked ? 1.0 : 0.35
+            enabled: chimeSwitch.checked
+            // A dropdown left open while the section is disabled would
+            // still be interactive (the Popup lives in the window
+            // overlay, outside this item's enabled/opacity), so close it.
+            onEnabledChanged: if (!enabled) themeDropdown.close()
+
+            // Mockup line 481: .kcm-row with border-bottom:none and
+            // padding-top:0.
+            SettingsRow {
+                name: "Chime sound"
+                desc: "Which sound plays on each tick"
+                showDivider: false
+                topPadding: 0
+
+                // Same segmented control as the Volume step size row
+                // above (mockup .kcm-segmented / .kcm-seg-btn), three
+                // string-valued modes instead of three dB values.
+                Rectangle {
+                    id: chimeSegmented
+                    radius: root.theme.radiusSm
+                    color: root.theme.surface
+                    border.width: 1
+                    border.color: root.theme.divider
+                    implicitWidth: chimeSegRow.implicitWidth + 6
+                    implicitHeight: chimeSegRow.implicitHeight + 6
+
+                    property int activeIndex: root.chimeSourceModes.indexOf(root.cfg_chimeSourceMode)
+
+                    RowLayout {
+                        id: chimeSegRow
+                        anchors.centerIn: parent
+                        spacing: 2
+
+                        Repeater {
+                            model: ["System theme", "Choose theme", "Custom file"]
+
+                            Rectangle {
+                                id: chimeSeg
+                                required property string modelData
+                                required property int index
+                                readonly property bool active: chimeSegmented.activeIndex === chimeSeg.index
+
+                                radius: 6
+                                color: chimeSeg.active ? root.theme.surface3 : "transparent"
+                                implicitWidth: chimeSegLabel.implicitWidth + 22
+                                implicitHeight: chimeSegLabel.implicitHeight + 10
+
+                                Label {
+                                    id: chimeSegLabel
+                                    anchors.centerIn: parent
+                                    text: chimeSeg.modelData
+                                    font.family: root.theme.fontMono
+                                    font.pixelSize: 11
+                                    color: chimeSeg.active ? root.theme.copperBright : root.theme.textDim
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.setChimeSourceMode(root.chimeSourceModes[chimeSeg.index])
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Mockup .chime-source-block{padding:8px 2px 4px}; exactly one
+            // .chime-source-variant is shown (flex, space-between, gap
+            // 20, padding-top 12) - the other two are display:none, i.e.
+            // visible:false here, taking no layout space.
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+                Layout.bottomMargin: 4
+                spacing: 0
+
+                // ===== mode: follow the desktop's own configured theme =====
+                // A read-only status line, deliberately NOT a control
+                // (mockup CSS comment, lines 245-247): this mode has
+                // nothing to configure, it tracks kdeglobals live.
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 20
+                    visible: root.cfg_chimeSourceMode === "follow"
+
+                    // .theme-follow-status: 6px copperBright dot (its
+                    // box-shadow glow skipped, as AmpHeader.qml does for
+                    // its own dot) + mono 11px textDim text with the
+                    // theme name in bold copperBright.
+                    RowLayout {
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 9
+
+                        Rectangle {
+                            Layout.preferredWidth: 6
+                            Layout.preferredHeight: 6
+                            Layout.alignment: Qt.AlignVCenter
+                            radius: 3
+                            color: root.theme.copperBright
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignVCenter
+                            textFormat: Text.StyledText
+                            text: "Following your desktop's sound theme — currently <font color=\""
+                                + root.theme.copperBright + "\"><b>"
+                                + root.escapeStyledText(root.soundThemes.followDisplayName()) + "</b></font>"
+                            font.family: root.theme.fontMono
+                            font.pixelSize: 11
+                            color: root.theme.textDim
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    ChimeIconButton {
+                        kind: "play"
+                        tooltip: "Preview"
+                        enabled: root.chimePreviewPath() !== ""
+                        onClicked: root.previewChime()
+                    }
+                }
+
+                // ===== mode: pin to one specific installed theme =====
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 20
+                    visible: root.cfg_chimeSourceMode === "theme"
+
+                    Label {
+                        Layout.maximumWidth: 260
+                        Layout.alignment: Qt.AlignVCenter
+                        text: "Always use this theme's tone, regardless of your desktop setting"
+                        font.pixelSize: 11
+                        color: root.theme.textFaint
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    // .file-picker-row: gap 8.
+                    RowLayout {
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 8
+
+                        ThemeDropdown {
+                            id: themeDropdown
+                            themes: root.soundThemes.themes
+                            currentId: root.cfg_chimePinnedTheme
+                            onThemeChosen: (id) => root.cfg_chimePinnedTheme = id
+                        }
+
+                        ChimeIconButton {
+                            kind: "play"
+                            tooltip: "Preview"
+                            enabled: root.chimePreviewPath() !== ""
+                            onClicked: root.previewChime()
+                        }
+                    }
+                }
+
+                // ===== mode: any arbitrary file =====
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 20
+                    visible: root.cfg_chimeSourceMode === "file"
+
+                    Label {
+                        Layout.maximumWidth: 260
+                        Layout.alignment: Qt.AlignVCenter
+                        text: "Any sound file on disk"
+                        font.pixelSize: 11
+                        color: root.theme.textFaint
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    RowLayout {
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 8
+
+                        // .file-picker-field: the filename chip (mono
+                        // 11px, max-width 170, ellipsis; full path as
+                        // its tooltip, the mockup's title= attribute).
+                        // Owner decision (Phase 10.1.1 planning): before
+                        // a file is picked it shows a dimmed "No file
+                        // chosen" placeholder rather than the mockup's
+                        // literal placeholder filename "chime-default.ogg"
+                        // (no such file exists; "" is 10.1.3's
+                        // nothing-picked sentinel), and Preview stays
+                        // disabled until there is something to play.
+                        Rectangle {
+                            id: chimeFileChip
+                            Layout.maximumWidth: 170
+                            implicitWidth: chimeFileLabel.implicitWidth + 20
+                            implicitHeight: chimeFileLabel.implicitHeight + 12
+                            radius: root.theme.radiusSm
+                            color: root.theme.surface
+                            border.width: 1
+                            border.color: root.theme.divider
+
+                            readonly property bool hasFile: root.cfg_chimeSoundFile !== ""
+
+                            Label {
+                                id: chimeFileLabel
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: chimeFileChip.hasFile ? root.chimeFileBaseName() : "No file chosen"
+                                font.family: root.theme.fontMono
+                                font.pixelSize: 11
+                                color: chimeFileChip.hasFile ? root.theme.textDim : root.theme.textFaint
+                                elide: Text.ElideRight
+                            }
+
+                            MouseArea {
+                                id: chimeFileChipArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.NoButton
+                            }
+
+                            ToolTip.text: root.cfg_chimeSoundFile
+                            ToolTip.visible: chimeFileChip.hasFile && chimeFileChipArea.containsMouse
+                            ToolTip.delay: 500
+                        }
+
+                        ChimeIconButton {
+                            kind: "browse"
+                            tooltip: "Browse…"
+                            onClicked: chimeFileDialogLoader.active = true
+                        }
+
+                        ChimeIconButton {
+                            kind: "play"
+                            tooltip: "Preview"
+                            enabled: root.cfg_chimeSoundFile !== ""
+                            onClicked: root.previewChime()
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Amplifiers ----
         SectionLabel { text: "Amplifiers" }
 
@@ -561,7 +1005,9 @@ KCM.SimpleKCM {
             // systemd's own enablement state is the source of truth, not a
             // stored bool), so this default only affects what the toggle
             // visually shows before that wiring lands.
-            SettingsSwitch { id: loginSwitch; checked: true }
+            // Display-only placeholder until its own wiring phase; flips
+            // its own literal on click so it still visibly toggles.
+            SettingsSwitch { id: loginSwitch; checked: true; onToggled: (checked) => loginSwitch.checked = checked }
         }
 
         // ---- Reset ----
@@ -639,6 +1085,21 @@ KCM.SimpleKCM {
                         root.cfg_hardLimitDb = root.dbRangeMax;
                         root.cfg_volumeFloorDb = root.shippedDefaults.volumeFloorDb;
                         root.cfg_hardLimitDb = root.shippedDefaults.hardLimitDb;
+                        // Phase 10.1.2: the master chime toggle is a real
+                        // cfg_ property now, reset from shippedDefaults
+                        // like every other row (main.xml default true).
+                        root.cfg_chimeEnabled = root.shippedDefaults.chimeEnabled;
+                        // Phase 10.1.3: the chime source is three real cfg_
+                        // properties now, reset from shippedDefaults like
+                        // every other row (main.xml defaults follow /
+                        // ocean / ""). Resetting the pinned theme is a
+                        // deliberate step beyond the mockup, whose
+                        // handleDefaults() (lines 719-725) forgets its
+                        // dropdown label.
+                        root.cfg_chimeSourceMode = root.shippedDefaults.chimeSourceMode;
+                        root.cfg_chimePinnedTheme = root.shippedDefaults.chimePinnedTheme;
+                        root.cfg_chimeSoundFile = root.shippedDefaults.chimeSoundFile;
+                        themeDropdown.close();
                     }
                 }
             }

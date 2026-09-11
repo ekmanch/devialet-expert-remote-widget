@@ -5,9 +5,16 @@
 // match this custom look, same reasoning as every other custom-drawn
 // control in this project (mute/power buttons, volume slider).
 //
-// No-op this phase: `checked` just toggles on click, nothing is
-// persisted or wired to real behavior - each real setting gets its own
-// wiring phase later (4.4.2-4.4.7).
+// Phase 10.1.2: stateless, like DbStepper.qml - a click emits
+// `toggled(newValue)` and the caller stores it (`checked: root.cfg_x;
+// onToggled: (c) => root.cfg_x = c`). It used to write `checked =
+// !checked` itself, which is an imperative assignment and therefore
+// silently *broke* the caller's `checked: root.cfg_x` binding on the
+// first click: from then on a write to cfg_x from anywhere else (the
+// Defaults button, the shell pushing a stored value in) changed the
+// value but not the switch. Found by the Phase 10.1.2 driver run on the
+// chime toggle (Defaults reset cfg_chimeEnabled to true, switch stayed
+// off); the Transparency toggle had the same latent defect since 9.1.0.
 import QtQuick
 import "../ui" as Ui
 
@@ -15,6 +22,7 @@ Item {
     id: root
 
     property bool checked: false
+    signal toggled(bool checked)
     readonly property Ui.Theme theme: Ui.Theme {}
 
     implicitWidth: 36
@@ -43,6 +51,6 @@ Item {
     MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.checked = !root.checked
+        onClicked: root.toggled(!root.checked)
     }
 }
