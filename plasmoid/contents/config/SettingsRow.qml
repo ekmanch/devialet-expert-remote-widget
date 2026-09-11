@@ -17,6 +17,11 @@ ColumnLayout {
     property string name: ""
     property string desc: ""
     property bool showDivider: true
+    // Phase 10.1.1: the mockup's per-row padding overrides (e.g. the
+    // "Chime sound" row's inline `padding-top:0`, v16 mockup line 481).
+    // Defaults are the .kcm-row's own 14px, so no existing row moves.
+    property int topPadding: 14
+    property int bottomPadding: 14
     default property alias controlData: controlHolder.data
 
     readonly property Ui.Theme theme: Ui.Theme {}
@@ -26,8 +31,8 @@ ColumnLayout {
 
     RowLayout {
         Layout.fillWidth: true
-        Layout.topMargin: 14
-        Layout.bottomMargin: 14
+        Layout.topMargin: root.topPadding
+        Layout.bottomMargin: root.bottomPadding
         spacing: 20
 
         ColumnLayout {
