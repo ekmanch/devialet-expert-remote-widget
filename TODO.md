@@ -7577,13 +7577,11 @@ architecture decisions; this file is just sequencing and status.
       hear the audio feedback when changing volume just fine").
   - **Unblocked by this phase**: 13.0.5 (README rewrite to "clone,
     run install.sh") can proceed. Not done here.
-
-## Up next
-
-- [ ] **Phase 13.0.4 — Uninstall script (decide scope first).** Decide
-      deliberately whether an uninstall script is in scope for v1.0.0
-      or explicitly deferred — don't let it default to "skipped"
-      silently. If in scope: reverse of 4.6.3 (disable/remove the
+- [x] **Phase 13.0.4 — Uninstall script (2026-09-12).** Scope was to be
+      decided deliberately (in scope for v1.0.0, or explicitly
+      deferred — not defaulting to "skipped" silently); **owner decided:
+      in scope**, after the investigation below. Original brief, if in
+      scope: reverse of 4.6.3 (disable/remove the
       systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
       remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
       **Removing the unit is not optional busywork here** — since
@@ -7606,6 +7604,99 @@ architecture decisions; this file is just sequencing and status.
     no installed plasmoid, and no leftover binary. Specifically
     confirm `systemctl --user is-enabled devialet-remote-daemon.service`
     reports the unit gone (not just disabled) after uninstall.
+  - **Investigation (2026-09-12) - what "Launch at login" actually
+    does, read from source and verified live in the real ConfigDialog;
+    scope decision deliberately left to the owner:**
+    - Code path: the switch in `ConfigGeneral.qml` only sets a local
+      `launchDesired`; the shell's Apply/OK calls the page's
+      `saveConfig()`, which calls `DaemonAutostart.apply()`, which
+      shells out `systemctl --user enable|disable
+      devialet-remote-daemon.service` through the executable engine.
+      No KConfig entry, no config file, no D-Bus call - systemd's
+      enablement state is the only storage.
+    - "Off" is **plain `disable`, no `--now`**: it removes the
+      `plasma-workspace.target.wants` symlink so the daemon won't
+      autostart at the next login, and does **not** stop the running
+      process. "On" is plain `enable`, which does not start a stopped
+      daemon. Both documented as a deliberate Phase 11.0.0 owner
+      decision in `DaemonAutostart.qml` ("launch at login, not run the
+      daemon now").
+    - Live: baseline enabled/active/PID 84214 -> owner toggled off +
+      Apply -> 15:50:26 `is-enabled=disabled`, still `active`, same
+      PID, journal shows exactly `systemctl --user disable
+      devialet-remote-daemon.service` and the wants symlink removed ->
+      owner toggled on + Apply -> 15:52:44 `enabled`, still PID 84214,
+      symlink recreated. The daemon process was never touched.
+    - Consequences for this phase's decision (facts, not a verdict):
+      nothing in the UI ever stops the process - toggle off leaves it
+      running until logout, dragging the widget off the panel touches
+      systemd not at all, and the unit file stays in
+      `~/.config/systemd/user/` either way. Also: re-running
+      `./install.sh` unconditionally `enable`s (and restarts if
+      needed), so it silently undoes a user's "Launch at login: off".
+      Full removal today is the manual reverse of the three install
+      scripts: `systemctl --user disable --now`, delete the unit file,
+      `daemon-reload`, `kpackagetool6 --remove
+      com.ekmanch.devialetremote`, `sudo rm /usr/local/bin/devialet-
+      {ctl,chime,remote-daemon}`.
+  - **Implemented: `./uninstall.sh` at the repo root** (matching
+    install.sh's placement), the near-mechanical reverse of the three
+    install steps, run in reverse order so the only root step is last:
+    [1/3] `kpackagetool6 --remove com.ekmanch.devialetremote`, [2/3]
+    `systemctl --user disable --now` (**with `--now`** - deliberately
+    unlike the ConfigDialog toggle's disable-only behaviour confirmed
+    in the investigation above; this script's point is to actually
+    stop the daemon) + delete the unit file and any leftover
+    `plasma-workspace.target.wants` symlink + `daemon-reload` +
+    `reset-failed`, [3/3] `sudo rm` of the three `/usr/local/bin`
+    binaries (sudo only when the dir isn't writable). Same `[N/3]`
+    banners / completed-vs-skipped / exit-code-equals-step report as
+    install.sh. Every step treats "already removed" as a clean,
+    announced no-op (`nothing to remove`) - checked via `--list`,
+    `is-enabled` = `not-found` (measured: exit 4 for a nonexistent
+    unit; `disable --now` on one errors exit 1, so the script checks
+    first), and file presence - and anything else failing (remove/
+    disable/rm erroring on something that does exist) fails that step
+    loudly. Each step post-checks its end state rather than trusting
+    exit codes: plasmoid absent from `--list`, unit `is-enabled` =
+    `not-found` AND not active (TODO's own "gone entirely, not just
+    disabled" bar), binaries absent. Deliberately left in place and
+    named in the closing note: `~/.config/devialet-remote-daemon/`
+    (remembered amp selection) and the widget's settings in Plasma's
+    appletsrc (Plasma-owned); a widget instance still on a panel must
+    be removed there. Nothing else touched (install.sh, the three
+    install-*.sh, README all unchanged).
+  - Verify (dev machine, 2026-09-12, from the fully installed state:
+    enabled/active PID 84214, plasmoid listed, three binaries present):
+    - Owner ran `./uninstall.sh` once (one sudo prompt, in step 3):
+      all three steps took their real-removal branches, exit 0.
+      Checked afterward: `is-enabled` -> `not-found` (exit 4), status
+      "could not be found", `is-active` inactive, no daemon process
+      (`pgrep -af`), 0 unit files/symlinks under
+      `~/.config/systemd/user/`, plasmoid absent from `--list` and from
+      `~/.local/share/plasma/plasmoids/`, no `/usr/local/bin/devialet-*`.
+    - Immediate re-run (no sudo needed): every step reported
+      `nothing to remove`, unit post-check still `not-found`/inactive,
+      exit 0.
+    - Owner then ran `./install.sh`: all three fresh-install branches
+      ("(re)placed 3 of 3", "Created symlink", "not installed yet,
+      installing"), exit 0. Checked: enabled/active, new PID 93677
+      running `/usr/local/bin/devialet-remote-daemon`, all three
+      binaries `cmp`-identical to `target/release/`, plasmoid listed
+      and `diff -rq` identical to `plasmoid/`; `plasmashell --replace`
+      run, no widget errors in the journal; daemon `Online` true and
+      `VolumeDb` -30 over D-Bus. uninstall.sh and install.sh are
+      genuine inverses, not just independently working.
+    - Noise, not a bug: during `--remove`, kpackagetool6 printed a
+      warning about an unrelated installed plasmoid
+      (`com.n3thshan.nokara`'s KPackageStructure not matching
+      Plasma/Applet) while scanning the applets dir - it is
+      kpackagetool6's own stderr about someone else's package, our
+      removal succeeded on the same run, and it is left visible on
+      purpose (hiding `--remove`'s stderr would hide real errors too).
+
+## Up next
+
 - [ ] **Phase 13.0.5 — README install instructions.** Replace the
       current manual multi-step install instructions with "clone the
       repo, run install.sh." Keep the manual steps documented separately
@@ -7615,6 +7706,47 @@ architecture decisions; this file is just sequencing and status.
       as a required manual step, not just plasmoid removal, since
       removing only the panel icon leaves the daemon running
       indefinitely (see 6.0.4's note).
+      
+- [ ] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Cut the tag on
+      main once 13.0.0–13.0.5 are done and verified. This becomes the
+      fixed source snapshot every downstream distribution channel
+      (AUR, KDE Store) points at.
+  - Verify: fresh clone at the tag, run install.sh end-to-end —
+    confirms the tagged state is genuinely installable, not just
+    "main looked done."
+    
+- [ ] **Phase 14.0.0 — AUR packaging (investigation first).** Separate
+      effort from install.sh, not a reuse of it — Arch packaging
+      conventions differ meaningfully: no auto-enabling systemd user
+      services from a postinst hook, and Plasma applet packages
+      typically place files directly under
+      `/usr/share/plasma/plasmoids/<id>/` in `package()` rather than
+      shelling out to `kpackagetool6` (a user-session tool, not a
+      packaging one). Investigate real precedent — other Plasma
+      applet PKGBUILDs already on the AUR — before writing one from
+      scratch.
+  - Verify: `makepkg -si` succeeds in a clean environment/container;
+    widget + daemon + CLI all functional afterward, no leftover
+    manual steps.
+- [ ] **Phase 14.1.0 — Submit to AUR.** Clone the AUR git repo
+      (`ssh://aur@aur.archlinux.org/devialet-expert-remote-widget.git`),
+      add PKGBUILD + a generated `.SRCINFO`, commit, push.
+  - Verify: install via an AUR helper (paru/yay/Shelly — they all
+    consume the same git repo, nothing helper-specific to do) on a
+    separate/clean Arch system.
+    
+- [ ] **Phase 15.0.0 — KDE Store submission ("Get New Widgets").**
+      Create a store.kde.org account, package the plasmoid directory
+      as a `.plasmoid` file, upload under Plasma 6 Extensions →
+      Plasma 6 Applets with screenshots + description. Independent of
+      Phase 14 — no packaging tooling involved, just an account and an
+      upload.
+  - Note: real-world reports show newly-published Plasma 6 widgets
+    can take time to appear in the in-app "Get New Widgets" search,
+    and the store's search only matches 3+ character substrings —
+    don't assume something's broken if it's not instantly findable.
+  - Verify: widget appears and installs via Plasma's own "Get New
+    Widgets" dialog on a clean/separate machine.
       
 
 ## Bugs
@@ -7632,8 +7764,3 @@ architecture decisions; this file is just sequencing and status.
       amp instead of MPV's own volume. Independent of the plasmoid itself 
       — not blocked on any of the phases above, can happen in parallel 
       whenever.
-- [ ] **Add package to the AUR for easier install**
-      Self-explanatory. The AUR (Arch User Repository) has packages
-      uploaded by users of Arch / Arch-based distros (e.g. CachyOS).
-      The devialet-expert-remote-widget would be nice to have uploaded
-      there for easier install and sharing to other users.
