@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet Flyout Mockup v11</title>
+<title>Devialet Flyout Mockup v12</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -336,8 +336,9 @@
 
       <div class="action-row">
         <div class="action-btn" id="muteBtn" onclick="toggleMute()">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
-          <span>Mute</span>
+          <svg class="icon" id="muteIconOn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+          <svg class="icon" id="muteIconOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+          <span id="muteLabel">Mute</span>
         </div>
         <div class="action-btn power-btn state-on" id="powerBtn" onclick="togglePower()">
           <svg class="icon" id="powerIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
@@ -479,6 +480,9 @@
   function toggleMute(){
     muted = !muted;
     document.getElementById('muteBtn').classList.toggle('active', muted);
+    document.getElementById('muteIconOn').style.display = muted ? 'none' : '';
+    document.getElementById('muteIconOff').style.display = muted ? '' : 'none';
+    document.getElementById('muteLabel').textContent = muted ? 'Unmute' : 'Mute';
   }
   const BOOT_DURATION_MS = 3200; // mockup only — real duration comes from actual amp status, not a timer
 
