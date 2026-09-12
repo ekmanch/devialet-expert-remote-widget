@@ -7821,10 +7821,8 @@ architecture decisions; this file is just sequencing and status.
     Description, now "over ethernet") and `Cargo.toml` right after
     (2026-09-13); remaining old-name mentions in CLAUDE.md/TODO.md prose
     updated in the same pass, historical notes left as written.
-
-## Up next
-
-- [ ] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Before cutting
+    
+- [x] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Before cutting
       the tag, fix two known-stale items in plasmoid/metadata.json:
       `KPlugin.Website` still points at the pre-rename
       `devialet-expert-remote-widget` GitHub URL (confirmed live in
@@ -7840,14 +7838,14 @@ architecture decisions; this file is just sequencing and status.
       Then cut the tag on main once 13.0.0–13.0.5 are done and
       verified. This becomes the fixed source snapshot every
       downstream distribution channel (AUR, KDE Store) points at.
-  - Verify: About page in the real ConfigDialog shows the corrected
-    Website URL and "1.0.0" after a fresh install-plasmoid.sh
-    re-run (confirm whether this needs plasmashell --replace to show,
-    per the icon-cache reload gotcha already recorded in CLAUDE.md -
-    a metadata text change may or may not hit the same cache lag).
-    Fresh clone at the tag, run install.sh end-to-end — confirms the
-    tagged state is genuinely installable, not just "main looked
-    done."
+      **Verification 2026-09-13** User verified that the version,
+      package name, and website information did not accurately
+      reflect in the "About" tab in the ConfigDialog window
+      unless ./uninstall.sh and ./install.sh were both run. A
+      simple plasmashell --replace & is not enough to update the
+      data displayed in the widget.
+
+## Up next
     
 - [ ] **Phase 14.0.0 — AUR packaging (investigation first).** Separate
       effort from install.sh, not a reuse of it — Arch packaging
