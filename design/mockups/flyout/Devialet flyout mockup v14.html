@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet Flyout Mockup v12</title>
+<title>Devialet Flyout Mockup v14</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -93,7 +93,7 @@
     position:absolute; top:10px; right:10px; z-index:3;
     width:24px; height:24px; border-radius:8px;
     display:flex; align-items:center; justify-content:center;
-    color:var(--text-faint); font-size:15px; cursor:pointer;
+    color:var(--text-faint); font-size:15px; cursor:default;
     letter-spacing:1px;
   }
   .settings-trigger:hover{background:var(--surface-2); color:var(--copper-bright);}
@@ -169,7 +169,7 @@
   }
   .amp-list-inner{ padding:8px; }
   .amp-option{
-    display:flex; align-items:center; gap:9px; padding:8px 8px; border-radius:9px; cursor:pointer;
+    display:flex; align-items:center; gap:9px; padding:8px 8px; border-radius:9px; cursor:default;
   }
   .amp-option:hover{background:var(--surface-2);}
   .amp-option-dot{ width:7px; height:7px; border-radius:50%; background:var(--text-faint); flex-shrink:0; }
@@ -212,7 +212,7 @@
   .step-btn{
     width:26px; height:26px; border-radius:8px; background:var(--surface); border:1px solid var(--divider);
     display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:600;
-    font-size:14px; color:var(--text); cursor:pointer; flex-shrink:0;
+    font-size:14px; color:var(--text); cursor:default; flex-shrink:0;
   }
   .step-btn:hover{border-color:var(--copper-dim); color:var(--copper-bright);}
   .scroll-hint{
@@ -224,7 +224,7 @@
   .action-btn{
     background:var(--surface); border:1px solid var(--divider); border-radius:11px; height:38px;
     display:flex; align-items:center; justify-content:center; gap:6px;
-    font-size:12px; font-weight:600; letter-spacing:0.01em; cursor:pointer; color:var(--text);
+    font-size:12px; font-weight:600; letter-spacing:0.01em; cursor:default; color:var(--text);
   }
   .action-btn:hover{border-color:var(--copper-dim);}
   .action-btn.active{background:rgba(193,127,78,0.14); border-color:var(--copper-dim); color:var(--copper-bright);}
@@ -239,7 +239,7 @@
   .source-block{padding:10px 16px 14px;}
   .source-row{
     display:flex; align-items:center; gap:10px; padding:9px 10px;
-    background:var(--surface); border:1px solid var(--divider); border-radius:11px; cursor:pointer;
+    background:var(--surface); border:1px solid var(--divider); border-radius:11px; cursor:default;
   }
   .source-row:hover{border-color:var(--copper-dim);}
   .source-icon-sm{
@@ -260,7 +260,7 @@
   .source-list.overlay-popup{ top:auto; bottom:72px; max-height:252px; }
   .source-option{
     display:flex; align-items:center; gap:9px; padding:8px 10px; margin:4px;
-    border-radius:9px; font-size:12.5px; cursor:pointer; color:var(--text-dim);
+    border-radius:9px; font-size:12.5px; cursor:default; color:var(--text-dim);
   }
   .source-option:hover{background:var(--surface-2);}
   .source-option.selected{color:var(--copper-bright);}
@@ -548,6 +548,15 @@
   renderSourceList();
   updateVolDisplay();
   document.getElementById('flyoutPanel').classList.add('blur-enabled');
+
+  // Scroll over the slider to nudge volume — same 0.5 dB step as the
+  // +/- buttons. Scroll up (deltaY negative) increases, matching the
+  // usual OS convention. preventDefault stops the page itself from
+  // scrolling while the cursor is over the control.
+  document.getElementById('volSlider').addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    stepVol(e.deltaY < 0 ? 0.5 : -0.5);
+  }, {passive:false});
 
   // Both popups reparent into Overlay.overlay in the real widget and
   // close on an outside press — mirrored here at the document level.
