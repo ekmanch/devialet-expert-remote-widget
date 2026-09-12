@@ -192,6 +192,40 @@ all three.
   restarting plasmashell, a meaningfully worse dev loop while actively
   building this. The systemd-unit cost (one config file, written once) is
   small relative to these risks. Do not revisit this without a new reason.
+- **Install location for the binaries: `/usr/local/bin`, by copy (Phase
+  13.0.0, settled - do not re-derive).** `devialet-ctl` and
+  `devialet-chime` are built in release profile and copied with
+  `install -Dm0755 -t /usr/local/bin`; the daemon follows the same rule
+  when Phase 13.0.2 installs the unit. Three candidates were measured on
+  the dev machine, not assumed:
+  - `~/.local/bin` is **not** on PATH by default on Arch/CachyOS -
+    `/etc/profile` appends only `/usr/local/bin`, `/etc/login.defs` and
+    SDDM's `DefaultPath` are `/usr/local/sbin:/usr/local/bin:/usr/bin`,
+    `/etc/skel/.bashrc` has no `.local/bin`, the systemd user manager sets
+    no PATH of its own, and no `environment.d` file adds it. It reaches
+    plasmashell's PATH here only because fish's `fish_user_paths` adds it
+    and SDDM exec's the login shell; a bash-login user would get exit 127
+    on every widget command. A PKGBUILD also cannot install into a home
+    directory.
+  - `cargo install` into `~/.cargo/bin`: the directory does not exist and
+    is not on PATH (Rust via pacman, no rustup env script); it also writes
+    `~/.cargo/.crates.toml` state, and Arch's Rust package guidelines treat
+    `cargo install` as a fallback (`--no-track --root "$pkgdir/usr/"`
+    only), preferring `cargo build --frozen --release` +
+    `install -Dm0755 -t "$pkgdir/usr/bin/"`.
+  - `/usr/local/bin` is on every default PATH above, on systemd's fixed
+    `ExecStart` search path, ahead of `/usr/bin`, and is FHS's slot for
+    locally built, non-package-managed software. The same `install` line
+    serves the future AUR package with `PREFIX=/usr` + `DESTDIR=$pkgdir`
+    (confirmed against real Arch packages: `ripgrep` -> `/usr/bin/rg`,
+    `plasma-workspace` units -> `/usr/lib/systemd/user/`, a third-party
+    plasmoid -> `/usr/share/plasma/plasmoids/<id>/`). Cost: one `sudo`
+    step, the only root step in this project's setup.
+  - Consequence for the daemon unit (13.0.2): `man systemd.service` -
+    a non-absolute `ExecStart=` is resolved against `/usr/local/bin/` and
+    `/usr/bin/`, so once the daemon lives there the unit can say
+    `ExecStart=devialet-remote-daemon` with no `@@EXECSTART@@` `sed`
+    placeholder, and one unit file serves install.sh and the AUR package.
 
 ## Scope
 
@@ -305,7 +339,8 @@ outside of any command this project's own workflow runs — not by
 `cargo clean` from a documented step here, cause never fully identified.
 Consequences, both silent:
 
-- `~/.local/bin/devialet-ctl` (see this file's own PATH section below) is a
+- `~/.local/bin/devialet-ctl` was, at the time (pre-Phase 13.0.0; see this
+  file's own PATH section below for the current `/usr/local/bin` copy), a
   symlink into `target/debug/devialet-ctl`. Once that target is gone, the
   symlink dangles. Every QML `Plasma5Support.DataSource` invocation of
   `devialet-ctl` then fails with shell exit code **127**
@@ -341,11 +376,18 @@ don't skip straight to a code fix next time either:
 **Fix, if this happens again**:
 
 ```
-cargo build --release   # daemon's systemd unit points at target/release/
-cargo build              # devialet-ctl symlink (see PATH section below) points at target/debug/
-ln -sf "$(pwd)/target/debug/devialet-ctl" ~/.local/bin/devialet-ctl
+cargo build --release --locked   # daemon's systemd unit points at target/release/
+sudo install -Dm0755 -t /usr/local/bin \
+    target/release/devialet-ctl target/release/devialet-chime   # Phase 13.0.0 placement (copies; a dangling symlink can't recur)
 systemctl --user restart devialet-remote-daemon.service
 ```
+
+Since Phase 13.0.0 the installed `devialet-ctl`/`devialet-chime` are
+copies in `/usr/local/bin`, independent of `target/`, so this exact
+dangling-symlink form cannot recur - but the exit-127 diagnosis above
+still applies to any missing or unreadable binary, and the daemon half
+(`(deleted)` exe, unit still `active`) is unchanged until Phase 13.0.2
+moves the daemon out of `target/release/` too.
 
 Verify the daemon is actually off the fresh binary afterward — status
 alone won't tell you (see point 1 above):
@@ -353,7 +395,7 @@ alone won't tell you (see point 1 above):
 ```
 systemctl --user show devialet-remote-daemon.service -p MainPID --value \
   | xargs -I{} ls -la /proc/{}/exe   # must NOT say "(deleted)"
-devialet-ctl --help                  # must exit 0, not 127
+devialet-ctl --help                  # must print its usage text (exit 1 by design), not exit 127 "command not found"
 ```
 
 **Before assuming a code regression when every control type reverts
@@ -754,20 +796,31 @@ re-discovered a fourth time after the rebuild ships.
     unreachable on PATH, the engine returns exit code 127 and a normal
     shell stderr message, no crash.
   - For this to work, `devialet-ctl` must actually be reachable on that
-    PATH. Dev-machine setup (this is **not** yet a real install/packaging
-    story — that's a later phase): a symlink at
-    `~/.local/bin/devialet-ctl` pointing to the workspace's
-    `target/debug/devialet-ctl` build output. `~/.local/bin` is first on
-    plasmashell's PATH by default on this system (standard XDG
-    convention), so no PATH modification was needed, just the symlink:
-    `ln -sf <repo>/target/debug/devialet-ctl ~/.local/bin/devialet-ctl`.
-    Re-point or refresh this symlink after every `cargo build` that
-    changes `devialet-ctl` (a release build, or real packaging later,
-    would install directly to a proper PATH location instead and replace
-    this symlink workflow entirely).
-    The `spike/volume-audio-feedback` branch adds a second binary,
-    `devialet-chime`, invoked the same way and placed the same way:
-    `ln -sf <repo>/target/debug/devialet-chime ~/.local/bin/devialet-chime`.
+    PATH. **Placement (Phase 13.0.0, settled - see the "Install location"
+    Architecture bullet)**: a release-profile copy in `/usr/local/bin`,
+    for both binaries the QML invokes by bare name (`devialet-chime`, a
+    workspace member on `main`, is invoked the same way for the volume
+    chime):
+
+    ```
+    cargo build --release --locked -p devialet-ctl -p devialet-chime
+    sudo install -Dm0755 -t /usr/local/bin \
+        target/release/devialet-ctl target/release/devialet-chime
+    ```
+
+    Copies, not symlinks: they survive `cargo clean`, but a rebuild does
+    not update them - re-run the `install` line after any `cargo build`
+    that changes either binary. Before 13.0.0 the dev setup was a
+    `~/.local/bin/<name>` symlink into `target/debug/`; those symlinks
+    are gone from this machine and must stay gone: `~/.local/bin`
+    precedes `/usr/local/bin` on plasmashell's PATH, so a leftover
+    symlink there silently shadows the installed copy (and dangles the
+    moment `target/` disappears - the failure documented above). The
+    earlier claim here that `~/.local/bin` is on PATH "by default
+    (standard XDG convention)" was wrong for this distro: it is on
+    plasmashell's PATH only because fish's `fish_user_paths` adds it -
+    see the Architecture bullet for the measured list of what does and
+    does not add it.
 - **`spectacle -b -f` from a non-interactive shell needs
   `QT_QPA_PLATFORM=wayland`** (found in Phase 7.2.0): launched from a tool/
   script shell in this Wayland session it otherwise picks the xcb backend,

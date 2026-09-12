@@ -3,24 +3,34 @@ KDE Plasma widget acting as a remote for the Devialet Expert Pro 140
 
 ## Development setup
 
-The plasmoid invokes `devialet-ctl` by bare command name (not by absolute
-path), so it must be discoverable on `PATH` in the environment plasmashell
-runs in.
+The plasmoid invokes `devialet-ctl` (commands) and `devialet-chime`
+(volume-change chime) by bare command name (not by absolute path), so
+both must be discoverable on `PATH` in the environment plasmashell runs
+in. The install location is `/usr/local/bin` (Phase 13.0.0 decision, see
+CLAUDE.md's "Install location" note for the reasoning): it is on every
+default `PATH` on Arch and derivatives (`/etc/profile`, `/etc/login.defs`,
+SDDM's `DefaultPath`, systemd's own search path), which `~/.local/bin` is
+not - that directory only reaches plasmashell's `PATH` if your login shell
+happens to add it.
 
-Until this project has a proper install step, set this up manually:
+Build both binaries in release profile and copy them in (the `install`
+step is the only part of this project's setup that needs root):
 
-    cargo build --release
-    ln -sf "$(pwd)/target/release/devialet-ctl" ~/.local/bin/devialet-ctl
+    cargo build --release --locked -p devialet-ctl -p devialet-chime
+    sudo install -Dm0755 -t /usr/local/bin \
+        target/release/devialet-ctl target/release/devialet-chime
 
-`~/.local/bin` is on `PATH` by default on most modern distros (including
-CachyOS); if the plasmoid's button doesn't seem to do anything, check that
-this directory is actually in your `PATH` and that the symlink exists and
-points at a current build.
+Check from a shell with no user `PATH` additions:
 
-**Note:** after every `cargo build --release`, the binary at
-`target/release/devialet-ctl` is a fresh file — but since this is a
-symlink, it re-points automatically. No need to redo the `ln -sf` after
-rebuilds, only if you delete/recreate `~/.local/bin/devialet-ctl` itself.
+    env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin devialet-ctl --help
+
+**Note:** these are copies, not symlinks into `target/` - they keep
+working after `cargo clean`, but a rebuild does not update them. Re-run
+the `install` line after any `cargo build` that changes either binary.
+If you previously followed the old instructions and have
+`~/.local/bin/devialet-ctl` / `~/.local/bin/devialet-chime` symlinks,
+delete them: `~/.local/bin` precedes `/usr/local/bin` on `PATH`, so a
+stale symlink there shadows the installed copy.
 
 ### Daemon autostart (systemd --user unit)
 
@@ -30,10 +40,10 @@ until you start it by hand.
 
 `systemd/devialet-remote-daemon.service` in this repo has a placeholder
 `ExecStart` line — it literally contains the string `@@EXECSTART@@`
-instead of a real path, since there's no fixed install location yet (same
-"not a real packaging story" caveat as the `devialet-ctl` symlink above,
-and the reason this can't just be a hardcoded path checked into the repo:
-it has to match wherever *you* cloned this project). **Don't**
+instead of a real path, since the daemon has no fixed install location
+yet (Phase 13.0.2 will move it to `/usr/local/bin` like the two binaries
+above, at which point this placeholder goes away; until then it has to
+match wherever *you* cloned this project). **Don't**
 `systemctl --user link` or copy that file as-is — systemd would try to
 exec the literal string `@@EXECSTART@@` and fail. Instead, substitute it
 for the absolute path to the release binary you just built, and write the
@@ -52,7 +62,7 @@ Check it's actually running:
     systemctl --user status devialet-remote-daemon.service
     busctl --user introspect com.ekmanch.DevialetRemote /com/ekmanch/DevialetRemote/Amp
 
-**Note:** like the `devialet-ctl` symlink, this only needs to be redone if
+**Note:** this only needs to be redone if
 you move/delete the repo clone (the resolved unit file has the old build's
 absolute path baked in) — an ordinary `cargo build --release` alone is
 enough to pick up code changes, since `ExecStart` just points at the same
