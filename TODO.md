@@ -7122,6 +7122,77 @@ architecture decisions; this file is just sequencing and status.
     open it)**: opened by hand, Amplifiers section gone, layout
     reported as looking right.
 
+- [x] **Phase 12.0.0 — Flyout mockup v12: dynamic mute icon + weighted action buttons (2026-09-12).**
+      Two owner-driven changes to the flyout's action row, both
+      shipped together and both signed off live by the owner.
+  - **Part 1 — mute icon follows the mute state.** Flyout mockup v11
+    -> v12 (`design/mockups/flyout/Devialet flyout mockup v12.html`):
+    the mute button now swaps its speaker glyph with the state -
+    `muteIconOn` (speaker + one sound wave) while audible,
+    `muteIconOff` (speaker + X) while muted - alongside the existing
+    Mute/Unmute label and copper highlight. v11 drew the single-wave
+    glyph in both states; the widget drew `audio-volume-muted-symbolic`
+    in both. That mockup diff is the whole v11 -> v12 delta (only the
+    second `<svg>` and the two `style.display` lines in `toggleMute()`
+    changed).
+    - Done: `ActionRow.qml`'s `muteIcon.source` becomes
+      `muted ? "audio-volume-muted-symbolic" : "audio-volume-medium-symbolic"`.
+      Theme icon names, matching every other icon in the flyout, not
+      the mockup's Lucide paths - so the muted glyph is whatever the
+      user's icon theme draws for "muted" (Tela, the dev machine's
+      theme: a speaker with a red diagonal slash, the same glyph the
+      button has shown since Phase 7.5.0; Breeze: speaker + X, the
+      mockup's look). "medium", not "low", for the mockup's one-wave
+      glyph: rendered under Tela via a standalone
+      `/usr/lib/qt6/bin/qml` driver at the button's 13 px, low draws
+      both arcs at 35 % opacity and reads as a bare speaker, medium is
+      one solid arc plus a faint outer one; Breeze's SVGs use the same
+      opacity convention, so the choice holds there too. Icon stays
+      13x13 in both states. qmllint: only the pre-existing
+      `parent.hovered` warning on the button background, same as HEAD.
+    - Verified hands-free (harness `run --vary mute`, run
+      `20260912-125513`): both states captured on the real reloaded
+      flyout, crops checked by eye - one-wave speaker beside "Mute",
+      slashed speaker in copper beside "Unmute". Δy 0 on every item.
+  - **Part 2 — action buttons weighted to their contents.** The
+    owner's side-by-side showed the mute button growing and the power
+    button shrinking on every mute toggle: both buttons were plain
+    `Layout.fillWidth` GridLayout columns, so the row was shared in
+    proportion to each Button's content width and "Unmute" (15 px
+    wider than "Mute") shifted 14 px between them - the exact trade
+    `expected-7.14.0.json`'s mute rule had been allowing since 7.5.0.
+    A first pass pinned both to equal halves (the mockup's
+    `grid-template-columns: 1fr 1fr`, 130/130 px); the owner's next
+    screenshots showed "Powering on…" nearly touching its borders
+    (~12 px per side) while "Unmute" sat in ~33 px of air, so the
+    final split is unequal with equal worst-case margins instead.
+    - Done: `ActionRow.qml` measures each button's widest content -
+      icon 13 + gap 6 + the widest label ("Unmute" / "Powering on…")
+      via `TextMetrics` in the labels' own font, no hardcoded pixel
+      counts - gives both buttons the same margin around that worst
+      case, and splits `actionRow.width - columnSpacing` accordingly
+      (mute rounds, power takes the exact remainder, so no sub-pixel
+      borders). Static: the split never follows the current label.
+      Safe from a binding loop because `mainColumn` is anchored to
+      FlyoutContent's root whose `implicitWidth` is the constant
+      `theme.panelWidth`.
+    - Verified hands-free (harness `run --vary mute,pow`, run
+      `20260912-130939`, 6 states): mute 108 px / power 152 px in
+      every state, worst-case margins "Unmute" 23/22 px and
+      "Powering on…" 23/23 px; the only moves on a mute flip are the
+      mute icon+label re-centring inside their own button, the power
+      button and its children no longer move at all. Report against
+      `expected-7.14.0.json` exits 0, no moves outside ActionRow, no
+      widget errors or binding loops in the journal. That file's
+      mute/pow rule notes updated to describe the pinned split instead
+      of the old column trade (the rules themselves are unchanged).
+      Installed copy upgraded (`kpackagetool6 --upgrade`),
+      `plasmashell --replace` done.
+  - **Owner soak (2026-09-12, real flyout on the real panel)**: mute
+    and unmute states, booting state and the final split all checked
+    by hand against the owner's own screenshots; reported as "now it
+    looks great".
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the

@@ -62,17 +62,17 @@
  {
   "key": "ActionRow\\[0\\]",
   "dim": "mute",
-  "note": "the mute button's own label swaps \"Mute\"/\"Unmute\" (different text length), and since both mute/power buttons are plain Layout.fillWidth GridLayout columns with no minimum/preferred pin (unchanged from FullRepresentation.qml's original, pre-rebuild GridLayout), the two columns trade width against each other - confined entirely to ActionRow's own subtree (background Rectangles, spacer Items, icon/label), never leaks into the header/volume-block above or the source-selector/footer below"
+  "note": "the mute button's own label swaps \"Mute\"/\"Unmute\" (different text length) and its icon swaps glyph (Phase 12.0.0), so the icon+label pair re-centres inside the button - confined to the mute button's own contentItem subtree (icon, label, spacer Items). Since 2026-09-12 (Phase 12.0.0 follow-up) both buttons pin a static preferredWidth (equal worst-case margins: 108 px mute / 152 px power at the base state), so the two columns no longer trade width against each other: muteButton/powerButton and the power button's children stay put on a mute flip. Never leaks into the header/volume-block above or the source-selector/footer below"
  },
  {
   "key": "ActionRow\\[0\\]",
   "dim": "pow",
-  "note": "the power button's own label swaps between \"Power On\"/\"Power Off\"/\"Powering on…\" and its icon<->spinner visibility swaps (§4 point 2's own trigger) - same self-contained column-width trade as the mute-dim rule above, plus the icon/label's own x shifting as the spinner enters/leaves the row's flow. Confined to ActionRow's own subtree."
+  "note": "the power button's own label swaps between \"Power On\"/\"Power Off\"/\"Powering on…\" and its icon<->spinner visibility swaps (§4 point 2's own trigger) - confined to the power button's own contentItem like the mute-dim rule above (the columns themselves no longer trade width since the 2026-09-12 preferredWidth pin), plus the icon/label's own x shifting as the spinner enters/leaves the row's flow. Confined to ActionRow's own subtree."
  },
  {
   "key": "ActionRow\\[0\\]",
   "dim": "amp",
-  "note": "0known/1none/2none collapse Power to false, which can change the power button's label text (\"Power Off\" -> \"Power On\") - same self-contained column-width trade as the mute/pow-dim rules above, different trigger."
+  "note": "0known/1none/2none collapse Power to false, which can change the power button's label text (\"Power Off\" -> \"Power On\") - confined to the power button's own contentItem like the mute/pow-dim rules above (no column-width trade since the 2026-09-12 preferredWidth pin), different trigger."
  },
  {
   "key": "ActionRow\\[0\\]/Button\\[1\\]/QQuickRowLayout\\[0\\]/QQuickItem\\[1\\]",

@@ -86,6 +86,45 @@ GridLayout {
     // last-known Mute/Unmute text, only dimmed.
     readonly property bool muteInteractive: actionRow.ampIp !== "" && actionRow.powerState === "On"
 
+    // 2026-09-12 follow-up (owner request): a fixed, unequal split with
+    // equal worst-case margins. Two plain fillWidth columns shared the
+    // row in proportion to each Button's content width, so "Unmute"
+    // grew the mute button by 14 px on every toggle; pinning both to
+    // the same preferredWidth (the mockup's `1fr 1fr`) stopped the
+    // motion but left "Powering on…" nearly touching its borders while
+    // "Unmute" sat in ~33 px of air per side. So: measure each button's
+    // widest content (icon + gap + widest label, in the labels' own
+    // font via TextMetrics, not hardcoded pixel counts), give both
+    // buttons the same margin around that worst case, and split what
+    // the row has accordingly. Static - the widths never follow the
+    // current label. actionRow.width comes from mainColumn, anchored to
+    // FlyoutContent's constant-width root, so deriving preferredWidth
+    // from it can't loop back into the flyout's own implicit width.
+    // Measured live (harness run 20260912-130939, all mute x pow
+    // states): content 63 / 106 px, row 260 px -> buttons 108 / 152 px
+    // in every state, worst-case margins 22-23 px per side on both
+    // ("Unmute" 23/22, "Powering on…" 23/23).
+    TextMetrics {
+        id: muteWorstCase
+        font: muteLabel.font
+        text: "Unmute"
+    }
+    TextMetrics {
+        id: powerWorstCase
+        font: powerLabel.font
+        text: "Powering on…"
+    }
+    readonly property real iconAndGap: 13 + muteContentRow.spacing
+    readonly property real muteContentMax: actionRow.iconAndGap + muteWorstCase.advanceWidth
+    readonly property real powerContentMax: actionRow.iconAndGap + powerWorstCase.advanceWidth
+    readonly property real buttonsAvailable: actionRow.width - actionRow.columnSpacing
+    readonly property real equalMargin: Math.max(0, (actionRow.buttonsAvailable - actionRow.muteContentMax - actionRow.powerContentMax) / 4)
+    // Whole pixels: the mute button rounds, the power button takes the
+    // exact remainder so the two always sum to the row (no sub-pixel
+    // borders on either).
+    readonly property int muteButtonWidth: Math.round(actionRow.muteContentMax + 2 * actionRow.equalMargin)
+    readonly property int powerButtonWidth: actionRow.buttonsAvailable - actionRow.muteButtonWidth
+
     Layout.fillWidth: true
     Layout.topMargin: 14
     Layout.bottomMargin: 4
@@ -102,6 +141,8 @@ GridLayout {
         id: muteButton
         objectName: "muteButton"
         Layout.fillWidth: true
+        // See actionRow's equal-margin split above.
+        Layout.preferredWidth: actionRow.muteButtonWidth
         Layout.preferredHeight: 38
         enabled: actionRow.muteInteractive
         // Same 0.4 factor as the group dims / Phase 8.3.0's steppers.
@@ -146,7 +187,23 @@ GridLayout {
                 Layout.alignment: Qt.AlignVCenter
                 implicitWidth: 13
                 implicitHeight: 13
-                source: "audio-volume-muted-symbolic"
+                // 2026-09-12 (flyout mockup v11 -> v12): the glyph follows
+                // the mute state like the mockup's muteIconOn/muteIconOff
+                // swap - a speaker with a sound wave while audible, the
+                // theme's muted speaker while muted (v11 drew the
+                // muted-speaker glyph in both states). Theme icon names,
+                // not the mockup's Lucide paths, like every other icon in
+                // this flyout (system-shutdown-symbolic beside it). Why
+                // "medium" and not "low" for the mockup's single-wave
+                // glyph: measured under Tela (the dev machine's theme) at
+                // this 13 px size, low draws both arcs at 35% opacity so
+                // it reads as a bare speaker, while medium is one solid
+                // arc plus a faint outer one - the mockup's look. Breeze
+                // uses the same convention (low: both arcs at 35%,
+                // medium: one solid, one faint), so the choice holds
+                // there too. The icon stays 13x13 in both states, so
+                // muteContentRow's measured height pin below is unaffected.
+                source: actionRow.muted ? "audio-volume-muted-symbolic" : "audio-volume-medium-symbolic"
                 color: actionRow.muted ? actionRow.theme.copperBright : actionRow.theme.text
             }
             Label {
@@ -167,6 +224,8 @@ GridLayout {
         id: powerButton
         objectName: "powerButton"
         Layout.fillWidth: true
+        // See actionRow's equal-margin split above.
+        Layout.preferredWidth: actionRow.powerButtonWidth
         Layout.preferredHeight: 38
         // Genuinely inert during boot, not just visually dimmed -
         // `enabled: false` on a QQC2 Button blocks mouse/keyboard event
