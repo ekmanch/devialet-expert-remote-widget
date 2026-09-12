@@ -7280,16 +7280,68 @@ architecture decisions; this file is just sequencing and status.
     through the widget in that window (no `devialet-chime[n] running:`
     lines; it only fires on the compact-icon scroll path), so its live
     path is verified only by the `sh -c` resolution check above.
+- [x] **Phase 13.0.1 — Plasmoid install step (2026-09-12).**
+      `scripts/install-plasmoid.sh` - an idempotent install/upgrade
+      wrapper around `kpackagetool6`, standalone for now (13.0.3 will
+      sequence it into the combined `install.sh`). Scoped to only the
+      plasmoid step, per the phase's own instruction - no
+      devialet-ctl/chime placement (13.0.0, already done) and no
+      systemd unit step (13.0.2) touched here.
+  - **Investigated live before writing anything** (measured, not
+    assumed from `--help`/man text):
+    - `--install` on an already-installed plugin id **fails** (exit 4,
+      `Error: Installation of <path> failed: <dest> already exists`)
+      - it does not upgrade in place.
+    - `--upgrade` on a plugin id that is **not** installed **fails**
+      (exit 2, `Error: Plugin <id> is not installed.`) - it does not
+      fall back to installing. On a malformed/missing metadata.json,
+      kpackagetool6 can't even read the plugin id, so this message's
+      `<id>` comes back empty rather than naming the real cause - not
+      trustworthy enough to branch on by itself.
+    - `--install` on a malformed metadata.json or a missing plasmoid
+      directory both fail loudly too (exit 4, distinct clear messages
+      - `Package plugin id not specified: ...` / `No such file: ...`).
+    - Every case above was reproduced live on this machine (including
+      actually removing and reinstalling the real
+      `com.ekmanch.devialetremote`, content-diffed identical to
+      `plasmoid/` before/after to confirm a clean round trip), not
+      inferred from documentation.
+    - Conclusion: kpackagetool6's own exit code is trustworthy as a
+      **success/failure** signal for whichever branch is chosen, but
+      not as the thing that *picks* the branch - "already installed?"
+      has to be decided beforehand.
+  - **Detection method**: read the real `KPlugin.Id` out of the
+    plasmoid's own `metadata.json` via `jq` (`com.ekmanch.devialetremote`
+    here, confirmed against the repo's actual `plasmoid/metadata.json`
+    rather than assumed), then check it against
+    `kpackagetool6 --type Plasma/Applet --list` with an **exact** line
+    match (`grep -qx`) - `--list` prints one plugin id per line with no
+    other per-line punctuation, confirmed live, so exact match is both
+    correct and simplest.
+  - **Script behavior**: not installed -> `--install`; installed ->
+    `--upgrade`; either kpackagetool6 call failing, or a missing
+    plasmoid dir / missing or malformed `metadata.json` / missing or
+    empty `KPlugin.Id` / missing `kpackagetool6` or `jq` on `PATH`, all
+    exit non-zero with a specific `install-plasmoid: error: ...`
+    message (`set -euo pipefail` plus explicit checks - never a silent
+    no-op or a hang). A final `--list` re-check after the call closes
+    the loop rather than trusting the exit code alone.
+  - Verify:
+    - Fresh install (real widget temporarily removed, content
+      confirmed identical to `plasmoid/` after reinstall): script
+      installs, `--list` shows `com.ekmanch.devialetremote`, exit 0.
+    - Immediate re-run: takes the upgrade branch, exit 0, `--list`
+      still shows exactly one entry (no duplicates).
+    - Three deliberately broken cases in scratch copies (missing
+      plasmoid dir; malformed `metadata.json`; `metadata.json` missing
+      entirely): each exits 1 with a distinct, specific error message,
+      no hang, no exit 0.
+    - Real widget left installed and byte-identical to `plasmoid/`
+      afterward (`diff -rq`); `git status` shows only the new untracked
+      `scripts/` directory.
 
 ## Up next
 
-- [ ] **Phase 13.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
-      install/upgrade logic the script needs — including handling the
-      "already installed, needs upgrade not install" case cleanly when
-      the script is re-run on a system that already has the widget.
-  - Verify: widget installs cleanly on a fresh system; re-running the
-    script on an already-installed system upgrades cleanly with no
-    `kpackagetool6` errors.
 - [ ] **Phase 13.0.2 — Systemd user unit install.** Copy the Phase 3.6
       systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
       `enable --now` as part of the script.
