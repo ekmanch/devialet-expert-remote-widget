@@ -82,7 +82,7 @@ Then add **Devialet Remote** to a panel via **Add Widgets**. If the widget was a
 
 ## Uninstall
 
-`uninstall.sh` stops **and** disables the background daemon (`systemctl --user disable --now`) and deletes its unit file, removes the plasmoid, and deletes the three binaries from `/usr/local/bin` — so nothing keeps running after it's gone. It is safe to re-run; anything already removed is skipped.
+`uninstall.sh` stops **and** disables the background daemon (`systemctl --user disable --now`) and deletes its unit file, removes the plasmoid and its picker icon, and deletes the three binaries from `/usr/local/bin` — so nothing keeps running after it's gone. It is safe to re-run; anything already removed is skipped.
 
 ```
 ./uninstall.sh

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Devialet Remote - icon-theme icon for the plasmoid (Add Widgets picker,
+  About page, alternatives list). Installed by scripts/install-plasmoid.sh
+  into $XDG_DATA_HOME/icons/hicolor/scalable/apps/ and referenced from
+  plasmoid/metadata.json as "Icon": "com.ekmanch.devialetremote" - KPlugin
+  icons are resolved by name through QIcon::fromTheme, never from inside
+  the package.
+
+  Design: the settings mockup's .brand-mark (design/mockups/settings_window/
+  devialet_config_dialog_mockup_v25_single_tab.html) - a rounded graphite
+  tile (surface #1a1a1d, 1px copper-dim #8a5c39 border) carrying the copper
+  glow dot used everywhere else (contents/icons/devialet_icon_glow_dot.svg:
+  copper-bright #e3a06a dot + 35% ring). Same tokens as all four mockups.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <radialGradient id="glow" cx="32" cy="32" r="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e3a06a" stop-opacity="0.28"/>
+      <stop offset="0.6" stop-color="#e3a06a" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#e3a06a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="14" ry="14" fill="#1a1a1d" stroke="#8a5c39" stroke-width="1.5"/>
+  <circle cx="32" cy="32" r="22" fill="url(#glow)"/>
+  <circle cx="32" cy="32" r="19" fill="none" stroke="#e3a06a" stroke-width="3" opacity="0.35"/>
+  <circle cx="32" cy="32" r="12.5" fill="#e3a06a"/>
+</svg>

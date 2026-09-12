@@ -336,6 +336,27 @@ Either way, `plasmashell --replace` is required for QML changes to take
 effect — there is no hot-reload for KPackage-based applets short of a full
 shell restart.
 
+**The Add Widgets picker icon is a theme icon, and changing it also needs
+the shell restart.** `metadata.json`'s `KPlugin.Icon` is resolved by
+*name* through `QIcon::fromTheme` (the widget explorer's shell plugin
+imports exactly `KPluginMetaData::iconName` + `QIcon::fromTheme`,
+nothing from KPackage), so a file bundled under `contents/icons/` can
+never be the picker icon - that is why the panel icon (`Plasmoid.icon`
+overridden in `main.qml` to the bundled glow-dot SVG) and the picker icon
+are two different mechanisms. The picker icon lives in the repo at
+`icons/hicolor/scalable/apps/com.ekmanch.devialetremote.svg` (the brand
+mark tile from the settings mockup, same copper tokens) and
+`scripts/install-plasmoid.sh` copies it into
+`~/.local/share/icons/hicolor/scalable/apps/` (every icon theme inherits
+hicolor; a PKGBUILD would use `/usr/share/icons/hicolor/`);
+`uninstall.sh` removes it. Measured live: after `--upgrade` alone the
+running shell showed a "?" for the entry - it had re-read the new icon
+*name* from metadata but its per-process icon cache did not contain the
+just-installed file (bumping the hicolor dir mtime did not help) - and
+`plasmashell --replace` fixed it. So an icon-only change follows the same
+reload rule as QML. The same theme icon also feeds the ConfigDialog's
+About page, confirmed live.
+
 ## `target/` can go missing out from under a running daemon — every widget command then silently no-ops (found live, post-Phase-7.13.0 investigation)
 
 **Symptom**: every widget control (volume, mute, source, power) appears to
@@ -888,6 +909,11 @@ devialet-expert-remote-widget/
 │                                    #   ConfigCategory.source path-resolution
 │                                    #   gotcha this layout runs into (fixed
 │                                    #   with a "../config/" source prefix).
+├── icons/
+│   └── hicolor/scalable/apps/      # the Add Widgets picker icon, installed into
+│       └── com.ekmanch.devialetremote.svg   #   the user's hicolor theme by
+│                                    #   scripts/install-plasmoid.sh (KPlugin.Icon
+│                                    #   is a theme name; see "Reloading changes")
 ├── systemd/
 │   └── devialet-remote-daemon.service   # user unit (Restart=on-failure) for
 │                                    #   `systemctl --user enable`, per the settled

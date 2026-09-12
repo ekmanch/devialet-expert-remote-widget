@@ -7776,16 +7776,76 @@ architecture decisions; this file is just sequencing and status.
     from ~45 MB). A crop to the widget area remains a possible follow-up.
   - Not touched: install.sh, uninstall.sh, scripts/*, CLAUDE.md, the
     mockup.
+- [x] **Custom plasmoid icon for the Add Widgets picker (2026-09-12,
+      unnumbered, pre-v1.0.0).** The picker entry showed a generic
+      device icon because `metadata.json` said `"Icon":
+      "audio-speakers-symbolic"` - a valid theme name that resolved fine
+      (Tela has it), just not ours. The panel icon was never affected:
+      `main.qml` overrides `Plasmoid.icon` with the bundled glow-dot SVG.
+  - **How the field resolves (measured, not assumed)**: the widget
+    explorer is `PlasmaAppletItemModel` in plasma-workspace's shell
+    plugin; its binary imports exactly `KPluginMetaData::iconName()` and
+    `QIcon::fromTheme()` and nothing from KPackage, so `KPlugin.Icon` is
+    an icon-theme *name*, never a bundled path - matching the Phase 4.1
+    finding recorded in `config.qml` and every other installed plasmoid
+    (10/10 use theme names; the two that bundle SVGs use them only
+    in-widget). Consequence: a brand icon must be installed into the
+    icon theme lookup path, freedesktop-style.
+  - **Asset**: `icons/hicolor/scalable/apps/com.ekmanch.devialetremote.svg`
+    (repo path mirrors the install layout a PKGBUILD would use under
+    `/usr/share/icons/hicolor/`). Owner chose the settings mockup's
+    `.brand-mark` tile over the bare glow dot (which reads as just a dot
+    at the picker's 128 px): rounded graphite square `#1a1a1d` with a
+    1.5 px copper-dim `#8a5c39` border, the copper-bright `#e3a06a` dot
+    + 35 % ring from `devialet_icon_glow_dot.svg`, and a soft radial
+    glow - all tokens shared by the four mockups, no new colour.
+    `metadata.json` -> `"Icon": "com.ekmanch.devialetremote"`
+    (reverse-DNS, same as the plugin id, no collision risk).
+  - **Scripts (owner-approved)**: `scripts/install-plasmoid.sh` copies
+    the SVG to `${XDG_DATA_HOME:-~/.local/share}/icons/hicolor/scalable/
+    apps/` (idempotent via `cmp`, bumps the hicolor dir mtime);
+    `uninstall.sh` step 1 removes it whether or not the package is still
+    present. `install.sh`/`install-binaries.sh`/`install-daemon-unit.sh`
+    untouched. README's uninstall sentence now mentions the icon.
+  - Verify (live, owner screenshots): `kiconfinder6
+    com.ekmanch.devialetremote` resolves to the installed file; re-run
+    of `install-plasmoid.sh` says "picker icon already up to date".
+    **After `--upgrade` alone the picker showed a "?"** (unknown-icon
+    fallback: the running shell re-read the new name but its icon cache
+    lacked the new file; the mtime bump was not enough); after
+    `plasmashell --replace` the copper tile shows in Add Widgets and on
+    the ConfigDialog's About page. Recorded in CLAUDE.md's reload
+    section: an icon-only change needs the shell restart like QML does.
+    Noticed on the About page, out of scope here: `Website` still points
+    at the old `-widget` GitHub URL (`metadata.json`, also `Cargo.toml`)
+    - fix before the v1.0.0 tag.
 
 ## Up next
 
-- [ ] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Cut the tag on
-      main once 13.0.0–13.0.5 are done and verified. This becomes the
-      fixed source snapshot every downstream distribution channel
-      (AUR, KDE Store) points at.
-  - Verify: fresh clone at the tag, run install.sh end-to-end —
-    confirms the tagged state is genuinely installable, not just
-    "main looked done."
+- [ ] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Before cutting
+      the tag, fix two known-stale items in plasmoid/metadata.json:
+      `KPlugin.Website` still points at the pre-rename
+      `devialet-expert-remote-widget` GitHub URL (confirmed live in
+      the ConfigDialog's About page - screenshot shows the old URL)
+      - update it to `devialet-expert-remote-kde`. Also fix
+      Cargo.toml's repository URL, same stale name. `KPlugin.Version`
+      is still "0.1" (visible in the same About page) - set it to
+      "1.0.0" to match the tag being cut, since these are two
+      independent fields the packaging doesn't reconcile
+      automatically. Confirm no other file references the old
+      `-widget` name (grep the repo) before moving on.
+
+      Then cut the tag on main once 13.0.0–13.0.5 are done and
+      verified. This becomes the fixed source snapshot every
+      downstream distribution channel (AUR, KDE Store) points at.
+  - Verify: About page in the real ConfigDialog shows the corrected
+    Website URL and "1.0.0" after a fresh install-plasmoid.sh
+    re-run (confirm whether this needs plasmashell --replace to show,
+    per the icon-cache reload gotcha already recorded in CLAUDE.md -
+    a metadata text change may or may not hit the same cache lag).
+    Fresh clone at the tag, run install.sh end-to-end — confirms the
+    tagged state is genuinely installable, not just "main looked
+    done."
     
 - [ ] **Phase 14.0.0 — AUR packaging (investigation first).** Separate
       effort from install.sh, not a reuse of it — Arch packaging

@@ -9,7 +9,7 @@
         "Category": "System Information",
         "Description": "Control a Devialet Expert Pro amplifier over the local network",
         "EnabledByDefault": true,
-        "Icon": "audio-speakers-symbolic",
+        "Icon": "com.ekmanch.devialetremote",
         "Id": "com.ekmanch.devialetremote",
         "License": "MIT",
         "Name": "Devialet Remote",

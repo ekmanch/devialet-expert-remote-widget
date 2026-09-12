@@ -5,7 +5,8 @@
 # or fails, everything user-level is already gone and a re-run only has
 # the binaries left to do).
 #
-#   [1/3] remove the plasmoid           (reverse of scripts/install-plasmoid.sh)
+#   [1/3] remove the plasmoid + its    (reverse of scripts/install-plasmoid.sh)
+#         hicolor picker icon
 #   [2/3] stop, disable and delete the  (reverse of scripts/install-daemon-unit.sh)
 #         daemon's systemd --user unit
 #   [3/3] delete the three binaries     (reverse of scripts/install-binaries.sh;
@@ -41,6 +42,7 @@ UNIT_FILE="${UNIT_DIR}/${UNIT_NAME}"
 UNIT_WANTS_LINK="${UNIT_DIR}/plasma-workspace.target.wants/${UNIT_NAME}"
 PLUGIN_ID="com.ekmanch.devialetremote"
 PACKAGE_TYPE="Plasma/Applet"
+ICON_DEST="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/scalable/apps/${PLUGIN_ID}.svg"
 BIN_DIR="/usr/local/bin"
 BINARIES=(devialet-ctl devialet-chime devialet-remote-daemon)
 DAEMON_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/devialet-remote-daemon"
@@ -76,18 +78,29 @@ plasmoid_installed() {
 step_plasmoid() {
     if ! plasmoid_installed; then
         echo "uninstall: plasmoid ${PLUGIN_ID} is not installed, nothing to remove."
-        return 0
+    else
+        echo "uninstall: removing plasmoid ${PLUGIN_ID}..."
+        if ! kpackagetool6 --type "$PACKAGE_TYPE" --remove "$PLUGIN_ID"; then
+            echo "uninstall: error: kpackagetool6 --remove ${PLUGIN_ID} failed (it was listed as installed)" >&2
+            return 1
+        fi
+        if plasmoid_installed; then
+            echo "uninstall: error: kpackagetool6 reported success but ${PLUGIN_ID} is still in --list" >&2
+            return 1
+        fi
+        echo "uninstall: plasmoid removed."
     fi
-    echo "uninstall: removing plasmoid ${PLUGIN_ID}..."
-    if ! kpackagetool6 --type "$PACKAGE_TYPE" --remove "$PLUGIN_ID"; then
-        echo "uninstall: error: kpackagetool6 --remove ${PLUGIN_ID} failed (it was listed as installed)" >&2
-        return 1
+
+    # The picker icon is a theme icon install-plasmoid.sh placed in the
+    # user's hicolor theme (kpackagetool6 knows nothing about it), so it
+    # is removed here whether or not the package itself was still present.
+    if [ -e "$ICON_DEST" ]; then
+        rm -f -- "$ICON_DEST" || { echo "uninstall: error: could not delete ${ICON_DEST}" >&2; return 1; }
+        touch "$(dirname "$(dirname "$(dirname "$ICON_DEST")")")" 2>/dev/null || true
+        echo "uninstall: deleted picker icon ${ICON_DEST}"
+    else
+        echo "uninstall: picker icon not present at ${ICON_DEST}, nothing to remove."
     fi
-    if plasmoid_installed; then
-        echo "uninstall: error: kpackagetool6 reported success but ${PLUGIN_ID} is still in --list" >&2
-        return 1
-    fi
-    echo "uninstall: plasmoid removed."
 }
 
 step_daemon_unit() {

@@ -68,4 +68,28 @@ if ! kpackagetool6 --type "$PACKAGE_TYPE" --list 2>/dev/null | grep -qx -- "$PLU
     die "kpackagetool6 reported success but $PLUGIN_ID is not in --list afterward"
 fi
 
+# --- picker icon (theme icon, not part of the KPackage) ---
+# metadata.json's KPlugin.Icon is resolved by name through QIcon::fromTheme
+# (the widget explorer imports exactly KPluginMetaData::iconName +
+# QIcon::fromTheme, nothing from KPackage), so a bundled contents/icons/
+# file can never be the picker icon. The icon therefore lives in the
+# repo's icons/hicolor/... tree - the same layout a PKGBUILD would install
+# to /usr/share/icons/hicolor/ - and is copied into the user's hicolor
+# theme here, which every icon theme inherits. Idempotent: skipped when
+# the installed copy is byte-identical.
+ICON_NAME="$PLUGIN_ID"
+ICON_SOURCE="${SCRIPT_DIR}/../icons/hicolor/scalable/apps/${ICON_NAME}.svg"
+ICON_DEST_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/scalable/apps"
+ICON_DEST="${ICON_DEST_DIR}/${ICON_NAME}.svg"
+[ -f "$ICON_SOURCE" ] || die "picker icon not found in the repo: $ICON_SOURCE"
+if [ -f "$ICON_DEST" ] && cmp -s "$ICON_SOURCE" "$ICON_DEST"; then
+    echo "install-plasmoid: picker icon already up to date at $ICON_DEST"
+else
+    install -Dm0644 "$ICON_SOURCE" "$ICON_DEST" || die "failed to install picker icon to $ICON_DEST"
+    # KIconLoader/QIconLoader cache lookups by the theme directory's mtime;
+    # bump it so a running Plasma notices the new icon without a relogin.
+    touch "${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor" 2>/dev/null || true
+    echo "install-plasmoid: picker icon installed to $ICON_DEST"
+fi
+
 echo "install-plasmoid: done, $PLUGIN_ID is installed."
