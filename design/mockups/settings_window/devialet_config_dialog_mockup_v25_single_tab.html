@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet ConfigDialog — Mockup v17 (single tab)</title>
+<title>Devialet ConfigDialog — Mockup v25 (single tab)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -98,7 +98,7 @@
   }
   .kcm-cat{
     display:flex; flex-direction:column; align-items:center; gap:7px;
-    padding:14px 6px 12px; border-radius:9px; cursor:pointer;
+    padding:14px 6px 12px; border-radius:9px; cursor:default;
     font-size:12px; color:var(--win-text-dim);
     margin-bottom:8px; text-align:center; line-height:1.3;
   }
@@ -163,7 +163,7 @@
   .kcm-switch{
     width:36px; height:21px; border-radius:999px; background:var(--surface-3);
     border:1px solid var(--divider);
-    position:relative; flex-shrink:0; cursor:pointer; transition:background .18s ease;
+    position:relative; flex-shrink:0; cursor:default; transition:background .18s ease;
   }
   .kcm-switch.on{ background:var(--copper-dim); }
   .kcm-switch::after{
@@ -176,12 +176,12 @@
   input[type="range"].kcm-slider{
     -webkit-appearance:none; appearance:none; flex:1; height:4px; border-radius:999px;
     background:linear-gradient(90deg, var(--copper) 0%, var(--copper) var(--fill,60%), var(--surface-3) var(--fill,60%), var(--surface-3) 100%);
-    outline:none; margin:0; cursor:pointer;
+    outline:none; margin:0; cursor:default;
   }
   input[type="range"].kcm-slider::-webkit-slider-thumb{
     -webkit-appearance:none; appearance:none; width:15px; height:15px; border-radius:50%;
     background:var(--copper-bright); box-shadow:0 0 0 3px rgba(227,160,106,0.18), 0 1px 3px rgba(0,0,0,0.5);
-    cursor:pointer;
+    cursor:default;
   }
   .kcm-slider-value{
     font-family:var(--font-mono); font-size:11px; color:var(--copper-bright);
@@ -194,9 +194,10 @@
   }
   .kcm-seg-btn{
     padding:5px 11px; font-family:var(--font-mono); font-size:11px; color:var(--text-dim);
-    border-radius:6px; cursor:pointer;
+    border-radius:6px; cursor:default;
   }
   .kcm-seg-btn.active{ background:var(--surface-3); color:var(--copper-bright); }
+  .kcm-seg-btn:not(.active):hover{ color:var(--copper-bright); }
 
   .kcm-sub-row{
     padding:8px 2px 4px; transition:opacity .15s ease;
@@ -207,7 +208,7 @@
   .danger-btn{
     padding:7px 14px; border-radius:8px; font-size:12px; font-weight:600;
     background:var(--surface); border:1px solid var(--divider); color:var(--text);
-    cursor:pointer; white-space:nowrap; flex-shrink:0;
+    cursor:default; white-space:nowrap; flex-shrink:0;
   }
   .danger-btn:hover{ border-color:var(--danger); color:var(--danger-bright); }
   .danger-btn.confirming{ background:rgba(181,84,74,0.16); border-color:var(--danger); color:var(--danger-bright); }
@@ -216,7 +217,7 @@
   .neutral-btn{
     padding:7px 14px; border-radius:8px; font-size:12px; font-weight:600;
     background:var(--surface); border:1px solid var(--divider); color:var(--text);
-    cursor:pointer; white-space:nowrap; flex-shrink:0;
+    cursor:default; white-space:nowrap; flex-shrink:0;
   }
   .neutral-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
 
@@ -229,7 +230,7 @@
   }
   .file-picker-btn{
     width:28px; height:28px; border-radius:7px; background:var(--surface); border:1px solid var(--divider);
-    display:flex; align-items:center; justify-content:center; color:var(--text-dim); cursor:pointer; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; color:var(--text-dim); cursor:default; flex-shrink:0;
   }
   .file-picker-btn svg{ width:14px; height:14px; }
   .file-picker-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
@@ -261,7 +262,7 @@
     display:flex; align-items:center; gap:8px;
     font-family:var(--font-mono); font-size:11px; color:var(--text);
     background:var(--surface); border:1px solid var(--divider); border-radius:7px;
-    padding:6px 8px 6px 12px; min-width:150px; cursor:pointer;
+    padding:6px 8px 6px 12px; min-width:150px; cursor:default;
   }
   .theme-dropdown-field:hover{ border-color:var(--copper-dim); }
   .theme-dropdown-field .chev{ margin-left:auto; color:var(--text-faint); transition:transform .15s ease; flex-shrink:0; }
@@ -275,7 +276,7 @@
   .theme-dropdown.open .theme-dropdown-list{ display:block; }
   .theme-dropdown-item{
     display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px;
-    font-family:var(--font-mono); font-size:11px; color:var(--text-dim); cursor:pointer; white-space:nowrap;
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim); cursor:default; white-space:nowrap;
   }
   .theme-dropdown-item:hover{ background:var(--surface-3); }
   .theme-dropdown-item.selected{ color:var(--copper-bright); }
@@ -287,7 +288,7 @@
   .db-stepper-btn{
     width:26px; height:26px; border-radius:7px; background:var(--surface); border:1px solid var(--divider);
     display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:600;
-    font-size:14px; color:var(--text); cursor:pointer; user-select:none;
+    font-size:14px; color:var(--text); cursor:default; user-select:none;
   }
   .db-stepper-btn:hover{ border-color:var(--copper-dim); color:var(--copper-bright); }
   .db-stepper-value{
@@ -334,7 +335,7 @@
   }
   .kcm-btn{
     display:flex; align-items:center; gap:6px;
-    padding:7px 16px; border-radius:999px; font-size:12px; cursor:pointer;
+    padding:7px 16px; border-radius:999px; font-size:12px; cursor:default;
     background:var(--surface); border:1px solid var(--divider); color:var(--win-text);
     font-family:var(--font-mono);
   }
@@ -351,7 +352,7 @@
 </head>
 <body>
 
-<div class="mockup-tag">MOCKUP · CONFIGDIALOG v17 — SINGLE TAB, Amplifiers section removed</div>
+<div class="mockup-tag">MOCKUP · CONFIGDIALOG v25 — SINGLE TAB, segmented hover is text-color only</div>
 
 <div style="display:flex; flex-direction:column; align-items:center;">
   <div class="kcm-window">
