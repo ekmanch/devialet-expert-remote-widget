@@ -7339,19 +7339,108 @@ architecture decisions; this file is just sequencing and status.
     - Real widget left installed and byte-identical to `plasmoid/`
       afterward (`diff -rq`); `git status` shows only the new untracked
       `scripts/` directory.
+- [x] **Phase 13.0.2 — Systemd user unit install (2026-09-12).**
+      Two consequences of 13.0.0's decision, both landed: the daemon
+      binary is now placed at `/usr/local/bin` the same way as
+      `devialet-ctl`/`devialet-chime`, and `scripts/install-daemon-
+      unit.sh` (matching 13.0.1's `install-plasmoid.sh` style) wraps
+      "copy the unit + enable + get it running the current binary"
+      idempotently. `systemd/devialet-remote-daemon.service` now uses
+      a bare `ExecStart=devialet-remote-daemon` - no more
+      `@@EXECSTART@@` `sed` placeholder, no more per-clone path
+      substitution, ever.
+  - **Investigated live before writing anything** (measured, not
+    assumed from `man systemd.service`):
+    - `enable --now` on an **already-active** unit does **not** pick
+      up a changed `ExecStart=` on disk. Verified with a disposable
+      probe unit: rewrote its `ExecStart`, ran `daemon-reload` +
+      `enable --now` - `systemctl show -p ExecStart` immediately
+      reflected the new path (it just re-parses the unit file), but
+      the actual running process was untouched, same PID, still
+      executing the old command. `enable --now` behaves like `start`
+      for the already-active case, and `start` on an active unit is a
+      no-op.
+    - An explicit `systemctl --user restart` **is** required to pick
+      up a changed `ExecStart`, and it does a clean sequenced
+      stop-then-start (`journalctl` showed `Stopping .../Stopped
+      .../Started ...`; the old PID confirmed dead before the new one
+      appeared - no overlap window).
+    - `enable` alone is idempotent (exit 0 whether or not already
+      enabled) and `restart` works fine even on a never-started/
+      inactive unit (starts it cleanly, exit 0) - so the script always
+      uses `restart` when a (re)start is needed and never has to
+      branch between `start`/`restart`.
+    - No two-daemon-instances risk even setting sequencing aside: the
+      daemon acquires its D-Bus name (`com.ekmanch.DevialetRemote`, a
+      non-queueing `zbus::blocking::connection::Builder::name()` call)
+      *before* it binds the UDP socket, so a genuine race would fail
+      at the D-Bus step and the second process would exit before ever
+      touching the socket - relevant because the daemon does set
+      `SO_REUSEADDR` on that socket, so the socket layer alone
+      wouldn't reject a second bind.
+  - **Script behavior**: copies the unit, `daemon-reload`s, `enable`s
+    (idempotent), then compares the *actually running* process
+    (`readlink -f /proc/<MainPID>/exe`, not `systemctl show
+    -p ExecStart` - which, per the finding above, reflects the unit
+    file on disk rather than what the running process was launched
+    from) against the canonical `/usr/local/bin/devialet-remote-daemon`
+    path, and only `restart`s when inactive or mismatched - a genuine
+    no-op re-run leaves the daemon undisturbed rather than bouncing it
+    on every install.sh run. Missing `systemctl`, a missing unit file
+    in the repo, or a missing/non-executable daemon binary at
+    `/usr/local/bin` (this script doesn't build/place it - 13.0.0's
+    job) all exit 1 with a specific message; a final `is-active` +
+    running-binary re-check closes the loop rather than trusting exit
+    codes alone.
+  - **README** "Daemon autostart" section rewritten: drops the `sed`
+    substitution and per-clone-path caveat entirely, replaced with the
+    three-line build/install/`install-daemon-unit.sh` flow. **CLAUDE.md**
+    updated in three places (Install location bullet, PATH section,
+    and the `target/`-went-missing recovery block) to describe all
+    three binaries uniformly instead of singling out `devialet-ctl`/
+    `devialet-chime`.
+  - **Live migration performed on this machine**: old daemon (PID
+    73266, running out of this clone's `target/release/`, enabled and
+    active for ~27 min) was replaced by running
+    `sudo install -Dm0755 -t /usr/local/bin
+    target/release/devialet-remote-daemon` then
+    `scripts/install-daemon-unit.sh`. `journalctl` showed a clean
+    `Stopping/Stopped/Started` with old PID 73266 confirmed dead
+    before new PID 78842 appeared - no port or D-Bus-name conflict
+    lines.
+  - Verify:
+    - `systemctl --user status` active, `readlink -f
+      /proc/<MainPID>/exe` -> `/usr/local/bin/devialet-remote-daemon`
+      (the resolved running binary, not just the unit file's
+      `ExecStart=` text).
+    - Migration journal clean, as above.
+    - Immediate re-run of the script: `already active and running the
+      current binary, nothing to restart` - PID unchanged (78842),
+      confirming a true no-op, not just an equivalent end state.
+    - Fresh-system simulation (real unit stopped, disabled, and
+      removed from `~/.config/systemd/user/`, `daemon-reload`d):
+      script installed the unit, enabled it (confirmed via
+      `is-enabled`), and started it cleanly in one run, no errors.
+      Real unit/state restored afterward.
+    - Live D-Bus check: polled `VolumeDb` over the daemon-mediated
+      D-Bus path while the owner moved the flyout slider a couple of
+      times - saw it move -25 -> -20 -> -31 -> back to -25 in the
+      poll, and `journalctl` showed the corresponding `devialet-ctl`
+      invocations all exiting 0 in the same window. Confirms the
+      migration didn't break the UDP -> daemon -> D-Bus -> QML
+      reactivity path Phase 8.0.1 characterized.
+    - **Logout/login survival: NOT YET DONE.** Not exercised in this
+      session (would require ending the desktop session, which the
+      owner has not done since this migration). The unit is `enabled`
+      (`WantedBy=plasma-workspace.target`, unchanged from before this
+      phase) so this is expected to hold, but expected is not the same
+      as confirmed - don't treat this phase's verify criteria as fully
+      closed until the owner has actually logged out and back in and
+      confirmed `systemctl --user status devialet-remote-daemon.service`
+      is active and the widget still works.
 
 ## Up next
 
-- [ ] **Phase 13.0.2 — Systemd user unit install.** Copy the Phase 3.6
-      systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
-      `enable --now` as part of the script.
-  - Note from 13.0.0: with the daemon placed in `/usr/local/bin` like
-    `devialet-ctl`/`devialet-chime`, the unit can use a bare
-    `ExecStart=devialet-remote-daemon` (systemd resolves non-absolute
-    names against `/usr/local/bin` and `/usr/bin`, `man systemd.service`)
-    and the `@@EXECSTART@@` `sed` placeholder can go.
-  - Verify: `systemctl --user status` shows the daemon running
-    immediately after install; survives a logout/login.
 - [ ] **Phase 13.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
       into one script a user runs after cloning the repo. Must be
       idempotent — safe to re-run on an already-installed system

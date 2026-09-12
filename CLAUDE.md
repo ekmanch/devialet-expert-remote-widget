@@ -195,8 +195,10 @@ all three.
 - **Install location for the binaries: `/usr/local/bin`, by copy (Phase
   13.0.0, settled - do not re-derive).** `devialet-ctl` and
   `devialet-chime` are built in release profile and copied with
-  `install -Dm0755 -t /usr/local/bin`; the daemon follows the same rule
-  when Phase 13.0.2 installs the unit. Three candidates were measured on
+  `install -Dm0755 -t /usr/local/bin`; `devialet-remote-daemon` follows
+  the same rule (Phase 13.0.2 completed this for the daemon binary and
+  its systemd unit - see "`devialet-ctl` on PATH" below and
+  `scripts/install-daemon-unit.sh`). Three candidates were measured on
   the dev machine, not assumed:
   - `~/.local/bin` is **not** on PATH by default on Arch/CachyOS -
     `/etc/profile` appends only `/usr/local/bin`, `/etc/login.defs` and
@@ -221,11 +223,13 @@ all three.
     `plasma-workspace` units -> `/usr/lib/systemd/user/`, a third-party
     plasmoid -> `/usr/share/plasma/plasmoids/<id>/`). Cost: one `sudo`
     step, the only root step in this project's setup.
-  - Consequence for the daemon unit (13.0.2): `man systemd.service` -
-    a non-absolute `ExecStart=` is resolved against `/usr/local/bin/` and
-    `/usr/bin/`, so once the daemon lives there the unit can say
-    `ExecStart=devialet-remote-daemon` with no `@@EXECSTART@@` `sed`
-    placeholder, and one unit file serves install.sh and the AUR package.
+  - Consequence for the daemon unit, implemented in Phase 13.0.2:
+    `man systemd.service` - a non-absolute `ExecStart=` is resolved
+    against `/usr/local/bin/` and `/usr/bin/`, so with the daemon
+    binary placed there `systemd/devialet-remote-daemon.service` uses
+    `ExecStart=devialet-remote-daemon` directly - no `@@EXECSTART@@`
+    `sed` placeholder, no per-clone path substitution - and the same
+    unit file will serve install.sh and the AUR package unchanged.
 
 ## Scope
 
@@ -376,25 +380,24 @@ don't skip straight to a code fix next time either:
 **Fix, if this happens again**:
 
 ```
-cargo build --release --locked   # daemon's systemd unit points at target/release/
+cargo build --release --locked -p devialet-ctl -p devialet-chime -p devialet-remote-daemon
 sudo install -Dm0755 -t /usr/local/bin \
-    target/release/devialet-ctl target/release/devialet-chime   # Phase 13.0.0 placement (copies; a dangling symlink can't recur)
-systemctl --user restart devialet-remote-daemon.service
+    target/release/devialet-ctl target/release/devialet-chime target/release/devialet-remote-daemon
+scripts/install-daemon-unit.sh   # restarts the daemon only if it isn't already running this exact binary
 ```
 
-Since Phase 13.0.0 the installed `devialet-ctl`/`devialet-chime` are
-copies in `/usr/local/bin`, independent of `target/`, so this exact
-dangling-symlink form cannot recur - but the exit-127 diagnosis above
-still applies to any missing or unreadable binary, and the daemon half
-(`(deleted)` exe, unit still `active`) is unchanged until Phase 13.0.2
-moves the daemon out of `target/release/` too.
+Since Phase 13.0.0/13.0.2, `devialet-ctl`, `devialet-chime` *and*
+`devialet-remote-daemon` are all copies in `/usr/local/bin`, independent
+of `target/`, so this exact dangling-symlink/`(deleted)`-exe form cannot
+recur for any of the three - but the exit-127 diagnosis above still
+applies to any missing or unreadable binary, wherever it's installed.
 
 Verify the daemon is actually off the fresh binary afterward — status
 alone won't tell you (see point 1 above):
 
 ```
 systemctl --user show devialet-remote-daemon.service -p MainPID --value \
-  | xargs -I{} ls -la /proc/{}/exe   # must NOT say "(deleted)"
+  | xargs -I{} ls -la /proc/{}/exe   # must NOT say "(deleted)", must resolve to /usr/local/bin/devialet-remote-daemon
 devialet-ctl --help                  # must print its usage text (exit 1 by design), not exit 127 "command not found"
 ```
 
