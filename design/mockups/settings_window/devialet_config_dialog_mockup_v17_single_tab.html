@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Devialet ConfigDialog — Mockup v16 (chime source: theme vs. file)</title>
+<title>Devialet ConfigDialog — Mockup v17 (single tab)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -351,7 +351,7 @@
 </head>
 <body>
 
-<div class="mockup-tag">MOCKUP · CONFIGDIALOG v16 — chime sound source: theme vs. file</div>
+<div class="mockup-tag">MOCKUP · CONFIGDIALOG v17 — SINGLE TAB, Amplifiers section removed</div>
 
 <div style="display:flex; flex-direction:column; align-items:center;">
   <div class="kcm-window">
@@ -540,15 +540,6 @@
             </div>
           </div>
 
-          <p class="kcm-section-label">Amplifiers</p>
-          <div class="kcm-row">
-            <div class="kcm-row-text">
-              <span class="kcm-row-name">Forget remembered amps</span>
-              <span class="kcm-row-desc">Clears saved IPs — daemon will rediscover via mDNS/UDP. Does not disconnect the active amp.</span>
-            </div>
-            <div class="danger-btn" id="forgetBtn" onclick="handleForget(this)">Forget All (3)</div>
-          </div>
-
           <p class="kcm-section-label">Startup</p>
           <div class="kcm-row">
             <div class="kcm-row-text">
@@ -723,27 +714,6 @@
     document.querySelectorAll('.chime-source-variant').forEach(v => v.classList.remove('active'));
     document.getElementById('chimeVariant-follow').classList.add('active');
     document.getElementById('chimeFileName').textContent = 'chime-default.ogg';
-  }
-  let forgetConfirming = false;
-  function handleForget(el){
-    if(!forgetConfirming){
-      forgetConfirming = true;
-      el.classList.add('confirming');
-      el.textContent = 'Click to confirm';
-      setTimeout(()=>{
-        if(forgetConfirming){
-          forgetConfirming = false;
-          el.classList.remove('confirming');
-          el.textContent = 'Forget All (3)';
-        }
-      }, 3000);
-    } else {
-      forgetConfirming = false;
-      el.classList.remove('confirming');
-      el.textContent = 'Forget All (0)';
-      el.style.pointerEvents = 'none';
-      el.style.opacity = '0.5';
-    }
   }
 </script>
 
