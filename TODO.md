@@ -7192,31 +7192,115 @@ architecture decisions; this file is just sequencing and status.
     and unmute states, booting state and the final split all checked
     by hand against the owner's own screenshots; reported as "now it
     looks great".
+- [x] **Phase 13.0.0 — devialet-ctl and devialet-chime build + PATH placement (2026-09-12).**
+      Decided the real install location for the two binaries the QML
+      shells out to by bare name (`devialet-ctl` for every command,
+      `devialet-chime` for the volume chime - both through plasmashell's
+      executable engine, `/bin/sh -c`, so plasmashell's inherited `PATH`
+      is the one that matters; the daemon never invokes either). Chime
+      was added to the phase's scope by the owner: same invocation, same
+      placement rule, leaving it out would give a fresh install a
+      silently missing chime. Until now both reached `PATH` only via
+      hand-made `~/.local/bin` symlinks into `target/debug/` (README said
+      `target/release/`; nothing scripted or tracked).
+  - **Decision: system-wide `/usr/local/bin`, by copy, release profile**
+    (owner-confirmed after the report below):
+
+        cargo build --release --locked -p devialet-ctl -p devialet-chime
+        sudo install -Dm0755 -t /usr/local/bin \
+            target/release/devialet-ctl target/release/devialet-chime
+
+    Documented in README's "Development setup" and CLAUDE.md
+    (Architecture "Install location" bullet + the `devialet-ctl` on PATH
+    section). No install.sh, Makefile or PKGBUILD - 13.0.3 / the AUR
+    task own those.
+  - **Why not the other two candidates** (measured on the dev machine,
+    not assumed):
+    - `~/.local/bin` is **not** on `PATH` by default on Arch/CachyOS:
+      `/etc/profile` appends only `/usr/local/bin`; `/etc/login.defs`
+      and SDDM's `DefaultPath` are `/usr/local/sbin:/usr/local/bin:
+      /usr/bin`; `/etc/skel/.bashrc` has no `.local/bin`; the systemd
+      user manager sets no `PATH` of its own; no `environment.d` file
+      adds it. It is on plasmashell's `PATH` here only because fish's
+      `fish_user_paths` (`~/.config/fish/fish_variables`) adds it and
+      SDDM exec's the login shell. A bash-login user would hit exit 127
+      on every widget command (CLAUDE.md's "everything reverts
+      uniformly" failure). README's old "on PATH by default on most
+      modern distros" claim was wrong for Arch. Also invisible to a
+      PKGBUILD, which can never install into a home directory.
+    - `cargo install` into `~/.cargo/bin`: that directory does not
+      exist and is not on `PATH` (Rust via pacman, no rustup env
+      script), so plasmashell would never see it. `man cargo-install`
+      confirms `--path` reuses the workspace `target/` (no artifact
+      conflict), but it also writes `~/.cargo/.crates.toml` tracking
+      state, and the Arch Rust package guidelines treat `cargo install`
+      as a fallback (`--no-track --root "$pkgdir/usr/"` only).
+    - `/usr/local/bin` is on every default `PATH` above, on systemd's
+      fixed `ExecStart` search path, ahead of `/usr/bin`, and is FHS's
+      slot for locally built, non-package-managed software. Cost: one
+      `sudo` step, the only root step in this project's setup.
+  - **AUR fit**: Arch's Rust guidelines are `cargo build --frozen
+    --release` + `install -Dm0755 -t "$pkgdir/usr/bin/"` (confirmed
+    locally: `ripgrep` -> `/usr/bin/rg`, `plasma-workspace` units ->
+    `/usr/lib/systemd/user/`, `plasma6-applets-panel-colorizer` ->
+    `/usr/share/plasma/plasmoids/<id>/`). The same `install` line
+    serves both flows with `PREFIX=/usr/local` (install.sh) vs
+    `PREFIX=/usr` + `DESTDIR=$pkgdir` (PKGBUILD) - no rework later.
+  - **Consequence for 13.0.2** (recorded, not implemented): `man
+    systemd.service` - a non-absolute `ExecStart=` is resolved against
+    a fixed search path that includes `/usr/local/bin/` and `/usr/bin/`.
+    With the daemon placed the same way, the unit can say
+    `ExecStart=devialet-remote-daemon` and drop the `@@EXECSTART@@`
+    `sed` placeholder entirely; one unit file then serves install.sh
+    and the AUR package, and the "ExecStart went stale against a moved
+    clone" bug 13.0.3 calls out cannot recur.
+  - Copy, not symlink: a copy survives `cargo clean` / a vanished
+    `target/` (the CLAUDE.md live failure). Trade-off: a rebuild does
+    not update it; re-run the `install` line. Dev-machine trap recorded
+    in CLAUDE.md: `~/.local/bin` precedes `/usr/local/bin`, so a
+    leftover symlink there shadows the installed copy - both old
+    symlinks removed here.
+  - **Verified (2026-09-12)**: owner ran the `sudo install`; both
+    `/usr/local/bin/devialet-ctl` and `/usr/local/bin/devialet-chime`
+    are root-owned regular ELF files byte-identical (`cmp`) to
+    `target/release/`. Old `~/.local/bin` symlinks removed. From
+    `env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin` (SDDM's
+    `DefaultPath` verbatim, no user additions) and from `sh -c` (what
+    the executable engine runs) both resolve to `/usr/local/bin/...`
+    and print their usage text (exit 1 is the CLIs' own no-args/unknown-
+    flag exit, identical to running `target/release/` directly; a
+    control `sh -c nonexistent-cmd` gives 127). Note: neither binary
+    has a `--help` flag - CLAUDE.md's old "must exit 0" line corrected.
+    Live widget check: the owner
+    drove the flyout volume slider at 14:23:29, 23 s after the old
+    symlinks were removed (14:23:06, `~/.local/bin` mtime), so those
+    invocations resolved to the `/usr/local/bin` copy - `journalctl
+    --user -b` shows every `devialet-ctl ... volume` run finishing with
+    exit code 0 and empty stderr. `devialet-chime` was not triggered
+    through the widget in that window (no `devialet-chime[n] running:`
+    lines; it only fires on the compact-icon scroll path), so its live
+    path is verified only by the `sh -c` resolution check above.
 
 ## Up next
 
-- [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
-      real install location for the `devialet-ctl` binary (system-wide
-      `/usr/local/bin`, user `~/.local/bin` placed by the script rather
-      than the current manual symlink, or `cargo install` into
-      `~/.cargo/bin`) and build/place it as part of the install script.
-      Currently a manual `~/.local/bin` symlink per README — fine for
-      dev, not a real install path.
-  - Verify: `devialet-ctl` is invocable from a fresh shell with no
-    manual step, on a machine that hasn't had it built/placed before.
-- [ ] **Phase 6.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
+- [ ] **Phase 13.0.1 — Plasmoid install step.** Wrap the `kpackagetool6`
       install/upgrade logic the script needs — including handling the
       "already installed, needs upgrade not install" case cleanly when
       the script is re-run on a system that already has the widget.
   - Verify: widget installs cleanly on a fresh system; re-running the
     script on an already-installed system upgrades cleanly with no
     `kpackagetool6` errors.
-- [ ] **Phase 6.0.2 — Systemd user unit install.** Copy the Phase 3.6
+- [ ] **Phase 13.0.2 — Systemd user unit install.** Copy the Phase 3.6
       systemd unit file to `~/.config/systemd/user/`, `daemon-reload`,
       `enable --now` as part of the script.
+  - Note from 13.0.0: with the daemon placed in `/usr/local/bin` like
+    `devialet-ctl`/`devialet-chime`, the unit can use a bare
+    `ExecStart=devialet-remote-daemon` (systemd resolves non-absolute
+    names against `/usr/local/bin` and `/usr/bin`, `man systemd.service`)
+    and the `@@EXECSTART@@` `sed` placeholder can go.
   - Verify: `systemctl --user status` shows the daemon running
     immediately after install; survives a logout/login.
-- [ ] **Phase 6.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
+- [ ] **Phase 13.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
       into one script a user runs after cloning the repo. Must be
       idempotent — safe to re-run on an already-installed system
       without duplicating units, breaking an existing install, or
@@ -7232,7 +7316,7 @@ architecture decisions; this file is just sequencing and status.
       rather than leaving them as manually sed-substituted
       placeholders per the current README instructions - this class of
       bug will keep recurring otherwise.
-- [ ] **Phase 6.0.4 — Uninstall script (decide scope first).** Decide
+- [ ] **Phase 13.0.4 — Uninstall script (decide scope first).** Decide
       deliberately whether an uninstall script is in scope for v1.0.0
       or explicitly deferred — don't let it default to "skipped"
       silently. If in scope: reverse of 4.6.3 (disable/remove the
@@ -7258,7 +7342,7 @@ architecture decisions; this file is just sequencing and status.
     no installed plasmoid, and no leftover binary. Specifically
     confirm `systemctl --user is-enabled devialet-remote-daemon.service`
     reports the unit gone (not just disabled) after uninstall.
-- [ ] **Phase 6.0.5 — README install instructions.** Replace the
+- [ ] **Phase 13.0.5 — README install instructions.** Replace the
       current manual multi-step install instructions with "clone the
       repo, run install.sh." Keep the manual steps documented separately
       only if 6.0.4's uninstall is deferred and manual removal
@@ -7267,8 +7351,6 @@ architecture decisions; this file is just sequencing and status.
       as a required manual step, not just plasmoid removal, since
       removing only the panel icon leaves the daemon running
       indefinitely (see 6.0.4's note).
-
-- [ ] **feat — make the color of the icon in the panel changeable**
       
 
 ## Bugs
