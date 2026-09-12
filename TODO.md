@@ -7730,19 +7730,55 @@ architecture decisions; this file is just sequencing and status.
       the real ConfigDialog shows "Choose theme" lit copper under the
       pointer while "System theme" stays the active segment, cursor a
       normal arrow - "it looks great now".
+- [x] **Phase 13.0.5 — README rewrite (2026-09-12).** README.md
+      rewritten from scratch to match `readme-preview-mockup-v2.html`
+      (owner's mockup; lives at the repo root, not under
+      `design/mockups/`, untracked and left byte-identical - md5
+      checked before/after) with real content replacing every lorem
+      ipsum line, and the media placed per the owner's spec: demo GIF at
+      the very top, then H1/tagline/badges, Features, Screenshots with
+      "The flyout" (flyout1-3 in order), "Settings" (ConfigDialog.png,
+      centred at 640 px like the mockup's `.configdialog` rule) and
+      "Panel tooltip & volume OSD" (tooltip_osd1 then tooltip1),
+      Requirements table, Install, Uninstall, Try before installing,
+      Architecture, footer.
+  - Facts checked rather than copied from the mockup: clone URL from
+    `git remote` (`ekmanch/devialet-expert-remote-kde`; note
+    `Cargo.toml`/`metadata.json` still say `-widget`, out of scope
+    here); install/uninstall commands are the argument-less scripts;
+    the uninstall description states `disable --now` + unit file +
+    plasmoid + three binaries and names what is left behind, per
+    13.0.4; Plasma 6.0+ from `metadata.json`; the installer's real tool
+    needs (cargo, kpackagetool6 from `kpackage`, jq, sudo); Devialet
+    compatibility written as "Expert Pro, tested on an Expert 140 Pro"
+    instead of the mockup's "any model"; MIT from LICENSE. Captions were
+    written after looking at each screenshot (all three flyout shots
+    show the closed flyout on different wallpapers; tooltip1 shows the
+    scroll/middle-click hints, so middle-click-to-mute went into
+    Features too).
+  - Attribution: the mockup footer's `andrewmgrossman/devialet_expert_
+    remote` is a real repo (Python Expert Pro controller) but nothing in
+    this repo or the Kotlin app references it; owner chose to credit
+    the Kotlin app (`ekmanch/devialet-expert-remote`) as the protocol
+    source plus the two community projects its README names
+    (`jprouty/devialet_expert`, `gnulabis/devimote`) - both confirmed to
+    exist - and omit andrewmgrossman.
+  - Verify: every image/link path in the README resolves on disk (13
+    paths); no lorem/ipsum/placeholder/grossman text left (grep);
+    mockup md5 unchanged; code blocks match the scripts (no arguments,
+    correct URL). No local Markdown renderer is installed (no pandoc/
+    cmark/python-markdown), so GitHub rendering itself is for the owner
+    to eyeball after pushing - the image tags use plain `<img
+    src=... width=...>`, which GitHub renders. Screenshots are full
+    3840x2160 captures; the owner ran them through pngquant right after
+    this phase (same filenames, so the README needed no change): 2.4-3.9
+    MB each, ~14 MB for the five plus 5 MB for the GIF (~19 MB page, down
+    from ~45 MB). A crop to the widget area remains a possible follow-up.
+  - Not touched: install.sh, uninstall.sh, scripts/*, CLAUDE.md, the
+    mockup.
 
 ## Up next
 
-- [ ] **Phase 13.0.5 — README install instructions.** Replace the
-      current manual multi-step install instructions with "clone the
-      repo, run install.sh." Keep the manual steps documented separately
-      only if 6.0.4's uninstall is deferred and manual removal
-      instructions are still needed — in that case, explicitly document
-      `systemctl --user disable --now devialet-remote-daemon.service`
-      as a required manual step, not just plasmoid removal, since
-      removing only the panel icon leaves the daemon running
-      indefinitely (see 6.0.4's note).
-      
 - [ ] **Phase 13.1.0 — Tag v1.0.0 and GitHub release.** Cut the tag on
       main once 13.0.0–13.0.5 are done and verified. This becomes the
       fixed source snapshot every downstream distribution channel
