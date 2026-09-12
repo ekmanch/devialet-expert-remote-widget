@@ -108,7 +108,6 @@ Rectangle {
         id: fieldArea
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
         // Mockup toggleThemeDropdown(): a click on the field toggles.
         onClicked: {
             if (list.opened) list.close();
@@ -190,7 +189,6 @@ Rectangle {
                         id: rowArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
                         // Mockup selectTheme(): report, then close.
                         onClicked: {
                             root.themeChosen(row.modelData.id);

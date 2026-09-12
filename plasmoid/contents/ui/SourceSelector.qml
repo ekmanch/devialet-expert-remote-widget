@@ -196,7 +196,6 @@ ColumnLayout {
             anchors.fill: parent
             hoverEnabled: true
             enabled: sourceSelector.interactive
-            cursorShape: sourceSelector.interactive ? Qt.PointingHandCursor : Qt.ArrowCursor
             onClicked: sourceSelector.toggleRequested()
         }
     }

@@ -160,7 +160,6 @@ Popup {
                     id: ampNoneArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
                     onClicked: overlay.ampChosen("")
                 }
             }
@@ -263,7 +262,6 @@ Popup {
                         id: ampOptionArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
                         onClicked: overlay.ampChosen(ampOption.modelData.ip)
                     }
                 }

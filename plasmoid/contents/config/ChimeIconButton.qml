@@ -107,7 +107,6 @@ Item {
         id: area
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
         onClicked: {
             if (root.isPlay) {
                 root.playing = true;

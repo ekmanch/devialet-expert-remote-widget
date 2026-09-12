@@ -915,7 +915,6 @@ Item {
             id: settingsTriggerArea
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
             onClicked: {
                 Plasmoid.internalAction("configure")?.trigger()
             }

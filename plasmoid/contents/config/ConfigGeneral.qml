@@ -630,12 +630,18 @@ KCM.SimpleKCM {
                                 text: parent.modelData
                                 font.family: root.theme.fontMono
                                 font.pixelSize: 11
-                                color: stepSegmented.activeIndex === parent.index ? root.theme.copperBright : root.theme.textDim
+                                // Mockup v25 .kcm-seg-btn:not(.active):hover
+                                // {color:var(--copper-bright)}: hover lights the
+                                // text only - no background change, no cursor
+                                // change ("segmented hover is text-color only").
+                                color: stepSegmented.activeIndex === parent.index || stepArea.containsMouse
+                                    ? root.theme.copperBright : root.theme.textDim
                             }
 
                             MouseArea {
+                                id: stepArea
                                 anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
+                                hoverEnabled: true
                                 onClicked: root.cfg_volumeStepDb = root.stepValues[parent.index]
                             }
                         }
@@ -783,12 +789,16 @@ KCM.SimpleKCM {
                                     text: chimeSeg.modelData
                                     font.family: root.theme.fontMono
                                     font.pixelSize: 11
-                                    color: chimeSeg.active ? root.theme.copperBright : root.theme.textDim
+                                    // Same v25 hover rule as the step-size segments
+                                    // above: text-color only, cursor stays normal.
+                                    color: chimeSeg.active || chimeSegArea.containsMouse
+                                        ? root.theme.copperBright : root.theme.textDim
                                 }
 
                                 MouseArea {
+                                    id: chimeSegArea
                                     anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
+                                    hoverEnabled: true
                                     onClicked: root.setChimeSourceMode(root.chimeSourceModes[chimeSeg.index])
                                 }
                             }
@@ -1041,7 +1051,6 @@ KCM.SimpleKCM {
                     id: defaultsArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
                     // Writes straight to the cfg_* properties, same as
                     // every other control on this page - the shell's own
                     // generic isConfigurationChanged() dirty-check (which

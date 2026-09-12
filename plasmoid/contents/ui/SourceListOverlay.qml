@@ -193,7 +193,6 @@ Popup {
                         id: sourceOptionArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
                         // Bounds-checked against the model this component
                         // owns (the same rule SourceSelector's old
                         // onActivated followed).

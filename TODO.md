@@ -7694,6 +7694,42 @@ architecture decisions; this file is just sequencing and status.
       kpackagetool6's own stderr about someone else's package, our
       removal succeeded on the same run, and it is left visible on
       purpose (hiding `--remove`'s stderr would hide real errors too).
+- [x] **Flyout cursor: pointing hand only on the amp header (mockup v14,
+      2026-09-12).** Owner request between 13.0.4 and 13.0.5: the
+      pointer cursor had crept onto several flyout elements; `design/
+      mockups/flyout/Devialet flyout mockup v14.html` now has
+      `cursor:pointer` on `.amp-header` only (everything else
+      `cursor:default`). Removed `cursorShape: Qt.PointingHandCursor`
+      from `SourceSelector.qml` (source row), `SourceListOverlay.qml`
+      (each source option), `AmpListOverlay.qml` (the "None" row and
+      each amp option) and `FlyoutContent.qml` (settings gear trigger);
+      `AmpHeader.qml`'s `ampHeaderArea` keeps it. No other flyout
+      element set a cursor (grep), so the default arrow applies
+      everywhere else, including inside both expanded lists. qmllint
+      clean on the touched files (only pre-existing layout-positioning
+      warnings). Owner then extended the request to the ConfigDialog:
+      removed the pointing hand from `contents/config/` too -
+      `SettingsSwitch.qml` (switch rows), `ThemeDropdown.qml` (field
+      and each option), `ChimeIconButton.qml`, and `ConfigGeneral.qml`
+      (two segmented-control MouseAreas and the Defaults trigger). A
+      third request briefly put the pointing hand back on the two
+      segmented controls (Volume step size 0.5/1/2 dB; Volume feedback
+      System theme / Choose theme / Custom file), then the owner
+      settled it against ConfigDialog mockup v25 (`design/mockups/
+      settings_window/devialet_config_dialog_mockup_v25_single_tab.html`,
+      tag "segmented hover is text-color only"): `.kcm-seg-btn:not(
+      .active):hover{color:var(--copper-bright)}`. Implemented in
+      `ConfigGeneral.qml`: both segment MouseAreas got an id and
+      `hoverEnabled: true`, the label colour is copper-bright when the
+      segment is active **or** hovered (`containsMouse`), text-dim
+      otherwise; no background change and no cursor change. Final
+      state: `AmpHeader.qml` is the only `cursorShape` in the plasmoid
+      (grep); every ConfigDialog control keeps the normal arrow.
+      qmllint clean. **Owner verified (2026-09-12)** after a full
+      `./uninstall.sh` + `./install.sh` + shell restart: screenshot of
+      the real ConfigDialog shows "Choose theme" lit copper under the
+      pointer while "System theme" stays the active segment, cursor a
+      normal arrow - "it looks great now".
 
 ## Up next
 
