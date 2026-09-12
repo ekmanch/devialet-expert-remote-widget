@@ -7273,9 +7273,6 @@ architecture decisions; this file is just sequencing and status.
 
 ## Bugs
 
-- [ ] **Bug: volume icon on flyout mute button does not update
-      depending on mute/unmute state**
-
 - [x] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced
