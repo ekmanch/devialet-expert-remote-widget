@@ -7080,7 +7080,48 @@ architecture decisions; this file is just sequencing and status.
         state means the executable-engine job does survive the dialog
         closing, so no detached-write fallback was needed. End state
         `enabled`.
-      
+
+- [x] **Phase 11.1.0 — Remove Amplifiers section from ConfigDialog (2026-09-12).**
+      Originally scoped as "wire the mockup's Forget remembered amps
+      button to real daemon state." Investigation found known amps are
+      in-memory only and never persisted to disk, and the button could
+      only ever forget amps that had already gone silent, never the
+      active one — so the feature itself is being dropped rather than
+      shipped. Remove the "AMPLIFIERS" section label and "Forget
+      remembered amps" row entirely from ConfigGeneral.qml, matching
+      design/mockups/settings_window/devialet_config_dialog_mockup_v17_single_tab.html.
+      No other changes — amp discovery, selection, and connection
+      behavior are untouched.
+  - Verify: qmllint clean; reload the widget and confirm the
+    Amplifiers section is fully gone with no leftover gap/divider;
+    everything else on the settings page unaffected.
+  - **Done (2026-09-12)**: `ConfigGeneral.qml` loses the "Amplifiers"
+    `SectionLabel` and the "Forget remembered amps" `SettingsRow`
+    (button, 3 s confirm timer, MouseArea), plus the three things that
+    existed only to feed its "Forget All (N)" label: the
+    `knownAmpsCount` property, the `unwrap()` helper and the
+    `Dbus.Properties` KnownAmps read, and with them the now-unused
+    `org.kde.plasma.workspace.dbus` import - the page makes no D-Bus
+    calls at all any more. Nothing in `contents/ui/`, the daemon or
+    `devialet-ctl` touched. Mockup v16 -> v17 diff checked first: the
+    section and its `handleForget()` script are the only design
+    change, so this is the whole delta. qmllint: same single
+    pre-existing "unused import org.kde.plasma.plasmoid" info as at
+    HEAD (kept deliberately per the file header), nothing new.
+  - **Verified hands-free** (standalone `/usr/lib/qt6/bin/qml` driver
+    rendering the real page offscreen, HEAD vs. working tree, logging
+    every SectionLabel/SettingsRow's y/height): the "Startup" label
+    now sits exactly where "Amplifiers" sat (143 px below the chime
+    row's top in both renders, i.e. the same 28 px section gap every
+    other section uses), content height 1118 -> 997 px, every other
+    section/row unchanged in order and height. Screenshots of both
+    renders compared by eye: no leftover gap or divider. Installed
+    copy upgraded (`kpackagetool6 --upgrade`), `plasmashell --replace`
+    done, no widget errors in the journal.
+  - **Owner soak (2026-09-12, real ConfigDialog - scripting can't
+    open it)**: opened by hand, Amplifiers section gone, layout
+    reported as looking right.
+
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -7155,25 +7196,6 @@ architecture decisions; this file is just sequencing and status.
       as a required manual step, not just plasmoid removal, since
       removing only the panel icon leaves the daemon running
       indefinitely (see 6.0.4's note).
-      
-- [ ] **Phase 11.1.0 — Forget remembered amps wiring.** Per the mockup:
-      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
-      and explicitly does **not** disconnect or forget the currently
-      active/selected amp. Investigate before implementing: known amps
-      are daemon-owned persisted state (Phase 4.2's architecture), so
-      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
-      — there is no existing way to clear this from outside the daemon
-      today. Confirm exactly what "does not disconnect the active amp"
-      means in terms of daemon state: does the active amp get
-      re-added to `KnownAmps` immediately (since it's still
-      broadcasting), or does it stay disconnected-but-not-forgotten
-      until its next broadcast is naturally re-ingested? Decide and
-      implement the button's real confirm-click behavior (currently
-      just a visual mock from Phase 4.4.1) to actually call the new
-      method on the second click. Verify live: forget all amps with
-      one connected and playing, confirm the connection is undisturbed
-      (volume/mute/source controls keep working) while the amp list
-      empties out and repopulates only as amps re-broadcast.
 
 - [ ] **feat — make the color of the icon in the panel changeable**
       

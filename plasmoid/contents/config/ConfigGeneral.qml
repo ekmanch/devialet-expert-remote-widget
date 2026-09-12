@@ -36,13 +36,19 @@ pragma ComponentBehavior: Bound
 // Every control is purely visual and no-op this phase - no KConfig
 // writes, no D-Bus calls other than the read-only KnownAmps count below.
 // Real wiring is Phases 4.4.2-4.4.7, one control at a time.
+//
+// Phase 11.1.0: the Amplifiers section ("Forget remembered amps" and
+// its read-only KnownAmps count, the page's only D-Bus read) is removed
+// to match mockup v17 - the feature was dropped, not deferred: known
+// amps are in-memory only, never persisted, and the button could only
+// ever have forgotten amps that had already gone silent. This page no
+// longer talks to D-Bus at all.
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
 import org.kde.kcmutils as KCM
 import org.kde.kirigami as Kirigami
 import org.kde.plasma.plasmoid
-import org.kde.plasma.workspace.dbus as Dbus
 // Phase 10.1.1: the Volume Feedback section's two real pieces of
 // behavior - reading the desktop's sound theme / enumerating installed
 // themes (P5Support executable engine, same pattern as devialet-ctl in
@@ -173,41 +179,6 @@ KCM.SimpleKCM {
         chimePinnedTheme: "ocean",
         chimeSoundFile: ""
     })
-
-    // Read-only live count for the "Forget All (N)" button's idle label -
-    // explicitly sanctioned by this phase's scope (display only, not
-    // wiring the forget action itself). Deliberately simpler than
-    // FullRepresentation.qml's fetchKnownAmpsFresh()/re-fetch-on-signal
-    // machinery (needed there because KnownAmps' PropertiesChanged delta
-    // payload isn't trustworthy on repeat updates - see that file's own
-    // doc): this is a one-time snapshot read on dialog open, not a
-    // long-lived live view, so a single onRefreshed read is enough.
-    property int knownAmpsCount: 0
-
-    // Same unwrap() as FullRepresentation.qml (Phase 2 finding, still true
-    // here): properties.KnownAmps from onRefreshed arrives as a
-    // {"value": [...]} wrapper, not a bare array - skipping this produced
-    // a real bug caught live (raw.length on the wrapper object is
-    // undefined, which QML silently coerces an int property to 0 -
-    // rendered as a plausible-looking but wrong "Forget All (0)" with a
-    // real known amp connected).
-    function unwrap(prop, fallback) {
-        if (prop === undefined || prop === null) return fallback;
-        if (typeof prop === "object" && prop.value !== undefined) return prop.value;
-        return prop;
-    }
-
-    Dbus.Properties {
-        busType: Dbus.BusType.Session
-        service: "com.ekmanch.DevialetRemote"
-        path: "/com/ekmanch/DevialetRemote/Amp"
-        iface: "com.ekmanch.DevialetRemote.Amp1"
-
-        onRefreshed: {
-            const known = root.unwrap(properties.KnownAmps, []);
-            root.knownAmpsCount = known.length;
-        }
-    }
 
     // ---- Phase 10.1.2: the master chime toggle, wired for real ----
     // main.xml `chimeEnabled` - same cfg_<entryName> + cfg_<name>Default
@@ -1009,65 +980,6 @@ KCM.SimpleKCM {
             }
         }
 
-        // ---- Amplifiers ----
-        SectionLabel { text: "Amplifiers" }
-
-        SettingsRow {
-            name: "Forget remembered amps"
-            desc: "Clears saved IPs — daemon will rediscover via mDNS/UDP. Does not disconnect the active amp."
-
-            Rectangle {
-                id: forgetBtn
-                radius: root.theme.radiusSm
-                implicitWidth: forgetLabel.implicitWidth + 28
-                implicitHeight: forgetLabel.implicitHeight + 14
-
-                // idle -> confirming (3s revert timer) -> done (terminal,
-                // matches the mockup's handleForget() - no-op this phase,
-                // no real amps are ever forgotten.
-                property string phase: "idle"
-
-                color: phase === "confirming" ? Qt.rgba(root.theme.danger.r, root.theme.danger.g, root.theme.danger.b, 0.16) : root.theme.surface
-                border.width: 1
-                border.color: (phase === "confirming" || forgetArea.containsMouse) ? root.theme.danger : root.theme.divider
-                opacity: phase === "done" ? 0.5 : 1.0
-
-                Label {
-                    id: forgetLabel
-                    anchors.centerIn: parent
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
-                    text: forgetBtn.phase === "confirming" ? "Click to confirm"
-                        : forgetBtn.phase === "done" ? "Forget All (0)"
-                        : "Forget All (" + root.knownAmpsCount + ")"
-                    color: (forgetBtn.phase === "confirming" || forgetArea.containsMouse) ? root.theme.dangerBright : root.theme.text
-                }
-
-                Timer {
-                    id: forgetRevertTimer
-                    interval: 3000
-                    onTriggered: if (forgetBtn.phase === "confirming") forgetBtn.phase = "idle"
-                }
-
-                MouseArea {
-                    id: forgetArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    enabled: forgetBtn.phase !== "done"
-                    onClicked: {
-                        if (forgetBtn.phase === "idle") {
-                            forgetBtn.phase = "confirming";
-                            forgetRevertTimer.restart();
-                        } else if (forgetBtn.phase === "confirming") {
-                            forgetRevertTimer.stop();
-                            forgetBtn.phase = "done";
-                        }
-                    }
-                }
-            }
-        }
-
         // ---- Startup ----
         SectionLabel { text: "Startup" }
 
@@ -1175,7 +1087,7 @@ KCM.SimpleKCM {
                         // every other row (main.xml defaults follow /
                         // ocean / ""). Resetting the pinned theme is a
                         // deliberate step beyond the mockup, whose
-                        // handleDefaults() (lines 719-725) forgets its
+                        // handleDefaults() (v17 lines 698-717) forgets its
                         // dropdown label.
                         root.cfg_chimeSourceMode = root.shippedDefaults.chimeSourceMode;
                         root.cfg_chimePinnedTheme = root.shippedDefaults.chimePinnedTheme;
