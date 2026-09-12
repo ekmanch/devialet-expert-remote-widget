@@ -5449,6 +5449,56 @@ architecture decisions; this file is just sequencing and status.
   healed -39dB ceiling. Re-ran the ceiling/no-op/coalescing checks above
   again post-fix to confirm no regression (still exactly one invocation
   each, correct values).
+  
+- [x] **Bug: widget doesn't reflect amp-initiated volume changes it
+      didn't itself send.** Observed during Phase 4.3.1's live
+      verification: after a real power-on (both via timeout-forced
+      fallback and normal boot), the amp reports its actual post-boot
+      default volume (-40dB, set in the Devialet configurator) but the
+      widget continues showing whatever it displayed pre-power-off
+      (e.g. -44.5dB) instead of updating to match. The mismatch
+      persists indefinitely until the volume slider/step buttons are
+      touched in the widget itself - at which point it starts tracking
+      correctly again. Neither side appears to overwrite the other
+      incorrectly; they just silently diverge and stay diverged.
+  - Also reproduces on a completely normal boot (no timeout/fallback
+    involved) - the widget shows its own stale pre-boot value (e.g.
+    -42dB) while the amp is actually at its real -40dB default. Not
+    specific to the Phase 4.3.0/4.3.1 boot-state work at all.
+  - Same symptom previously observed in the Kotlin Android app - not
+    new to this port, likely a pre-existing protocol/reactivity gap
+    (amp-initiated volume changes not picked up unless the widget/app
+    has sent a volume command at least once itself) rather than
+    something specific to this widget's implementation.
+  - **Characterized 2026-09-07 (Phase 8.0.1's Gate #2 investigation),
+    root cause is the amp's firmware, not the daemon or the widget.**
+    Method: an independent raw UDP capture on port 45454 (a second
+    SO_REUSEADDR socket logging byte 562 bit 0x80 = power and byte 565
+    = raw volume, dB = (raw - 195) / 2) merged with `busctl` polling of
+    the daemon on one clock, across 21+ real power cycles. Findings:
+    - The daemon tracks every raw-byte change within 1-40 ms and the
+      D-Bus push follows immediately - nothing in UDP → daemon → D-Bus
+      → QML drops or lags an amp-initiated change. The earlier "could
+      be daemon or widget" guess is ruled out on this path.
+    - The first `power_on` packet after boot still carries the
+      pre-shutdown byte (raw 145 = -25); ~200 ms later the broadcast
+      switches to **raw 111 = -42.0** and stays there for 30 s+ with no
+      command in flight. The owner read the front panel at that moment:
+      **-40**, the configurator's startup setting. So the amp is really
+      at -40 and its own broadcast is wrong by 2 dB - the "stale -42
+      while the amp is at -40" seen above was the widget faithfully
+      showing the amp's misreport, not a stale local value.
+    - It does not self-correct. Any volume command (any value) makes
+      the broadcast track the real level again immediately (verified
+      each time the test restored -25 after a boot) - which is exactly
+      why touching the slider "fixed" it. Now docs/known-gotchas.md #8.
+  - Consequence for scope: Phase 8.0.1's post-boot startup send (500 ms
+    after a widget-initiated boot confirms) incidentally re-syncs the
+    broadcast for that path only. An external power-on (physical
+    remote, front panel) stays exposed to the misreport by design
+    (owner decision: widget-initiated only). Kept open for that case;
+    front-panel/remote volume changes on an already-running amp were
+    not tested here and remain unverified.
 
 - [x] **Phase 8.0.1 — devialet-ctl startup-volume CLI wiring.**
   Depends on 8.0.0 (done — persistence exists) and ideally waits until
@@ -7438,25 +7488,98 @@ architecture decisions; this file is just sequencing and status.
       closed until the owner has actually logged out and back in and
       confirmed `systemctl --user status devialet-remote-daemon.service`
       is active and the widget still works.
+- [x] **Phase 13.0.3 — Combined install.sh (2026-09-12).**
+      `./install.sh` at the repo root sequences three standalone,
+      idempotent step scripts - it contains none of their logic itself:
+      `scripts/install-binaries.sh` (new here) -> `scripts/install-
+      daemon-unit.sh` (13.0.2) -> `scripts/install-plasmoid.sh`
+      (13.0.1). The original note on this phase (regenerate the ctl
+      symlink / daemon ExecStart against wherever the clone lives) was
+      already obsolete: 13.0.0/13.0.2 fixed every path at
+      `/usr/local/bin`, so install.sh has no clone-path logic at all.
+  - **Decisions** (reported and confirmed before writing code):
+    - ctl/chime/daemon placement became its own
+      `scripts/install-binaries.sh` rather than inline in install.sh:
+      matches the other two scripts' standalone-and-idempotent
+      pattern (runnable alone after a rebuild), isolates the only
+      root step, and stays out of the future PKGBUILD's way (pacman
+      does its own `install -Dm0755`). It builds all three with
+      `cargo build --release --locked`, `cmp`s each build output
+      against `/usr/local/bin`, and exits 0 **without invoking sudo**
+      when all three are byte-identical - a genuine no-op re-run asks
+      for no password. Only differing binaries are (re)placed; sudo is
+      used only when `/usr/local/bin` is not writable. Honours
+      `CARGO_TARGET_DIR`.
+    - Order binaries -> daemon unit -> plasmoid: step 2 hard-depends
+      on the daemon binary (its own check fails fast otherwise); the
+      plasmoid goes last because it only works once the other two
+      exist, and the cargo/sudo step first means the likeliest
+      failures happen before anything is touched. install.sh
+      preflights cargo/cmp/install/systemctl/kpackagetool6/jq (+ sudo
+      when `/usr/local/bin` isn't writable) before step 1.
+    - Partial failure is explicit, not `set -e` fallout: install.sh
+      uses `set -u` only, runs each step through a wrapper, and on
+      failure prints the failed `[N/3]` step, the completed steps, the
+      skipped steps, "nothing rolled back - completed steps are valid
+      on their own", and exits with the failing step's number.
+      Deliberately no rollback: binaries alone are inert, daemon
+      without plasmoid just runs, plasmoid without daemon shows "Not
+      connected"; undoing a working daemon because the plasmoid step
+      failed would help nobody.
+    - On success it prints a reminder that an already-placed panel
+      widget needs `plasmashell --replace` (or logout/login) to load
+      upgraded QML - advisory only, never run automatically.
+  - **CLAUDE.md** Install location bullet, PATH section and the
+    `target/`-went-missing recovery block now point at `install.sh` /
+    `install-binaries.sh`. README is 13.0.5's job and was left alone.
+  - Verify (all on the dev machine, 2026-09-12):
+    - **Clean state -> one run**: daemon unit disabled and deleted,
+      plasmoid `--remove`d, all three `/usr/local/bin` binaries
+      `sudo rm`'d by the owner; then the owner ran `./install.sh` (one
+      sudo prompt). Output showed the fresh branches - "(re)placed 3
+      of 3 binaries", "Created symlink ... plasma-workspace.target
+      .wants", "not installed yet, installing" - exit 0. Checked
+      afterward: three root-owned binaries `cmp`-identical to
+      `target/release/`; unit `enabled` + `active`, `/proc/<pid>/exe`
+      -> `/usr/local/bin/devialet-remote-daemon`, journal clean
+      (registered name, listening on 45454); plasmoid in `--list` and
+      `diff -rq` identical to `plasmoid/`; `Online` true over D-Bus.
+      `plasmashell --replace` then run so the panel widget bound to the
+      recreated package - no widget errors in the journal.
+    - **Idempotent re-run**: step 1 "all 3 binaries already installed
+      and up to date, nothing to copy" (no sudo prompt), step 2
+      "nothing to restart" with daemon PID unchanged (84214), step 3
+      upgrade branch, exit 0; still one `--list` entry, one unit file
+      + one wants-symlink. Same result earlier on the pre-teardown
+      system (PID 78986 unchanged).
+    - **Partial failure, one induced case per step position** (owner
+      asked for this after the first plan only covered step 3), run
+      from a scratchpad copy of the repo with a no-op `cargo` shim on
+      PATH and `CARGO_TARGET_DIR` pointed at the real `target/` so
+      step 1 takes the identical->no-sudo path; live daemon PID and
+      plasmoid confirmed unchanged before/after all cases:
+      - step 3 (corrupt `metadata.json`): completed [1/3] [2/3],
+        skipped none, exit 3.
+      - step 2 after step 1 (copy's unit file deleted): completed
+        [1/3], skipped [3/3], child's "unit file not found" visible,
+        exit 2 - both lists non-empty and correctly attributed.
+      - step 1 (copy's `Cargo.lock` stripped of `checksum` lines, real
+        cargo): cargo's own `--locked` refusal visible, completed
+        none, skipped [2/3] [3/3], exit 1.
+      - preflight (`env -i PATH=<dir of tool symlinks minus jq>`):
+        stops before any `[N/3]` banner, names `jq`, exit 1.
+    - **Live end-to-end after the from-scratch install**: owner moved
+      the flyout slider and scrolled the panel icon; `VolumeDb` over
+      D-Bus went -25 -> -17 -> -31 -> -25 in a 2 s poll, journal shows
+      28 `devialet-ctl` and 7 `devialet-chime` invocations in the
+      window, every one exit 0 (chime `mode=play`, sink unmuted).
+      Owner confirmed the chime was audible on each change ("I can
+      hear the audio feedback when changing volume just fine").
+  - **Unblocked by this phase**: 13.0.5 (README rewrite to "clone,
+    run install.sh") can proceed. Not done here.
 
 ## Up next
 
-- [ ] **Phase 13.0.3 — Combined install.sh.** Sequence 4.6.0/4.6.1/4.6.2
-      into one script a user runs after cloning the repo. Must be
-      idempotent — safe to re-run on an already-installed system
-      without duplicating units, breaking an existing install, or
-      erroring out. Sensible failure messages if a step fails partway
-      (don't leave the system in a half-installed state silently).
-  - Verify: a clean clone → run script → fully working widget + daemon
-    + CLI, end to end, no manual steps outside the script.
-  - Note for packaging/install script phase: both the devialet-ctl
-      symlink and the devialet-remote-daemon systemd unit's ExecStart
-      have independently gone stale against pre-own/-move paths on
-      this machine. The install script should generate/verify these
-      paths against wherever the repo actually lives at install time,
-      rather than leaving them as manually sed-substituted
-      placeholders per the current README instructions - this class of
-      bug will keep recurring otherwise.
 - [ ] **Phase 13.0.4 — Uninstall script (decide scope first).** Decide
       deliberately whether an uninstall script is in scope for v1.0.0
       or explicitly deferred — don't let it default to "skipped"
@@ -7496,55 +7619,7 @@ architecture decisions; this file is just sequencing and status.
 
 ## Bugs
 
-- [x] **Bug: widget doesn't reflect amp-initiated volume changes it
-      didn't itself send.** Observed during Phase 4.3.1's live
-      verification: after a real power-on (both via timeout-forced
-      fallback and normal boot), the amp reports its actual post-boot
-      default volume (-40dB, set in the Devialet configurator) but the
-      widget continues showing whatever it displayed pre-power-off
-      (e.g. -44.5dB) instead of updating to match. The mismatch
-      persists indefinitely until the volume slider/step buttons are
-      touched in the widget itself - at which point it starts tracking
-      correctly again. Neither side appears to overwrite the other
-      incorrectly; they just silently diverge and stay diverged.
-  - Also reproduces on a completely normal boot (no timeout/fallback
-    involved) - the widget shows its own stale pre-boot value (e.g.
-    -42dB) while the amp is actually at its real -40dB default. Not
-    specific to the Phase 4.3.0/4.3.1 boot-state work at all.
-  - Same symptom previously observed in the Kotlin Android app - not
-    new to this port, likely a pre-existing protocol/reactivity gap
-    (amp-initiated volume changes not picked up unless the widget/app
-    has sent a volume command at least once itself) rather than
-    something specific to this widget's implementation.
-  - **Characterized 2026-09-07 (Phase 8.0.1's Gate #2 investigation),
-    root cause is the amp's firmware, not the daemon or the widget.**
-    Method: an independent raw UDP capture on port 45454 (a second
-    SO_REUSEADDR socket logging byte 562 bit 0x80 = power and byte 565
-    = raw volume, dB = (raw - 195) / 2) merged with `busctl` polling of
-    the daemon on one clock, across 21+ real power cycles. Findings:
-    - The daemon tracks every raw-byte change within 1-40 ms and the
-      D-Bus push follows immediately - nothing in UDP → daemon → D-Bus
-      → QML drops or lags an amp-initiated change. The earlier "could
-      be daemon or widget" guess is ruled out on this path.
-    - The first `power_on` packet after boot still carries the
-      pre-shutdown byte (raw 145 = -25); ~200 ms later the broadcast
-      switches to **raw 111 = -42.0** and stays there for 30 s+ with no
-      command in flight. The owner read the front panel at that moment:
-      **-40**, the configurator's startup setting. So the amp is really
-      at -40 and its own broadcast is wrong by 2 dB - the "stale -42
-      while the amp is at -40" seen above was the widget faithfully
-      showing the amp's misreport, not a stale local value.
-    - It does not self-correct. Any volume command (any value) makes
-      the broadcast track the real level again immediately (verified
-      each time the test restored -25 after a boot) - which is exactly
-      why touching the slider "fixed" it. Now docs/known-gotchas.md #8.
-  - Consequence for scope: Phase 8.0.1's post-boot startup send (500 ms
-    after a widget-initiated boot confirms) incidentally re-syncs the
-    broadcast for that path only. An external power-on (physical
-    remote, front panel) stays exposed to the misreport by design
-    (owner decision: widget-initiated only). Kept open for that case;
-    front-panel/remote volume changes on an already-running amp were
-    not tested here and remain unverified.
+
 
 ## Not yet scoped / parked
 

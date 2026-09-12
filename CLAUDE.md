@@ -198,8 +198,15 @@ all three.
   `install -Dm0755 -t /usr/local/bin`; `devialet-remote-daemon` follows
   the same rule (Phase 13.0.2 completed this for the daemon binary and
   its systemd unit - see "`devialet-ctl` on PATH" below and
-  `scripts/install-daemon-unit.sh`). Three candidates were measured on
-  the dev machine, not assumed:
+  `scripts/install-daemon-unit.sh`). Since Phase 13.0.3 the build+copy
+  is wrapped in `scripts/install-binaries.sh` (skips sudo entirely when
+  the installed copies are already byte-identical to the build) and the
+  whole install is `./install.sh` at the repo root, which sequences
+  `install-binaries.sh` -> `install-daemon-unit.sh` ->
+  `install-plasmoid.sh` with per-step failure attribution (exit code =
+  failing step number, no rollback - each completed step is a valid
+  state on its own). Three candidates were measured on the dev machine,
+  not assumed:
   - `~/.local/bin` is **not** on PATH by default on Arch/CachyOS -
     `/etc/profile` appends only `/usr/local/bin`, `/etc/login.defs` and
     SDDM's `DefaultPath` are `/usr/local/sbin:/usr/local/bin:/usr/bin`,
@@ -380,10 +387,9 @@ don't skip straight to a code fix next time either:
 **Fix, if this happens again**:
 
 ```
-cargo build --release --locked -p devialet-ctl -p devialet-chime -p devialet-remote-daemon
-sudo install -Dm0755 -t /usr/local/bin \
-    target/release/devialet-ctl target/release/devialet-chime target/release/devialet-remote-daemon
-scripts/install-daemon-unit.sh   # restarts the daemon only if it isn't already running this exact binary
+./install.sh   # = scripts/install-binaries.sh (build + copy, sudo only for binaries that changed)
+               #   -> scripts/install-daemon-unit.sh (restarts the daemon only if it isn't already running this exact binary)
+               #   -> scripts/install-plasmoid.sh
 ```
 
 Since Phase 13.0.0/13.0.2, `devialet-ctl`, `devialet-chime` *and*
@@ -811,10 +817,14 @@ re-discovered a fourth time after the rebuild ships.
         target/release/devialet-ctl target/release/devialet-chime
     ```
 
-    Copies, not symlinks: they survive `cargo clean`, but a rebuild does
-    not update them - re-run the `install` line after any `cargo build`
-    that changes either binary. Before 13.0.0 the dev setup was a
-    `~/.local/bin/<name>` symlink into `target/debug/`; those symlinks
+    (wrapped, together with the daemon binary, in
+    `scripts/install-binaries.sh` since Phase 13.0.3 - run that, or
+    `./install.sh`, rather than typing the lines above.) Copies, not
+    symlinks: they survive `cargo clean`, but a rebuild does not update
+    them - re-run `scripts/install-binaries.sh` after any `cargo build`
+    that changes a binary; it copies only the ones that differ. Before
+    13.0.0 the dev setup was a `~/.local/bin/<name>` symlink into
+    `target/debug/`; those symlinks
     are gone from this machine and must stay gone: `~/.local/bin`
     precedes `/usr/local/bin` on plasmashell's PATH, so a leftover
     symlink there silently shadows the installed copy (and dangles the
