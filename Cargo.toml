@@ -11,7 +11,7 @@ members = [
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/ekmanch/devialet-expert-remote-widget"
+repository = "https://github.com/ekmanch/devialet-expert-remote-kde"
 
 [profile.release]
 # Small, simple binaries; no reason to trade compile time for size/speed

@@ -7,14 +7,14 @@
             }
         ],
         "Category": "System Information",
-        "Description": "Control a Devialet Expert Pro amplifier over the local network",
+        "Description": "Control a Devialet Expert Pro amplifier over ethernet",
         "EnabledByDefault": true,
         "Icon": "com.ekmanch.devialetremote",
         "Id": "com.ekmanch.devialetremote",
         "License": "MIT",
-        "Name": "Devialet Remote",
-        "Version": "0.1",
-        "Website": "https://github.com/ekmanch/devialet-expert-remote-widget"
+        "Name": "Devialet Expert Pro Remote",
+        "Version": "1.0.0",
+        "Website": "https://github.com/ekmanch/devialet-expert-remote-kde"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
 }

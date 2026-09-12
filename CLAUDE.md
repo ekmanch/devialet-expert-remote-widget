@@ -877,11 +877,11 @@ re-discovered a fourth time after the rebuild ships.
   compiled here; their presence was only relevant to a rejected
   alternative (see "In-process alternative (cxx-qt) considered and
   rejected" above).
-- Repo: `devialet-expert-remote-widget`.
+- Repo: `devialet-expert-remote-kde` (https://github.com/ekmanch/devialet-expert-remote-kde; renamed from `devialet-expert-remote-widget` - the old name survives only in historical TODO/CLAUDE notes).
 
 ## Repository Layout
 
-devialet-expert-remote-widget/
+devialet-expert-remote-kde/
 ├── Cargo.toml                      # workspace root
 ├── CLAUDE.md
 ├── README.md

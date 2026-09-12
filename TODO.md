@@ -1,6 +1,6 @@
 # TODO / Roadmap
 
-Tracks phase status for devialet-expert-remote-widget. See CLAUDE.md for
+Tracks phase status for devialet-expert-remote-kde. See CLAUDE.md for
 architecture decisions; this file is just sequencing and status.
 
 ## Done
@@ -7816,9 +7816,11 @@ architecture decisions; this file is just sequencing and status.
     `plasmashell --replace` the copper tile shows in Add Widgets and on
     the ConfigDialog's About page. Recorded in CLAUDE.md's reload
     section: an icon-only change needs the shell restart like QML does.
-    Noticed on the About page, out of scope here: `Website` still points
-    at the old `-widget` GitHub URL (`metadata.json`, also `Cargo.toml`)
-    - fix before the v1.0.0 tag.
+    Noticed on the About page: `Website` still pointed at the old
+    `-widget` GitHub URL - the owner fixed `metadata.json` (Website +
+    Description, now "over ethernet") and `Cargo.toml` right after
+    (2026-09-13); remaining old-name mentions in CLAUDE.md/TODO.md prose
+    updated in the same pass, historical notes left as written.
 
 ## Up next
 
@@ -7861,7 +7863,7 @@ architecture decisions; this file is just sequencing and status.
     widget + daemon + CLI all functional afterward, no leftover
     manual steps.
 - [ ] **Phase 14.1.0 — Submit to AUR.** Clone the AUR git repo
-      (`ssh://aur@aur.archlinux.org/devialet-expert-remote-widget.git`),
+      (`ssh://aur@aur.archlinux.org/devialet-expert-remote-kde.git`),
       add PKGBUILD + a generated `.SRCINFO`, commit, push.
   - Verify: install via an AUR helper (paru/yay/Shelly — they all
     consume the same git repo, nothing helper-specific to do) on a
