@@ -15,6 +15,12 @@
 // value but not the switch. Found by the Phase 10.1.2 driver run on the
 // chime toggle (Defaults reset cfg_chimeEnabled to true, switch stayed
 // off); the Transparency toggle had the same latent defect since 9.1.0.
+//
+// Phase 11.0.0: a disabled look (opacity 0.4, ChimeIconButton.qml's own
+// value) for the Launch at login switch while systemd is being queried
+// or reports a state the toggle can't act on. Item.enabled already
+// propagates to the MouseArea, so a disabled switch ignores clicks
+// without any extra guard.
 import QtQuick
 import "../ui" as Ui
 
@@ -27,6 +33,7 @@ Item {
 
     implicitWidth: 36
     implicitHeight: 21
+    opacity: enabled ? 1.0 : 0.4
 
     Rectangle {
         anchors.fill: parent

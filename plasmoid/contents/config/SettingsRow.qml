@@ -22,6 +22,14 @@ ColumnLayout {
     // Defaults are the .kcm-row's own 14px, so no existing row moves.
     property int topPadding: 14
     property int bottomPadding: 14
+    // Phase 11.0.0: optional one-line message under the row, between the
+    // name/control line and the divider - the mockup's .limit-warning
+    // (v16 mockup lines 297-301: mono 10px, danger-bright, right-aligned,
+    // padding 0 2px 10px, hidden unless shown). "" renders nothing, so
+    // no existing row moves. First user: Launch at login's systemd
+    // status/error text; Phase 11.1.0's forget-amps row may reuse it.
+    property string note: ""
+    property color noteColor: theme.dangerBright
     default property alias controlData: controlHolder.data
 
     readonly property Ui.Theme theme: Ui.Theme {}
@@ -65,6 +73,20 @@ ColumnLayout {
             id: controlHolder
             Layout.alignment: Qt.AlignVCenter
         }
+    }
+
+    Label {
+        Layout.fillWidth: true
+        Layout.rightMargin: 2
+        Layout.bottomMargin: 10
+        visible: root.note !== ""
+        text: root.note
+        textFormat: Text.PlainText
+        horizontalAlignment: Text.AlignRight
+        wrapMode: Text.WordWrap
+        font.family: root.theme.fontMono
+        font.pixelSize: 10
+        color: root.noteColor
     }
 
     Rectangle {

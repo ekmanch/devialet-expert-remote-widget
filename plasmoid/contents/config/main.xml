@@ -5,8 +5,15 @@
   rather than deferred to Phase 4.4.1 because every config.qml-shipping
   applet found on this system (checked, not assumed - see config.qml's
   own doc comment) also ships a main.xml alongside it; Phase 4.4.1 will
-  add real <entry> elements here (reduce-motion, scroll-step,
-  launch-at-login display) per CLAUDE.md's Repository Layout.
+  add real <entry> elements here (reduce-motion, scroll-step) per
+  CLAUDE.md's Repository Layout.
+
+  Phase 11.0.0: "Launch at login" is deliberately NOT an entry here, and
+  never should be. Its storage is systemd's own unit enablement state
+  (queried and changed with systemctl in user scope by
+  contents/ui/DaemonAutostart.qml); a stored bool would only be a copy
+  that can go stale. See CLAUDE.md, "Persistence" and the "must persist"
+  exception under "Settings ConfigDialog".
 -->
 <kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

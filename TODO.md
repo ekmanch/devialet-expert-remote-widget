@@ -6999,6 +6999,88 @@ architecture decisions; this file is just sequencing and status.
     read back from appletsrc before the restart, kcfg default when the
     key is absent), not re-proven for these three keys.
 
+- [x] **Phase 11.0.0 — Launch at login wiring (2026-09-12).** The
+      Startup row's toggle now reads and writes real `systemd --user`
+      state; no `main.xml` entry, no stored bool anywhere. Unit:
+      `devialet-remote-daemon.service`, installed on the dev machine at
+      `~/.config/systemd/user/devialet-remote-daemon.service`
+      (enablement = the symlink under
+      `~/.config/systemd/user/plasma-workspace.target.wants/`).
+      - **Reading**: new `contents/ui/DaemonAutostart.qml` (bare
+        QtObject + one P5Support executable DataSource, the
+        SoundThemes.qml shape; `DEVIALET_SYSTEMD_TICK=<n>` no-op prefix
+        keeps every command string unique for the shared engine) runs
+        `systemctl --user is-enabled` from `ConfigGeneral.qml`'s
+        `Component.onCompleted` - the page is re-created per dialog
+        open, so that is "query on every open", no polling. Classified
+        by the **stdout token, not the exit code** - measured before
+        coding: enabled -> `enabled`/0; disabled -> `disabled`/**1**;
+        unit missing -> `not-found`/4; user bus unreachable -> empty
+        stdout/**1**/stderr "Failed to connect to user scope bus";
+        systemctl missing -> 127. Exit 1 is shared by "genuinely
+        disabled" and "the query failed", so the exit code alone can
+        never decide. States: enabled / disabled (toggleable), not-found,
+        unsupported (any other real token: static, masked*, indirect,
+        linked*, alias, generated, transient, enabled-runtime - the last
+        doesn't survive a reboot), error (no token; stderr kept). Every
+        non-toggleable state disables the switch (new `opacity 0.4` on
+        `SettingsSwitch.qml`) and says why in a new right-aligned mono
+        10px `note` slot on `SettingsRow.qml` (the mockup's
+        `.limit-warning` box) - a failure never collapses into a
+        silently-unchecked toggle.
+      - **Writing**: on Apply/OK, not on click (owner decision). Two
+        undocumented hooks read from the shell's own
+        `AppletConfiguration.qml`: a page `unsavedChanges` bool is OR-ed
+        into the Apply button (line 105) and the Cancel/close "Apply
+        Settings" prompt (lines 42-49); a page `saveConfig()` is called
+        first on Apply and OK (lines 51-57). `ConfigGeneral.qml` sets
+        `unsavedChanges` = toggle differs from the queried state, and
+        `saveConfig()` runs plain `systemctl --user enable`/`disable`
+        (no `--now`, owner decision: pure launch-at-login semantics).
+        Write success = exit 0 (both print "Created symlink"/"Removed"
+        on stderr). After every write, failed or not, the daemon object
+        **re-queries** and the switch is re-derived from that answer -
+        the click is never trusted. Apply keeps the dialog open, so a
+        failed write shows "Couldn't change it — <stderr>" in the note;
+        OK closes the dialog before the async result lands (shell lines
+        454-460), so on that path a failure is only journal-logged and
+        the next open shows reality. Defaults deliberately doesn't
+        touch it.
+      - **Verified hands-free** (scratchpad driver: `/usr/lib/qt6/bin/qml`
+        + QtTest, ConfigGeneral in a plain Window, real `systemctl`
+        subprocesses, unit restored to `enabled` at the end): open shows
+        `enabled`/checked; click -> `unsavedChanges` true, real state
+        untouched; `saveConfig()` -> terminal `is-enabled` = `disabled`
+        (exit 1); a fresh process then opens unchecked and re-enables
+        the same way (terminal `enabled`, exit 0). Defaults click leaves
+        it alone. Exit 127 (`systemctl` pointed at a nonexistent path)
+        and bus-unreachable (`XDG_RUNTIME_DIR=/nonexistent`, the shared
+        exit-1 case) both land in `error`, switch disabled, note shows
+        the stderr line, click ignored. Unit file moved away +
+        `daemon-reload` -> `not-found` (exit 4), switch disabled,
+        install-hint note. Write failure: unit moved between the click
+        and `saveConfig()` - `enable` fails ("Unit ... does not exist",
+        exit 1), note shows it, re-query lands in `not-found`, switch
+        disabled and unchecked. Found by that run: the re-derive must
+        happen on every completed query, not only enabled/disabled,
+        or the switch kept the clicked value next to a note claiming to
+        show the real state - fixed. Note `disable` on a missing unit
+        SUCCEEDS (systemd removes the dangling symlink), so only the
+        enable direction can fail this way. qmllint clean on all four
+        files; installed copy diff-identical; `plasmashell --replace`
+        done.
+      - **Owner soak (2026-09-12, real ConfigDialog - scripting can't
+        open it)**: all four hands-on steps reported as behaving as
+        expected - toggle + Apply, toggle + OK, toggle + Cancel (shell's
+        "Apply Settings" prompt), each checked against
+        `systemctl --user is-enabled` in a terminal; and the bypass
+        check with screenshots of the terminal: `disable` from the CLI,
+        `plasmashell --replace`, dialog shows the toggle off; `enable`
+        from the CLI, reload, toggle on. The OK path changing real
+        state means the executable-engine job does survive the dialog
+        closing, so no detached-write fallback was needed. End state
+        `enabled`.
+      
 ## Up next
 
 - [ ] **Phase 6.0.0 — devialet-ctl build + PATH placement.** Decide the
@@ -7044,13 +7126,56 @@ architecture decisions; this file is just sequencing and status.
       silently. If in scope: reverse of 4.6.3 (disable/remove the
       systemd unit, remove the plasmoid via `kpackagetool6 --remove`,
       remove the `devialet-ctl` binary from wherever 4.6.0 placed it).
+      **Removing the unit is not optional busywork here** — since
+      Phase 11.0.0, `devialet-remote-daemon` has no off-switch other
+      than this widget's own ConfigDialog toggle. Dragging the
+      plasmoid off the panel is a pure Plasma UI action (it edits the
+      panel layout, nothing else) and has no relationship to systemd
+      at all — the daemon keeps running at every login indefinitely,
+      with no UI left anywhere to discover or stop it, unless a real
+      uninstall (this phase) or a manual `systemctl --user disable`
+      happens. Matters most for anyone who stops using the widget
+      without formally uninstalling it (e.g. sells the amp, removes
+      the icon and forgets about it) — for the owner's own single-
+      machine use this is low-stakes, but it's a real orphaned-
+      background-process gap for anyone else who installs this repo.
+      If uninstall is deferred, that gap should be called out
+      explicitly in the README's manual-removal instructions (6.0.5),
+      not left implicit.
   - Verify (if implemented): a full uninstall leaves no systemd unit,
-    no installed plasmoid, and no leftover binary.
+    no installed plasmoid, and no leftover binary. Specifically
+    confirm `systemctl --user is-enabled devialet-remote-daemon.service`
+    reports the unit gone (not just disabled) after uninstall.
 - [ ] **Phase 6.0.5 — README install instructions.** Replace the
       current manual multi-step install instructions with "clone the
       repo, run install.sh." Keep the manual steps documented separately
-      only if 4.6.4's uninstall is deferred and manual removal
-      instructions are still needed.
+      only if 6.0.4's uninstall is deferred and manual removal
+      instructions are still needed — in that case, explicitly document
+      `systemctl --user disable --now devialet-remote-daemon.service`
+      as a required manual step, not just plasmoid removal, since
+      removing only the panel icon leaves the daemon running
+      indefinitely (see 6.0.4's note).
+      
+- [ ] **Phase 11.1.0 — Forget remembered amps wiring.** Per the mockup:
+      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
+      and explicitly does **not** disconnect or forget the currently
+      active/selected amp. Investigate before implementing: known amps
+      are daemon-owned persisted state (Phase 4.2's architecture), so
+      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
+      — there is no existing way to clear this from outside the daemon
+      today. Confirm exactly what "does not disconnect the active amp"
+      means in terms of daemon state: does the active amp get
+      re-added to `KnownAmps` immediately (since it's still
+      broadcasting), or does it stay disconnected-but-not-forgotten
+      until its next broadcast is naturally re-ingested? Decide and
+      implement the button's real confirm-click behavior (currently
+      just a visual mock from Phase 4.4.1) to actually call the new
+      method on the second click. Verify live: forget all amps with
+      one connected and playing, confirm the connection is undisturbed
+      (volume/mute/source controls keep working) while the amp list
+      empties out and repopulates only as amps re-broadcast.
+
+- [ ] **feat — make the color of the icon in the panel changeable**
       
 
 ## Bugs
@@ -7058,7 +7183,7 @@ architecture decisions; this file is just sequencing and status.
 - [ ] **Bug: volume icon on flyout mute button does not update
       depending on mute/unmute state**
 
-- [ ] **Bug: widget doesn't reflect amp-initiated volume changes it
+- [x] **Bug: widget doesn't reflect amp-initiated volume changes it
       didn't itself send.** Observed during Phase 4.3.1's live
       verification: after a real power-on (both via timeout-forced
       fallback and normal boot), the amp reports its actual post-boot
@@ -7110,36 +7235,7 @@ architecture decisions; this file is just sequencing and status.
 
 ## Not yet scoped / parked
 
-- [ ] **Phase 4.4.6 — Launch at login wiring.** Reading the toggle's
-      displayed state must query actual systemd state
-      (`systemctl --user is-enabled`), not a stored bool; toggling it
-      calls `systemctl --user enable`/`disable` directly. Investigate
-      the correct way to shell out to systemd from QML (likely the same
-      `Plasma5Support.DataSource` executable-engine pattern already
-      used for `devialet-ctl` invocations) and handle query/toggle
-      failure explicitly rather than assuming success. Verify live:
-      toggle it, confirm via `systemctl --user is-enabled` independently
-      that it actually changed, not just that the UI shows a different
-      state; restart the widget and confirm the toggle reflects real
-      systemd state on load, not a remembered UI value.
-- [ ] **Phase 4.4.7 — Forget remembered amps wiring.** Per the mockup:
-      clears saved/known amp IPs so the daemon rediscovers via mDNS/UDP,
-      and explicitly does **not** disconnect or forget the currently
-      active/selected amp. Investigate before implementing: known amps
-      are daemon-owned persisted state (Phase 4.2's architecture), so
-      this needs a new daemon-side D-Bus method (e.g. `ForgetAllAmps`)
-      — there is no existing way to clear this from outside the daemon
-      today. Confirm exactly what "does not disconnect the active amp"
-      means in terms of daemon state: does the active amp get
-      re-added to `KnownAmps` immediately (since it's still
-      broadcasting), or does it stay disconnected-but-not-forgotten
-      until its next broadcast is naturally re-ingested? Decide and
-      implement the button's real confirm-click behavior (currently
-      just a visual mock from Phase 4.4.1) to actually call the new
-      method on the second click. Verify live: forget all amps with
-      one connected and playing, confirm the connection is undisturbed
-      (volume/mute/source controls keep working) while the amp list
-      empties out and repopulates only as amps re-broadcast.
+
 
 ## Tasks to complete outside repo
 

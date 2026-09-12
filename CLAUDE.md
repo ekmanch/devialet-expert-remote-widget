@@ -553,6 +553,32 @@ dialog, and separately reload the widget itself, and confirm the
 control still reflects the value you set — not just that toggling it
 visibly changed something in the moment.
 
+### Non-KConfig controls ride Apply/OK through two undocumented page hooks (Phase 11.0.0)
+
+The shell's `AppletConfiguration.qml` (`/usr/share/plasma/shells/
+org.kde.plasma.desktop/contents/configuration/`) only tracks `cfg_*`
+properties for its dirty check, but it also reads two things off the
+page object itself, found by reading that file rather than any docs:
+a `bool unsavedChanges` property, OR-ed into the Apply button's enabled
+state and into the Cancel/close "Apply Settings — Apply/Discard/Cancel"
+prompt (its `unsavedChangesChanged` signal is connected when the page is
+pushed), and a `saveConfig()` function, called first from the shell's own
+`saveConfig()` on both Apply and OK, before the `cfg_*` copy-back (so it
+must not touch `cfg_*` values). `KCM.SimpleKCM` defines neither name.
+This is how Launch at login (`ConfigGeneral.qml` + `contents/ui/
+DaemonAutostart.qml`) applies `systemctl --user enable/disable` on
+Apply/OK with no KConfig entry at all. One limit to design around: OK is
+`applyAction.trigger()` then `configDialog.close()` immediately, so an
+async result (an executable-engine exit code) has nowhere to be shown on
+the OK path — log it and make the next open re-query reality; only the
+Apply path (dialog stays open) can show an inline error.
+
+`systemctl --user is-enabled` exit codes are not enough to classify its
+answer: `disabled` exits 1 and so does "user bus unreachable" (with empty
+stdout). Key off the stdout token (`enabled`/`disabled`/`not-found`/...)
+and consult the exit code and stderr only when there is no token — see
+`DaemonAutostart.qml`'s header for the measured table.
+
 ## QML layout: Qt.AlignBaseline is unsafe with dynamic text (settled, do not relitigate)
 
 **The pattern**: `Qt.AlignBaseline` computes one shared row-internal

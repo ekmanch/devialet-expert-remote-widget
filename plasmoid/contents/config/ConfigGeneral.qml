@@ -246,6 +246,82 @@ KCM.SimpleKCM {
     // dialog lists it with. Own instance, like Theme.qml - see its header.
     readonly property Ui.SoundThemes soundThemes: Ui.SoundThemes {}
 
+    // ---- Phase 11.0.0: Launch at login, wired to real systemd state ----
+    // No cfg_ property and no main.xml entry, on purpose: systemd's own
+    // enablement of devialet-remote-daemon.service IS the storage
+    // (CLAUDE.md "Persistence"; the "must persist" exception under
+    // "Settings ConfigDialog"). ../ui/DaemonAutostart.qml runs
+    // `systemctl --user is-enabled` on every page open (this page is
+    // re-created per category open, so no polling) and enable/disable
+    // on Apply/OK.
+    //
+    // Two hooks the shell's own AppletConfiguration.qml
+    // (/usr/share/plasma/shells/org.kde.plasma.desktop/contents/
+    // configuration/) offers a page, read from its source rather than
+    // assumed - neither is documented, and KCM.SimpleKCM defines
+    // neither name (checked SimpleKCM.qml, no collision):
+    //   - `unsavedChanges` (bool): OR-ed into the Apply button's enabled
+    //     state (settingValueChanged(), line 105) and into the
+    //     "unsaved changes - Apply/Discard/Cancel" prompt on Cancel or
+    //     window close (closing(), lines 42-49); its Changed signal is
+    //     connected when the page is pushed (lines 197-200).
+    //   - `saveConfig()`: called FIRST from the shell's own saveConfig()
+    //     (lines 51-57) on both Apply and OK, before it copies cfg_*
+    //     back - so it must not touch any cfg_ value.
+    // OK is applyAction then configDialog.close() immediately (lines
+    // 454-460), so the async systemctl result has nowhere to show on
+    // that path: it is logged, and the next open re-queries. Apply keeps
+    // the dialog open, so a failed write shows its note below and the
+    // toggle reverts to the re-queried state.
+    readonly property Ui.DaemonAutostart daemonAutostart: Ui.DaemonAutostart {}
+    // The toggle's pending value - re-derived from every successful
+    // query (dialog open, and the re-query after every write, failed or
+    // not), never from the click alone.
+    property bool launchDesired: false
+    property bool unsavedChanges: root.daemonAutostart.toggleable
+        && !root.daemonAutostart.writing
+        && root.launchDesired !== (root.daemonAutostart.state === "enabled")
+
+    // Every COMPLETED query re-derives the switch, including the
+    // non-toggleable outcomes: found by the Phase 11.0.0 driver's
+    // write-failure run (unit file removed between the click and Apply -
+    // `enable` fails, the re-query lands in not-found), where deriving
+    // only for enabled/disabled left the switch showing the clicked
+    // value next to a note claiming to show the real state.
+    readonly property Connections daemonAutostartSync: Connections {
+        target: root.daemonAutostart
+        function onStateChanged() {
+            if (root.daemonAutostart.state !== "querying") {
+                root.launchDesired = root.daemonAutostart.state === "enabled";
+            }
+        }
+    }
+
+    function saveConfig() {
+        if (root.unsavedChanges) {
+            root.daemonAutostart.apply(root.launchDesired);
+        }
+    }
+
+    // The status/error line under the Launch at login row. "" = nothing
+    // to say (enabled/disabled with no failed write, or still querying).
+    function launchAtLoginNote() {
+        const d = root.daemonAutostart;
+        if (d.lastWriteFailed) {
+            return "Couldn't change it — " + d.writeDetail + ". Showing the real current state.";
+        }
+        switch (d.state) {
+        case "not-found":
+            return "Service not installed — expected at ~/.config/systemd/user/" + d.unitName + " (README: Daemon autostart)";
+        case "unsupported":
+            return "Unit is " + d.token + " — can't be toggled from here";
+        case "error":
+            return "Couldn't query systemd — " + d.detail;
+        default:
+            return "";
+        }
+    }
+
     function escapeStyledText(s) {
         return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
@@ -308,6 +384,7 @@ KCM.SimpleKCM {
     Component.onCompleted: {
         root.soundThemes.scan();
         root.soundThemes.refreshDesktopTheme();
+        root.daemonAutostart.refresh();
     }
 
     P5Support.DataSource {
@@ -997,17 +1074,21 @@ KCM.SimpleKCM {
         SettingsRow {
             name: "Launch at login"
             desc: "Starts the background daemon via systemd --user"
-            // Default true - a real install should autostart the daemon
-            // out of the box. Still a dead placeholder otherwise: this
-            // isn't wired to real `systemctl --user is-enabled` state yet
-            // (that's Phase 4.4.6, not yet implemented - see TODO.md) or
-            // backed by KConfig at all (per CLAUDE.md, it never should be -
-            // systemd's own enablement state is the source of truth, not a
-            // stored bool), so this default only affects what the toggle
-            // visually shows before that wiring lands.
-            // Display-only placeholder until its own wiring phase; flips
-            // its own literal on click so it still visibly toggles.
-            SettingsSwitch { id: loginSwitch; checked: true; onToggled: (checked) => loginSwitch.checked = checked }
+            // Phase 11.0.0: wired for real - see the daemonAutostart block
+            // at the top of this file. The switch shows launchDesired
+            // (systemd's answer, or the user's not-yet-applied click) and
+            // is only clickable while systemd reports a plain enabled/
+            // disabled and no write is in flight; every other outcome
+            // (unit missing, static/masked/..., query failed, last write
+            // failed) disables it and says why in the row's note, so a
+            // failure never collapses into a silently-unchecked toggle.
+            note: root.launchAtLoginNote()
+
+            SettingsSwitch {
+                checked: root.launchDesired
+                enabled: root.daemonAutostart.toggleable && !root.daemonAutostart.writing
+                onToggled: (checked) => root.launchDesired = checked
+            }
         }
 
         // ---- Reset ----
@@ -1099,6 +1180,9 @@ KCM.SimpleKCM {
                         root.cfg_chimeSourceMode = root.shippedDefaults.chimeSourceMode;
                         root.cfg_chimePinnedTheme = root.shippedDefaults.chimePinnedTheme;
                         root.cfg_chimeSoundFile = root.shippedDefaults.chimeSoundFile;
+                        // Phase 11.0.0: Launch at login is deliberately
+                        // NOT reset here - it is systemd's enablement
+                        // state, not a shipped default of this page.
                         themeDropdown.close();
                     }
                 }
